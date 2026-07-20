@@ -439,6 +439,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Drum-only songs list their drum hit count.** The arrangement picker showed
+  "Drums (0)" for a drums-only pack (its placeholder arrangement has no notes;
+  the hits live in `drum_tab`); it now shows the hit count.
 - **A/V offset you set by hand stays set.** The A/V sliders span ±300 ms (was
   ±1000, where the useful range was a few pixels), the player popover takes an
   exact value, and once you set the offset by hand (slider, number box, [ / ],
