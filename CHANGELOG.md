@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Build a play queue from the library ("Up next").** The play queue could
+  only be started whole (Play album / Play all / a playlist), and since the
+  fullscreen player abandons the queue when you leave it, there was no way to
+  line up a few songs from different places. Songs now get **Add to queue** —
+  a "+" on each grid card's hover row (a core library-card action), an entry
+  in the ⋮ / right-click menu (so tree, album and artist rows have it too), and
+  an "Add to queue" button in the multi-select bar — plus **+ Queue album** on
+  the album view and **+ Queue all** on the artist page. Queued songs collect
+  in an "up next" list (saved per browser, duplicates skipped) shown by a
+  **Queue · N** button in the Songs toolbar; its panel reorders, removes,
+  plays from any song, plays or shuffles the lot, and clears. Starting it hands
+  the list to the existing play queue, so song-end auto-advance and the
+  results card's "Up next" strip work unchanged. Adding while a queue is
+  playing appends to the live queue. API: `feedBack.playQueue.enqueue()`,
+  `pending()`, `removePending()`, `movePending()`, `clearPending()`,
+  `startPending({ shuffle, from })`, with a `queue:changed` event.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
@@ -144,6 +160,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in that mode.
 
 ### Changed
+- **Artist "Play all" runs the discography in release order.** The artist page's
+  Play all used the Songs list order — alphabetical by title — so a whole-artist
+  session hopped between albums at random. `GET /api/artist/{name}/page` now
+  orders `albums` oldest first by year (albums with no year after the dated
+  ones, then by name) and `files` to match: each album's songs in disc/track
+  order, songs with no album last. Play all and the new "+ Queue all" use that
+  list; Shuffle still shuffles, and the Songs list itself stays A–Z.
+- **A queue follows the arrangement you're playing.** When a play-queue moves
+  on to the next song (album, artist, playlist or "up next"), it opens the same
+  part you were just playing — keep playing Rhythm or Bass through an album
+  instead of being dropped back on the default chart every track. The highway
+  WebSocket takes an optional `arrangement_name` hint (matched on the smart
+  name, then the raw chart name, case-insensitive) used only when no explicit
+  arrangement index is given; it outranks instrument routing and the saved
+  default arrangement, and a song without that part falls through to them as
+  before. Slots with a pinned arrangement (albums, #685) keep their pin.
 - **`GET /api/song/{f}?stems=1`** (new, opt-in) — returns the pack's playable stem
   list (`[{id, url, default}]` + `full_mix_url`), the same list the highway's WS
   `ready` sends. The stems plugin could only learn it from that WS message, which

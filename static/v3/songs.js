@@ -897,9 +897,9 @@
         // Plugin-contributed card actions placed 'inline' (in the hover action
         // row) or 'overlay' (centered over the art). Menu-placed actions live in
         // the ⋮ menu (openCardMenu); rendering these here means plugins using
-        // those placements are no longer silently dropped. No bundled action
-        // uses them, so for the stock library both strings are empty — the card
-        // renders exactly as before.
+        // those placements are no longer silently dropped. The one bundled
+        // inline action is core's "+" Add to queue (card-actions-core.js); no
+        // bundled action uses 'overlay'.
         const reg = sm && sm.libraryCardActions;
         const acts = (reg && typeof reg.list === 'function') ? reg.list(song) : [];
         const actBtn = (a) =>
@@ -977,6 +977,9 @@
             ...(state.provider === 'local' && song.is_split
                 ? [{ id: '__unsplit', label: 'Rejoin other versions' }] : []),
             { id: '__playlist', label: 'Add to playlist' },
+            // Add to the play queue's "up next" (same as the grid card's "+").
+            ...(song.filename && sm && sm.playQueue && typeof sm.playQueue.enqueue === 'function'
+                ? [{ id: '__queue', label: 'Add to queue' }] : []),
             { id: '__save', label: 'Save for later' },
             // Artist page (PR-B, entry point 1) — local library only (the
             // page reads the local DB) and gated on the Settings toggle.
@@ -1030,6 +1033,7 @@
                 return;
             }
             if (id === '__playlist') { await addFilenamesToPlaylist([song.filename]); return; }
+            if (id === '__queue') { enqueueSongs([song]); return; }
             if (id === '__save') { if (window.v3Saved) await window.v3Saved.toggle(song.filename); return; }
             if (id === '__artist') { openArtistPage(song.artist); return; }
             // Per-chart metadata actions follow the DISPLAYED chart (playTarget),
@@ -1601,12 +1605,17 @@
         bar.innerHTML =
             '<span class="text-sm text-fb-text">' + state.selected.size + ' selected</span>' +
             '<button data-batch="playlist" class="text-sm bg-fb-primary hover:bg-fb-primaryHi text-white px-3 py-1 rounded-full">Add to playlist</button>' +
+            '<button data-batch="queue" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1 rounded-full">Add to queue</button>' +
             '<button data-batch="details" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1 rounded-full">Edit details</button>' +
             '<button data-batch="saved" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1 rounded-full">Save for Later</button>' +
             '<button data-batch="clear" class="text-sm text-fb-textDim hover:text-fb-text px-2">Clear</button>';
         bar.querySelector('[data-batch="clear"]').addEventListener('click', () => { state.selected.clear(); reload(); renderBatchBar(); });
         bar.querySelector('[data-batch="saved"]').addEventListener('click', batchSave);
         bar.querySelector('[data-batch="playlist"]').addEventListener('click', batchAddToPlaylist);
+        bar.querySelector('[data-batch="queue"]').addEventListener('click', () => {
+            enqueueSongs([...state.selected].map((fn) => state.songsById[fn] || { filename: fn }));
+            finishBatch();
+        });
         bar.querySelector('[data-batch="details"]').addEventListener('click', openBulkEdit);
     }
 
@@ -1749,6 +1758,16 @@
         // skip the reload) so the user can retry, matching the pre-refactor
         // behaviour where !ans / !pid returned early before finishBatch().
         if (pid) finishBatch();
+    }
+
+    // Hand songs to the play queue's "up next" list (playQueue.enqueue owns
+    // the de-dupe, persistence and the "Added to queue" toast). Title/artist
+    // ride along only to label the queue tray.
+    function enqueueSongs(list) {
+        const q = sm && sm.playQueue;
+        if (!q || typeof q.enqueue !== 'function') return 0;
+        return q.enqueue((list || []).filter((s) => s && s.filename)
+            .map((s) => ({ filename: s.filename, title: s.title || '', artist: s.artist || '' })));
     }
 
     function finishBatch() {
@@ -2458,7 +2477,12 @@
             '<div class="flex items-center justify-between gap-3 mb-4">' +
             '<div class="min-w-0"><h2 class="text-2xl font-bold text-fb-text truncate">' + esc(a.album) + '</h2>' +
             '<p class="text-sm text-fb-textDim truncate">' + esc(a.artist) + ' · ' + songs.length + ' track' + (songs.length === 1 ? '' : 's') + '</p></div>' +
-            (songs.length ? '<button data-album-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md shrink-0">▶ Play album</button>' : '') +
+            (songs.length
+                ? '<div class="flex gap-2 shrink-0">' +
+                  '<button data-album-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play album</button>' +
+                  '<button data-album-queue title="Add the album to the play queue, in track order" class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">+ Queue album</button>' +
+                  '</div>'
+                : '') +
             '</div>' +
             '<ul class="space-y-1">' + songs.map((s, i) =>
                 '<li><button data-album-track="' + i + '" class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
@@ -2471,6 +2495,7 @@
             if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: a.album });
             else if (typeof window.playSong === 'function') window.playSong(enc(files[0]));
         });
+        host.querySelector('[data-album-queue]')?.addEventListener('click', () => enqueueSongs(songs));
         host.querySelectorAll('[data-album-track]').forEach((b) => b.addEventListener('click', () => {
             const s = songs[Number(b.getAttribute('data-album-track'))];
             if (s && window.playSong) window.playSong(enc(s.filename));
@@ -2777,8 +2802,9 @@
             '<p class="text-sm text-fb-textDim mt-2">' + bits.join(' · ') + '</p>' +
             '<div class="flex flex-wrap gap-2 mt-3">' +
             (songs.length
-                ? '<button data-ap-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play all</button>' +
-                  '<button data-ap-shuffle class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">⇄ Shuffle</button>'
+                ? '<button data-ap-playall title="Every album, oldest first, in track order" class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play all</button>' +
+                  '<button data-ap-shuffle class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">⇄ Shuffle</button>' +
+                  '<button data-ap-queue title="Add every album to the play queue, oldest first" class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">+ Queue all</button>'
                 : '') +
             '<button data-ap-smart class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md" title="A live playlist of everything by this artist — new songs join it automatically">Save as smart playlist</button>' +
             '</div>' +
@@ -2790,9 +2816,23 @@
             '<div data-ap-links></div>';
 
         host.querySelector('[data-ap-back]')?.addEventListener('click', closeArtistPage);
-        // Play all / Shuffle → the shared playQueue (same path as Play-album).
+        // Play all / Shuffle / Queue all → the shared playQueue (same path as
+        // Play-album). The order is the server's page.files — albums oldest
+        // first, each in disc/track order, loose songs last — so Play all runs
+        // the discography in release order; the Songs list below stays A–Z.
+        // (Falls back to the list order for a payload without files.)
+        const discography = () => {
+            const files = (Array.isArray(page.files) && page.files.length)
+                ? page.files : songs.map((s) => s.filename);
+            return files.filter(Boolean);
+        };
+        host.querySelector('[data-ap-queue]')?.addEventListener('click', () => {
+            const byFn = {};
+            songs.forEach((s) => { if (s.filename) byFn[s.filename] = s; });
+            enqueueSongs(discography().map((fn) => byFn[fn] || { filename: fn, artist: name }));
+        });
         const startQueue = (shuffle) => {
-            let files = songs.map((s) => s.filename).filter(Boolean);
+            let files = discography();
             if (!files.length) return;
             if (shuffle) {
                 files = files.slice();
@@ -3694,6 +3734,9 @@
                 state.sort) + '</select>' +
             '<select id="v3-songs-format" class="' + ctrl + '">' + opt(FORMATS, state.format) + '</select>' +
             '<button id="v3-songs-filters" class="relative ' + ctrl + ' flex items-center gap-2">Filters<span id="v3-songs-filter-count" class="hidden bg-fb-primary text-white text-xs rounded-full px-1.5">0</span></button>' +
+            // Play-queue tray: hidden until something is queued; queue-tray.js
+            // owns the count + the "up next" panel it opens.
+            '<button id="v3-songs-queue" class="hidden ' + ctrl + '" title="Songs queued to play next" aria-haspopup="dialog">Queue</button>' +
             '<button id="v3-songs-select" class="' + ctrl + (state.selectMode ? ' bg-fb-primary text-white' : '') + '">Select</button>' +
             '<button id="v3-songs-refresh" title="Refresh library (scan for new songs)" class="' + ctrl + '">⟳ Refresh</button>' +
             '<button id="v3-songs-refresh-meta" title="Refresh metadata for the songs shown (re-match titles, artwork &amp; more)" class="' + ctrl + '">🏷 Metadata</button>' +
@@ -3755,6 +3798,8 @@
         // drawer + the count; absent → the chip just stays hidden).
         byId('v3-songs-match-review')?.addEventListener('click', () => { if (window.__fbOpenMatchReview) window.__fbOpenMatchReview(); });
         if (window.__fbMatchReviewChip) window.__fbMatchReviewChip();
+        // Queue tray (feature-detected like the match-review chip).
+        if (window.__fbMountQueueTray) window.__fbMountQueueTray(byId('v3-songs-queue'));
         byId('v3-songs-upload').addEventListener('click', () => {
             const legacy = document.getElementById('upload-songs-file');
             // Upload targets the LOCAL library + scan; watchUploadScan refreshes

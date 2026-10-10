@@ -651,6 +651,12 @@ export async function playSong(filename, arrangement, options) {
     if (!_queueDriven && _pq) {
         _pq.clear();
     }
+    // A queue advance onto an unpinned slot follows the arrangement the user
+    // was playing (e.g. Rhythm), by name — the server resolves it per song and
+    // falls back to the normal default when the next song has no such part.
+    // Consumed unconditionally (like the flag above) so it can't leak into a
+    // later play; only used when no explicit arrangement was asked for.
+    const _arrHint = (_pq && typeof _pq._consumeArrangementHint === 'function') ? _pq._consumeArrangementHint() : null;
     if (!options || options.bridge !== false) {
         _recordPlaybackBridge('playback.window-play-song', 'window.playSong', 'legacy playSong entry point used');
     }
@@ -735,6 +741,7 @@ export async function playSong(filename, arrangement, options) {
 
     const wsParams = new URLSearchParams();
     if (arrangement !== undefined) wsParams.set('arrangement', arrangement);
+    else if (_queueDriven && _arrHint) wsParams.set('arrangement_name', _arrHint);
     wsParams.set('naming_mode', _getArrangementNamingMode());
     const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/highway/${decodeURIComponent(filename)}?${wsParams.toString()}`;
     window.highway.connect(wsUrl);

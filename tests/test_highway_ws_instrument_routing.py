@@ -193,3 +193,73 @@ def test_guitar_still_honors_saved_pref(make_client):
     with TestClient(server.app) as client:
         idx = _arr_index(client, "/ws/highway/gtr2.sloppak")
     assert idx == 1  # Rhythm, per preference
+
+
+# ── arrangement_name: the play-queue's follow-the-arrangement hint ───────────
+# When a queue advances, the client sends the arrangement NAME the user was just
+# playing; the next song opens on the same part. An explicit index still wins,
+# and a name the song doesn't have falls through to the normal default.
+
+
+def test_arrangement_name_picks_matching_part(make_client):
+    server = make_client(instrument="guitar")
+    _write_sloppak(
+        server._get_dlc_dir(), "trio",
+        [("lead", "Lead"), ("rhythm", "Rhythm"), ("bass", "Bass")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/trio.sloppak?arrangement_name=Rhythm")
+    assert idx == 1
+
+
+def test_arrangement_name_is_case_insensitive_and_beats_saved_pref(make_client):
+    server = make_client(instrument="guitar", default_arrangement="Lead")
+    _write_sloppak(
+        server._get_dlc_dir(), "trio",
+        [("lead", "Lead"), ("rhythm", "Rhythm"), ("bass", "Bass")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/trio.sloppak?arrangement_name=bass")
+    assert idx == 2
+
+
+def test_arrangement_name_beats_instrument_routing(make_client):
+    # A bass player who switched to Lead mid-queue keeps Lead on the next song.
+    server = make_client(instrument="bass")
+    _write_multi_arr_sloppak(server._get_dlc_dir())
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/multi.sloppak?arrangement_name=Lead")
+    assert idx == 0
+
+
+def test_unknown_arrangement_name_falls_through_to_default(make_client):
+    server = make_client(instrument="bass")
+    _write_multi_arr_sloppak(server._get_dlc_dir())
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/multi.sloppak?arrangement_name=Rhythm")
+    assert idx == 1  # no Rhythm → instrument routing still lands on Bass
+
+
+def test_explicit_arrangement_beats_arrangement_name(make_client):
+    server = make_client(instrument="guitar")
+    _write_sloppak(
+        server._get_dlc_dir(), "trio",
+        [("lead", "Lead"), ("rhythm", "Rhythm"), ("bass", "Bass")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/trio.sloppak?arrangement=0&arrangement_name=Bass")
+    assert idx == 0
+
+
+def test_match_arrangement_name_raw_name_fallback():
+    from routers.ws_highway import _match_arrangement_name
+
+    class _A:
+        def __init__(self, name):
+            self.name = name
+
+    arrs = [_A("PART REAL_GUITAR"), _A("Rhythm 2")]
+    assert _match_arrangement_name(arrs, ["Lead", "Rhythm"], "rhythm 2") == 1
+    assert _match_arrangement_name(arrs, ["Lead", "Rhythm"], "Rhythm") == 1
+    assert _match_arrangement_name(arrs, ["Lead", "Rhythm"], "Bass") == -1
+    assert _match_arrangement_name(arrs, ["Lead", "Rhythm"], "") == -1

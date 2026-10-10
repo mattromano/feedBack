@@ -1359,8 +1359,24 @@ if (window.feedBack) window.feedBack.closeCurrentSong = closeCurrentSong;
 // end AND after the user dismisses a score card. A *user* exit (Escape / the ✕)
 // calls the bareword closeCurrentSong(), which we deliberately leave alone, so
 // leaving the player still leaves — and abandons the queue.
+//
+// "Up next" (the pending list): v3's player is fullscreen and leaving it
+// abandons the active queue, so a queue the user assembles song-by-song from
+// the library has to be BUILT while browsing and started afterwards.
+// enqueue() collects into a pending list (persisted per browser, so a reload
+// doesn't lose it); startPending() hands that list to start(). While a queue is
+// already playing, enqueue() appends to the live list instead. Every change
+// emits 'queue:changed' so the library's queue tray can re-render.
 window.feedBack.playQueue = (function () {
     let list = [], idx = -1, source = '', arrangements = null;
+    const PENDING_KEY = 'feedBack.playQueue.pending';
+    let pending = _loadPending();   // [{ filename, title, artist }]
+    // Follow-the-arrangement hint for an ADVANCE: the arrangement name the user
+    // was playing when the queue moved on (e.g. "Rhythm"), consumed once by
+    // playSong, which forwards it to the highway WS as `arrangement_name` so the
+    // next song opens on the same part instead of the default. Out-of-band for
+    // the same reason as _internalPlay: plugin playSong wrappers drop options.
+    let _arrangementHint = null;
     // Set true by _play() right before it drives playSong, consumed once by
     // playSong's clear-guard. The primary "don't clear the queue I'm driving"
     // signal is options.fromQueue, but a chain of plugin playSong wrappers
@@ -1373,14 +1389,49 @@ window.feedBack.playQueue = (function () {
     const active = () => idx >= 0 && idx < list.length;
     const hasNext = () => active() && idx < list.length - 1;
     function clear() { list = []; idx = -1; source = ''; arrangements = null; }
+    function _emitChanged() {
+        const fb = window.feedBack;
+        if (fb && typeof fb.emit === 'function') {
+            try { fb.emit('queue:changed', { pending: pending.length, active: active(), remaining: active() ? list.length - idx - 1 : 0 }); } catch (e) { /* */ }
+        }
+    }
+    function _loadPending() {
+        try {
+            const raw = window.localStorage && window.localStorage.getItem(PENDING_KEY);
+            const v = raw ? JSON.parse(raw) : [];
+            return Array.isArray(v) ? v.filter((it) => it && typeof it.filename === 'string' && it.filename) : [];
+        } catch (e) { return []; }
+    }
+    function _savePending() {
+        try { if (window.localStorage) window.localStorage.setItem(PENDING_KEY, JSON.stringify(pending)); } catch (e) { /* private mode / quota */ }
+        _emitChanged();
+    }
+    // Items are filenames or { filename, title?, artist? } (title/artist only
+    // label the tray; the filename is what plays).
+    function _normItem(it) {
+        if (typeof it === 'string') return it ? { filename: it, title: '', artist: '' } : null;
+        if (!it || typeof it.filename !== 'string' || !it.filename) return null;
+        return { filename: it.filename, title: String(it.title || ''), artist: String(it.artist || '') };
+    }
+    function _currentArrangementName() {
+        try {
+            const info = (window.highway && typeof window.highway.getSongInfo === 'function') ? window.highway.getSongInfo() : null;
+            return (info && (info.arrangement_smart_name || info.arrangement)) || null;
+        } catch (e) { return null; }
+    }
     function _play(i) {
         const fn = list[i];
+        const pinned = arrangements ? arrangements[i] : undefined;
+        // An advance onto a slot with no pinned arrangement follows the part the
+        // user was just playing (captured now, while the outgoing song is still
+        // loaded). The first song of a queue keeps the normal default.
+        _arrangementHint = (i > 0 && pinned === undefined) ? _currentArrangementName() : null;
         // fromQueue is the in-band signal; _internalPlay is the out-of-band one
         // that survives wrapper chains dropping the options arg. Both set; either
         // suffices. playSong runs its clear-guard synchronously at entry, and the
         // wrapper chain reaches it synchronously, so the flag is still set then.
         _internalPlay = true;
-        window.playSong(encodeURIComponent(fn), arrangements ? arrangements[i] : undefined, { fromQueue: true });
+        window.playSong(encodeURIComponent(fn), pinned, { fromQueue: true });
     }
     function start(files, opts) {
         files = (files || []).filter(Boolean);
@@ -1401,13 +1452,71 @@ window.feedBack.playQueue = (function () {
             try { window.fbNotify.show({ title: 'Playing ' + (source || 'queue'), message: files.length + ' songs', icon: '▶' }); } catch (e) { /* */ }
         }
         _play(idx);
+        _emitChanged();
         return true;
     }
     function advance() {
-        if (!hasNext()) { clear(); return false; }
+        if (!hasNext()) { clear(); _emitChanged(); return false; }
         idx++;
         _play(idx);
+        _emitChanged();
         return true;
+    }
+    // Add songs to "up next". Skips songs already waiting (so a double-click
+    // or re-adding an album doesn't stack duplicates). Returns how many were
+    // added.
+    function enqueue(items, opts) {
+        const incoming = (Array.isArray(items) ? items : [items]).map(_normItem).filter(Boolean);
+        let added = 0;
+        if (active()) {
+            const upcoming = new Set(list.slice(idx + 1));
+            for (const it of incoming) {
+                if (upcoming.has(it.filename)) continue;
+                upcoming.add(it.filename);
+                list.push(it.filename);
+                if (arrangements) arrangements.push(undefined);
+                added++;
+            }
+            _emitChanged();
+        } else {
+            const waiting = new Set(pending.map((it) => it.filename));
+            for (const it of incoming) {
+                if (waiting.has(it.filename)) continue;
+                waiting.add(it.filename);
+                pending.push(it);
+                added++;
+            }
+            _savePending();
+        }
+        if (window.fbNotify && !(opts && opts.silent) && incoming.length) {
+            const msg = added ? (added + ' song' + (added === 1 ? '' : 's')) : 'Already queued';
+            try { window.fbNotify.show({ title: 'Added to queue', message: msg, icon: '+' }); } catch (e) { /* */ }
+        }
+        return added;
+    }
+    function removePending(i) {
+        if (!(i >= 0 && i < pending.length)) return false;
+        pending.splice(i, 1);
+        _savePending();
+        return true;
+    }
+    function movePending(from, to) {
+        if (!(from >= 0 && from < pending.length) || !(to >= 0 && to < pending.length) || from === to) return false;
+        const [it] = pending.splice(from, 1);
+        pending.splice(to, 0, it);
+        _savePending();
+        return true;
+    }
+    function clearPending() { pending = []; _savePending(); }
+    // Play "up next" from slot `from` (default 0). Those songs move into the
+    // active queue (anything above `from` stays waiting); start() owns shuffle.
+    function startPending(opts) {
+        const from = (opts && opts.from >= 0) ? opts.from : 0;
+        const files = pending.slice(from).map((it) => it.filename);
+        if (!files.length) return false;
+        pending = pending.slice(0, from);
+        _savePending();
+        return start(files, { source: 'Queue', shuffle: !!(opts && opts.shuffle) });
     }
     return {
         start: start, advance: advance, hasNext: hasNext, active: active, clear: clear,
@@ -1420,6 +1529,15 @@ window.feedBack.playQueue = (function () {
         // read so a later MANUAL play still clears the queue. playSong calls this
         // instead of trusting options.fromQueue to survive the wrapper chain.
         _consumeInternalPlay: function () { const v = _internalPlay; _internalPlay = false; return v; },
+        // One-shot: the arrangement name to follow for the song _play just
+        // started (null when its slot is pinned or it is the queue's first song).
+        _consumeArrangementHint: function () { const v = _arrangementHint; _arrangementHint = null; return v; },
+        enqueue: enqueue,
+        pending: function () { return pending.map((it) => Object.assign({}, it)); },
+        removePending: removePending,
+        movePending: movePending,
+        clearPending: clearPending,
+        startPending: startPending,
         source: function () { return source; },
         remaining: function () { return active() ? list.length - idx - 1 : 0; },
         // What's coming, for consumers that RENDER the queue (a results

@@ -55,6 +55,27 @@ log = logging.getLogger("feedBack.server")
 router = APIRouter()
 
 
+def _match_arrangement_name(arrangements: list, smart_names: list, name: str) -> int:
+    """Index of the arrangement called `name` (case-insensitive): smart name
+    first ("Rhythm"), then the raw chart name. -1 when nothing matches, so the
+    caller falls through to its normal default — unlike
+    `_pick_smart_arrangement`, a miss never substitutes another part.
+
+    Used for the play-queue's follow-the-arrangement hint: after the user
+    played the Rhythm part of one song, the next queued song opens on Rhythm
+    too, when it has one."""
+    want = (name or "").strip().lower()
+    if not want:
+        return -1
+    for i, sn in enumerate(smart_names):
+        if (sn or "").lower() == want:
+            return i
+    for i, a in enumerate(arrangements):
+        if (getattr(a, "name", "") or "").strip().lower() == want:
+            return i
+    return -1
+
+
 def _pick_smart_arrangement(
     arrangements: list,
     smart_names: list,
@@ -151,8 +172,15 @@ def _drum_part_id_for_wire(drum_parts: list[dict] | None, selected_id: str | Non
 
 @router.websocket("/ws/highway/{filename:path}")
 async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
-                     naming_mode: str = "legacy", drum_part: str = ""):
+                     naming_mode: str = "legacy", drum_part: str = "",
+                     arrangement_name: str = ""):
     """Stream song data for the highway renderer over WebSocket.
+
+    `arrangement_name` is a soft pick used only when no explicit
+    `arrangement` index is given: the part to open by name (the play-queue
+    sends the arrangement the user was just playing, so an album keeps
+    following Rhythm/Bass). It wins over instrument routing and the saved
+    default; an unknown name falls through to them.
 
     `drum_part` selects WHICH drum part's tab streams when the pack carries
     several (feedpak 1.17.0 "drums as arrangements") — a part id from
@@ -240,10 +268,14 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         # Smart names are needed for smart-mode arrangement selection.
         smart_names = compute_smart_names(song.arrangements)
 
-        # Pick arrangement: explicit request > user preference > most notes
+        # Pick arrangement: explicit request > requested name (queue follow) >
+        # instrument routing > user preference > most notes
         best = -1
+        hinted = _match_arrangement_name(song.arrangements, smart_names, arrangement_name)
         if 0 <= arrangement < len(song.arrangements):
             best = arrangement
+        elif hinted >= 0:
+            best = hinted
         else:
             # Read the user's config once: their selected instrument (route the chart
             # to the matching part) and their default-arrangement preference.
