@@ -27,6 +27,11 @@
     let cur = null;             // active session
     let recordedThisSession = false;
 
+    // Native play count (feedBack#49): one play per song load (or arrangement
+    // switch) that actually played for at least this long, scored or not — so
+    // a skim, a misclick or an aborted load doesn't inflate "Most played".
+    const PLAY_COUNT_MIN_S = 30;
+
     // Wall-clock play time (career hours odometer). Accrued across
     // play/resume ↔ pause/stop/ended spans — wall time, NOT song position:
     // position deltas double-count A-B loops and mis-read seeks.
@@ -76,7 +81,34 @@
         if (!s) return;
         if (!cur || !cur.filename) return; // no session to attribute to — drop
         const body = { filename: cur.filename, arrangement: cur.arrangement, seconds: s };
-        post(body).then((r) => { if (r == null) queuePendingSeconds(body.filename, body.arrangement, s); });
+        const counted = markPlay(body, s);
+        post(body).then((r) => {
+            if (r == null) { queuePendingSeconds(body.filename, body.arrangement, s); unmarkPlay(counted); }
+            else playCounted(body);
+        });
+    }
+
+    // Attach the one-per-session `count_play` flag to the flush that carries
+    // the session past PLAY_COUNT_MIN_S of played time. Returns the session it
+    // marked (null if none) so a failed POST can re-arm it via unmarkPlay —
+    // the next flush then carries the flag instead.
+    function markPlay(body, seconds) {
+        const sess = cur;
+        if (!sess || !sess.filename) return null;
+        sess.played += seconds || 0;
+        if (sess.playCounted || sess.played < PLAY_COUNT_MIN_S) return null;
+        sess.playCounted = true;
+        body.count_play = true;
+        return sess;
+    }
+    function unmarkPlay(sess) { if (sess) sess.playCounted = false; }
+    // Tell the library a play count moved. Deliberately NOT `stats:recorded`:
+    // that one means "a scored run landed" and drives end-of-song reactions
+    // (venue crowd stinger) that an unscored play must not trigger.
+    function playCounted(body) {
+        if (body.count_play || body.full_combo) {
+            sm.emit('stats:play-counted', { filename: body.filename, arrangement: body.arrangement });
+        }
     }
 
     function reset(filename, arrangement) {
@@ -86,6 +118,7 @@
             arrangement: Number.isFinite(arrangement) ? arrangement : 0,
             hits: 0, misses: 0, streak: 0, bestStreak: 0,
             scored: false, lastTime: 0,
+            played: 0, playCounted: false,   // play-count bookkeeping (markPlay)
         };
         recordedThisSession = false;
     }
@@ -153,8 +186,13 @@
             lastPlayPosition: Number.isFinite(position) ? position : cur.lastTime,
         };
         if (seconds) body.seconds = seconds;
+        const counted = markPlay(body, seconds);
+        // Full combo: the song ran to its natural end without a single miss.
+        // (The server also requires accuracy == 1 before counting it.)
+        if (natural && cur.misses === 0 && cur.hits > 0) body.full_combo = true;
         post(body).then(async (response) => {
             if (response == null && seconds) queuePendingSeconds(body.filename, body.arrangement, seconds);
+            if (response == null) unmarkPlay(counted); else playCounted(body);
             await notifyProgression(response, body, !!natural);
             // Refresh the profile badge AFTER the progression state moved so
             // the rank/dB it renders are post-award values.
@@ -175,7 +213,11 @@
         const seconds = takeSeconds();
         const body = { filename: cur.filename, arrangement: cur.arrangement, lastPlayPosition: position };
         if (seconds) body.seconds = seconds;
-        post(body).then((r) => { if (r == null && seconds) queuePendingSeconds(body.filename, body.arrangement, seconds); });
+        const counted = markPlay(body, seconds);
+        post(body).then((r) => {
+            if (r == null) { if (seconds) queuePendingSeconds(body.filename, body.arrangement, seconds); unmarkPlay(counted); }
+            else playCounted(body);
+        });
     }
 
     // ── Session lifecycle ─────────────────────────────────────────────────--

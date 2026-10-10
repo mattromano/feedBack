@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native play count, "Most played" sort and full-combo badges (#49).** The
+  library now knows how often you have played each song in feedBack itself.
+  `song_stats.plays` only counted note-detection-*scored* sessions, so anyone
+  playing without the notedetect plugin had no history at all; a new
+  `play_count` column counts every song load that actually played for at
+  least 30 seconds, scored or not (the recorder flags the one flush per load
+  that crosses the threshold, so skims and aborted loads don't count, and an
+  arrangement switch is a new play). Existing scored plays seed it once on
+  upgrade. A second column, `full_combos`, counts scored runs that reached the
+  song's natural end without a miss (the server also requires accuracy 1.0
+  before it believes the flag). The Songs screen gets a **Most played** sort
+  (server-side; never-played songs last, ties by artist then title, and under
+  grouping a work's count is summed across all its charts, like the mastery
+  sort), and the existing accuracy pill on grid cards and list rows now also
+  shows **▶ play count** and a gold **FC** marker — a played-but-unscored song
+  gets a neutral pill with just its count. New read: `GET /api/stats/plays`
+  (`{filename: [play_count, full_combos]}`); `POST /api/stats` accepts the
+  optional booleans `count_play` / `full_combo`; the recorder announces count
+  changes as `stats:play-counted` (deliberately not `stats:recorded`, which
+  drives scored-run reactions such as the venue crowd).
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

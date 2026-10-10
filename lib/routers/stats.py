@@ -92,6 +92,27 @@ def api_record_stats(data: dict):
         if not (0 < seconds <= 6 * 3600):
             return JSONResponse({"error": "seconds must be between 0 and 21600"}, status_code=400)
     seconds = seconds or 0.0
+    # Native play count (feedBack#49). The recorder flags the one flush per song
+    # load that crossed its minimum play time (`count_play`), and a scored
+    # session that ran to its natural end without a miss (`full_combo`). Strict
+    # `is True` so a stray truthy value can't count a play.
+    count_play = data.get("count_play") is True
+    full_combo = data.get("full_combo") is True
+
+    def _count_play(row, fc=False):
+        """Apply the play-count / full-combo flags after the main write and
+        return the refreshed row. Never lets the counter drop that write."""
+        if not (count_play or fc):
+            return row
+        try:
+            if count_play:
+                appstate.meta_db.count_play(filename, arrangement, full_combo=fc)
+            else:
+                appstate.meta_db.add_full_combo(filename, arrangement)
+            return appstate.meta_db._stats_row(filename, arrangement) or row
+        except Exception:
+            log.warning("stats play-count update failed", exc_info=True)
+            return row
 
     # A scored session needs BOTH score and accuracy. Exactly one provided is
     # ambiguous — don't silently fall through to the position-only branch.
@@ -133,6 +154,9 @@ def api_record_stats(data: dict):
         row = appstate.meta_db.record_session(filename, arrangement, score=score,
                                      accuracy=accuracy, last_position=last_pos,
                                      seconds=seconds)
+        # A full combo means every note hit — trust the flag only when the
+        # accuracy it rides with agrees.
+        row = _count_play(row, full_combo and accuracy >= 1)
         # Unified XP + streak side-effects — never let these drop the stat write.
         progress = None
         try:
@@ -174,7 +198,7 @@ def api_record_stats(data: dict):
     # must not overwrite Continue with the end-of-song offset). Still counts
     # as playing today for the streak below.
     if last_pos is None and seconds:
-        row = appstate.meta_db.add_play_seconds(filename, arrangement, seconds)
+        row = _count_play(appstate.meta_db.add_play_seconds(filename, arrangement, seconds))
         progress = None
         try:
             from datetime import date
@@ -197,6 +221,7 @@ def api_record_stats(data: dict):
         row = appstate.meta_db.touch_position(filename, arrangement, pos, seconds=seconds)
     except (TypeError, ValueError, OverflowError):
         return JSONResponse({"error": "lastPlayPosition must be a finite number"}, status_code=400)
+    row = _count_play(row)   # only a scored session can be a full combo
     # A resume session still counts as playing today: advance the streak (no XP —
     # that's scoring-only) so a non-scored practice day keeps the streak alive,
     # consistent with these sessions also surfacing in recent / continue.
@@ -236,6 +261,14 @@ def api_stats_best():
     """{filename: best_accuracy} for all songs with a recorded best — one call
     to badge the library grid (defined before the {filename} catch-all)."""
     return appstate.meta_db.best_accuracy_map()
+
+
+@router.get("/api/stats/plays")
+def api_stats_plays():
+    """{filename: [play_count, full_combos]} for every played song — one call
+    to badge the library with play counts and full combos (feedBack#49;
+    defined before the {filename} catch-all)."""
+    return appstate.meta_db.play_counts_map()
 
 
 @router.get("/api/stats/top")

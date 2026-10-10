@@ -291,6 +291,10 @@ _KEYSET_SORTS = {
     "title-desc": ("title", "COLLATE NOCASE", "DESC"),
     "recent": ("mtime", "", "DESC"),
 }
+# Per-song play count for the "Most played" library sort (feedBack#49): summed
+# across arrangements, correlated on the outer `songs` row.
+_PLAYS_SQL = "(SELECT SUM(play_count) FROM song_stats s WHERE s.filename = songs.filename)"
+
 # Index into a query_page row tuple for each keyset column (see the SELECT in
 # query_page: filename, title, artist, ... mtime at 9).
 _KEYSET_ROW_IDX = {"artist": 2, "title": 1, "mtime": 9}
@@ -757,6 +761,25 @@ class MetadataDB:
                 "ALTER TABLE song_stats ADD COLUMN seconds_total REAL NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # Native play count (feedBack#49): how many times the song was actually
+        # played (>= 30 s of playback in one load, scored or not) — `plays`
+        # only counts note-detection-SCORED sessions, so a player without the
+        # notedetect plugin had no count at all. Seeded from `plays` once, when
+        # the column is first added, so existing scored history isn't lost.
+        try:
+            self.conn.execute(
+                "ALTER TABLE song_stats ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0")
+            self.conn.execute("UPDATE song_stats SET play_count = plays")
+        except sqlite3.OperationalError:
+            pass
+        # Full combos: scored sessions that ran to the song's natural end
+        # without a single miss. Not back-fillable (a stored best_accuracy of
+        # 1.0 may come from a partial run), so it starts at 0.
+        try:
+            self.conn.execute(
+                "ALTER TABLE song_stats ADD COLUMN full_combos INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         # Playlists + the reserved "Saved for Later" system playlist. Additive.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS playlists (
@@ -1057,6 +1080,8 @@ class MetadataDB:
                     # Play time is additive: both encodings' hours belong to
                     # the one canonical song.
                     "seconds_total": (cur.get("seconds_total") or 0.0) + (r.get("seconds_total") or 0.0),
+                    "play_count": (cur.get("play_count") or 0) + (r.get("play_count") or 0),
+                    "full_combos": (cur.get("full_combos") or 0) + (r.get("full_combos") or 0),
                     "last_played_at": newer["last_played_at"], "updated_at": newer["updated_at"],
                 }
             # Atomic swap: clear and reinsert the canonicalized set in one txn.
@@ -1881,7 +1906,7 @@ class MetadataDB:
     _STATS_COLS = (
         "filename", "arrangement", "plays", "best_score", "best_accuracy",
         "last_score", "last_accuracy", "last_position", "seconds_total",
-        "last_played_at", "updated_at",
+        "play_count", "full_combos", "last_played_at", "updated_at",
     )
 
     def _stats_row(self, filename: str, arrangement: int) -> dict | None:
@@ -2331,6 +2356,51 @@ class MetadataDB:
             self.conn.commit()
         return self._stats_row(filename, int(arrangement))
 
+    def count_play(self, filename: str, arrangement: int, *, full_combo: bool = False) -> dict:
+        """Count one play of the song (feedBack#49) — play_count += 1, and
+        full_combos += 1 when the session was a full combo. Separate from the
+        scored `plays` counter: the recorder sends it once per song load that
+        actually played, whether or not note detection scored it."""
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO song_stats (filename, arrangement, play_count, full_combos,
+                                           last_played_at, updated_at)
+                   VALUES (?, ?, 1, ?, strftime('%Y-%m-%d %H:%M:%f','now'),
+                           strftime('%Y-%m-%d %H:%M:%f','now'))
+                   ON CONFLICT(filename, arrangement) DO UPDATE SET
+                       play_count = song_stats.play_count + 1,
+                       full_combos = song_stats.full_combos + excluded.full_combos,
+                       last_played_at = excluded.last_played_at,
+                       updated_at = excluded.updated_at""",
+                (filename, int(arrangement), 1 if full_combo else 0),
+            )
+            self.conn.commit()
+        return self._stats_row(filename, int(arrangement))
+
+    def add_full_combo(self, filename: str, arrangement: int) -> dict:
+        """full_combos += 1 without counting another play — for a full-combo
+        session whose play was already counted by an earlier flush."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE song_stats SET full_combos = full_combos + 1 "
+                "WHERE filename = ? AND arrangement = ?",
+                (filename, int(arrangement)),
+            )
+            self.conn.commit()
+        return self._stats_row(filename, int(arrangement))
+
+    def play_counts_map(self) -> dict:
+        """{filename: [play_count, full_combos]} across all arrangements, for
+        badging the library in one request (the play-count twin of
+        best_accuracy_map). Only songs with a play or a full combo, dead songs
+        skipped."""
+        rows = self.conn.execute(
+            "SELECT filename, SUM(play_count), SUM(full_combos) FROM song_stats "
+            "WHERE 1=1 " + self._existing_song_filter() +
+            "GROUP BY filename HAVING SUM(play_count) > 0 OR SUM(full_combos) > 0"
+        ).fetchall()
+        return {r[0]: [int(r[1] or 0), int(r[2] or 0)] for r in rows}
+
     def get_song_stats(self, filename: str) -> dict:
         """Best/last/plays across all arrangements of a song, plus per-arrangement rows."""
         rows = self.conn.execute(
@@ -2347,6 +2417,8 @@ class MetadataDB:
             "best_accuracy": best_acc,
             "best_score": best_score,
             "plays": plays,
+            "play_count": sum(a["play_count"] or 0 for a in arr),
+            "full_combos": sum(a["full_combos"] or 0 for a in arr),
             "arrangements": arr,
         }
 
@@ -4255,6 +4327,14 @@ class MetadataDB:
                 "((SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) IS NULL) ASC, "
                 "(SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) DESC"
             ),
+            # Most played (feedBack#49): play_count summed across a song's
+            # arrangements (song_stats, correlated subquery → OFFSET paging like
+            # mastery). Never-played songs push to the bottom; ties read
+            # artist → title like the default sort.
+            "plays": (
+                f"COALESCE({_PLAYS_SQL}, 0) DESC, "
+                "artist COLLATE NOCASE, title COLLATE NOCASE"
+            ),
         }
         if group and sort in ("mastery", "mastery-desc"):
             # Sort law (§7.1): mastery aggregates MAX across the WHOLE group —
@@ -4272,6 +4352,15 @@ class MetadataDB:
                    "FROM work_display w1 WHERE w1.filename = songs.filename))")
             sort_map["mastery"] = f"({_gm} IS NULL) ASC, {_gm} ASC"
             sort_map["mastery-desc"] = f"({_gm} IS NULL) ASC, {_gm} DESC"
+        if group and sort == "plays":
+            # Same law for plays: a work's count is every chart of it you've
+            # played, so switching versions doesn't sink a favourite.
+            _gp = ("(SELECT SUM(st.play_count) FROM song_stats st "
+                   "JOIN work_display sw ON sw.filename = st.filename "
+                   "WHERE sw.effective_work_key = (SELECT w1.effective_work_key "
+                   "FROM work_display w1 WHERE w1.filename = songs.filename))")
+            sort_map["plays"] = (f"COALESCE({_gp}, 0) DESC, "
+                                 "artist COLLATE NOCASE, title COLLATE NOCASE")
         # Fold the legacy `dir=desc` toggle into the canonical sort key BEFORE
         # the lookup, so the ORDER BY is built from the effective sort — mirrors
         # what `_effective_keyset_sort` does on the cursor side. Needed because

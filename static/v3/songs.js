@@ -41,6 +41,9 @@
         // Personal difficulty (song_user_meta.user_difficulty, 1-5); unrated
         // songs sort last either way.
         ['difficulty', 'Difficulty (easiest first)'], ['difficulty-desc', 'Difficulty (hardest first)'],
+        // Native play count (song_stats.play_count, feedBack#49); never-played
+        // songs sort last.
+        ['plays', 'Most played'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
@@ -63,7 +66,7 @@
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
         filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
-        page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [], genres: [],
+        page: 0, total: 0, loading: false, built: false, accuracy: {}, plays: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
@@ -483,23 +486,40 @@
         if (window.syncLibrarySong && sid) window.syncLibrarySong(state.provider, sid, { playWhenReady: true });
     }
 
-    // Accuracy badge markup. `variant` is 'grid' (overlay pill on the card art,
-    // default) or 'tree' (inline percentage in the list row). Both carry the
-    // .fb-acc-badge class so a post-play refresh (repaintAccuracy) can find and
-    // replace them in place without re-rendering the whole list.
+    // Practice badge markup: play count, best accuracy and full combo.
+    // `variant` is 'grid' (overlay pill on the card art, default) or 'tree'
+    // (inline in the list row). Both carry the .fb-acc-badge class so a
+    // post-play refresh (repaintAccuracy) can find and replace them in place
+    // without re-rendering the whole list. Each part is independent: an
+    // unscored song that has been played shows just its count.
     function accuracyBadge(filename, variant) {
         const acc = state.accuracy[filename];
-        if (acc == null) return '';
+        const pc = state.plays[filename];               // [play_count, full_combos]
+        const plays = pc ? pc[0] : 0, fcs = pc ? pc[1] : 0;
+        if (acc == null && !plays && !fcs) return '';
         // Floor, never round: 100% must mean every note hit.
-        const pct = Math.floor(acc * 100);
+        const pct = acc == null ? null : Math.floor(acc * 100);
+        const playsTip = 'Played ' + plays + ' time' + (plays === 1 ? '' : 's');
+        const fcTip = fcs + ' full combo' + (fcs === 1 ? '' : 's') + ' (whole song, no misses)';
         if (variant === 'tree') {
             const color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
-            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + pct + '%</span>';
+            return '<span class="fb-acc-badge flex items-center gap-1.5 shrink-0 text-xs font-bold">' +
+                (plays ? '<span class="text-fb-textDim font-normal" title="' + playsTip + '">▶ ' + plays + '</span>' : '') +
+                (pct != null ? '<span class="' + color + '">' + pct + '%</span>' : '') +
+                (fcs ? '<span class="text-fb-gold" title="' + fcTip + '">FC</span>' : '') +
+                '</span>';
         }
-        const color = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
+        // Played-but-unscored: a neutral pill (no accuracy colour to borrow).
+        const bg = acc == null ? 'bg-black/70'
+            : (acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low')) + '/90';
         const text = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + color + '/90 ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%</span>';
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + bg + ' ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
+            (plays ? '<span class="font-normal" title="' + playsTip + '">▶ ' + plays + '</span>' : '') +
+            (pct != null
+                ? '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%'
+                : '') +
+            (fcs ? '<span class="bg-fb-gold text-black rounded-sm px-1" title="' + fcTip + '">FC</span>' : '') +
+            '</span>';
     }
 
     // ── Metadata-refresh per-tile state (the "Refresh Metadata" batch) ─────────
@@ -583,11 +603,12 @@
 
     async function applyScoreRefresh() {
         if (!_dirtyScores.size) return;
-        const fresh = await jget('/api/stats/best');
+        const [fresh, plays] = await Promise.all([jget('/api/stats/best'), jget('/api/stats/plays')]);
         // Fetch failed — keep the entries dirty so the next trigger (or screen
         // enter) retries rather than silently dropping the badge update.
-        if (!fresh) return;
+        if (!fresh || !plays) return;
         state.accuracy = fresh;
+        state.plays = plays;
         const keys = Array.from(_dirtyScores);
         _dirtyScores.clear();
         keys.forEach(repaintAccuracy);
@@ -3649,6 +3670,7 @@
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
+            (async () => { state.plays = (await jget('/api/stats/plays')) || {}; })(),
             jget('/api/library/tuning-names?provider=' + enc(state.provider)
                 + '&instrument=' + enc(libInstrument())),
             loadArtistCatalog(),
@@ -4399,7 +4421,7 @@
         // badge (song:stop fires before the POST resolves, so it's too early).
         // If the library is visible right now, repaint immediately; otherwise
         // mark it dirty and onV3SongsScreenEnter applies it on return.
-        sm.on('stats:recorded', (e) => {
+        const onStatsChanged = (e) => {
             // Decode to the library-card key space — the event carries the
             // encodeURIComponent'd filename, but cards (data-fn) and
             // state.accuracy key on the decoded library filename. Without this
@@ -4414,7 +4436,12 @@
             // the set, so repainting against a hidden grid would drop the update).
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') applyScoreRefresh();
-        });
+        };
+        sm.on('stats:recorded', onStatsChanged);
+        // A play count / full combo moved (stats-recorder, feedBack#49) — same
+        // badge repaint, but its own event so unscored plays don't fire the
+        // scored-run reactions that listen to stats:recorded.
+        sm.on('stats:play-counted', onStatsChanged);
         // A library scan (rescan / full rescan from Settings, or a DLC-folder
         // change) can add or remove songs while this grid is cached — the
         // Settings rescan only refreshed the classic library, so the v3 grid
