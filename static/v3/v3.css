@@ -1362,3 +1362,55 @@ html.fb-immersive #v3-main > .screen.active {
 /* Skeleton placeholder shown only if a window's fetch hasn't landed; mirrors a
    real card's vertical structure so it occupies an identical row height. */
 .v3-card-skel { pointer-events: none; }
+
+/* — Songs table view (static/v3/songs-table.js) — */
+/* The rows scroll inside their own box (height fitted to the viewport by JS)
+   and are virtualised: the spacer reserves the full height and only the
+   visible window's rows are in the DOM, absolutely positioned at
+   index × 30px — so the row height here must match ROW_H there. Narrow
+   screens scroll the whole table sideways instead of crushing the columns. */
+.v3-table-box { overflow-x: auto; }
+.v3-table-head, .v3-table-scroll { min-width: 60rem; }
+.v3-table-head, .v3-table-row {
+    display: grid;
+    gap: 0.625rem;
+    padding: 0 0.625rem;
+    align-items: center;
+}
+.v3-table-head {
+    height: 2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgb(156 163 175);
+}
+.v3-table-head > button { white-space: nowrap; cursor: pointer; }
+.v3-table-head > button:hover { color: rgb(241 245 249); }
+.v3-table-scroll { position: relative; overflow-y: auto; }
+.v3-table-spacer { position: relative; }
+.v3-table-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 30px;
+    font-size: 0.8125rem;
+    color: rgb(156 163 175);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    cursor: pointer;
+}
+.v3-table-row:hover, .v3-table-row:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+.v3-table-row > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.v3-table-fc {
+    font-size: 0.625rem;
+    font-weight: 800;
+    color: #1f1600;
+    background: #e8c040;
+    border-radius: 0.1875rem;
+    padding: 0.0625rem 0.25rem;
+}

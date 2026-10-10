@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Songs table view.** A fifth library view (☷, next to grid / list /
+  albums / folders) shows the whole filtered library as one dense, sortable
+  table: FC, artist, title, album, year, tuning, parts (L/R/B/C/K/D/V), length,
+  plays, best accuracy, last played and time played. Click a column header to
+  sort (again to reverse; the choice is remembered), click a row or press
+  Enter on it to play. It uses exactly the grid's filters — search, format,
+  the filter drawer and work grouping (a grouped row shows the work's whole
+  history across its charts, and plays the chart a filter matched) — via a new
+  `GET /api/library/table`, which returns every match in one columnar payload
+  joined to the local practice stats (bounded at 20,000 rows, and says so when
+  it truncates). Rows are virtualised inside their own scroll box, so only the
+  visible window is in the DOM even for a 10k-song library. Local library only
+  (the practice columns are local); the view choice persists like the others.
 - **Native play count, "Most played" sort and full-combo badges (#49).** The
   library now knows how often you have played each song in feedBack itself.
   `song_stats.plays` only counted note-detection-*scored* sessions, so anyone

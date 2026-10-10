@@ -2401,6 +2401,30 @@ class MetadataDB:
         ).fetchall()
         return {r[0]: [int(r[1] or 0), int(r[2] or 0)] for r in rows}
 
+    def table_stats_map(self, group: bool = False) -> dict:
+        """{filename: (play_count, best_accuracy|None, full_combos,
+        last_played_at|None, seconds_total)} — the practice columns of the
+        library table view, aggregated across a song's arrangements. With
+        `group`, keyed by each work's representative and aggregated across ALL
+        the work's charts (the grouped-sort law: a work's history is every
+        chart of it you've touched). best_accuracy counts scored sessions only
+        (resume-only rows carry a default 0), matching best_accuracy_map."""
+        cols = ("SUM(st.play_count), MAX(CASE WHEN st.plays > 0 THEN st.best_accuracy END), "
+                "SUM(st.full_combos), MAX(st.last_played_at), SUM(st.seconds_total)")
+        if group:
+            self._ensure_work_display()
+            with self._lock:   # don't read work_display mid-rebuild (see query_page)
+                rows = self.conn.execute(
+                    f"SELECT w1.filename, {cols} FROM work_display w1 "
+                    "JOIN work_display w2 ON w2.effective_work_key = w1.effective_work_key "
+                    "JOIN song_stats st ON st.filename = w2.filename "
+                    "WHERE w1.is_group_representative = 1 GROUP BY w1.filename").fetchall()
+        else:
+            rows = self.conn.execute(
+                f"SELECT st.filename, {cols} FROM song_stats st GROUP BY st.filename").fetchall()
+        return {r[0]: (int(r[1] or 0), r[2], int(r[3] or 0), r[4], float(r[5] or 0.0))
+                for r in rows}
+
     def get_song_stats(self, filename: str) -> dict:
         """Best/last/plays across all arrangements of a song, plus per-arrangement rows."""
         rows = self.conn.execute(
