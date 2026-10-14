@@ -772,6 +772,7 @@ def convert_track(
     chord_template_map: dict[tuple, int] = {}  # fret tuple → index
     last_note_per_string: dict[int, RsNote] = {}  # for tie sustain extension
     pending_slides: list = []  # (RsNote, rs_string, kind) — resolved post-loop
+    pending_hopos: list = []  # (origin RsNote, rs_string) — resolved post-loop
     _prev_mh_index: int = -1  # sentinel: no previous entry
 
     for entry in schedule:
@@ -834,26 +835,22 @@ def convert_track(
                         rn.bend_values = curve
 
                     if eff.hammer:
-                        # HO vs PO from pitch direction off the prior note on the
-                        # string (descending = pull-off). last_note_per_string is
-                        # still the previous note here (updated after append).
-                        _prevn = last_note_per_string.get(rs_str)
-                        if _prevn is not None and _prevn.fret > fret:
-                            rn.pull_off = True
-                        else:
-                            rn.hammer_on = True
+                        # GP3-5 set the hammer flag on the ORIGIN of the slur
+                        # (the note the arc starts from); RS flags the
+                        # DESTINATION (the note sounded without a pick). The
+                        # post-pass below marks the next note on this string,
+                        # H vs P by fret direction (descending = pull-off).
+                        pending_hopos.append((rn, rs_str))
 
                     if eff.slides:
                         for slide in eff.slides:
-                            if slide in (
-                                guitarpro.SlideType.shiftSlideTo,
-                                guitarpro.SlideType.legatoSlideTo,
-                            ):
+                            if slide == guitarpro.SlideType.legatoSlideTo:
                                 # Pitched slide to the next note on this string;
                                 # slide_to (the target fret) is filled in by the
                                 # post-pass below once all notes are known.
-                                rn.link_next = True
-                                pending_slides.append((rn, rs_str, "pitched"))
+                                pending_slides.append((rn, rs_str, "legato"))
+                            elif slide == guitarpro.SlideType.shiftSlideTo:
+                                pending_slides.append((rn, rs_str, "shift"))
                             elif slide == guitarpro.SlideType.outDownwards:
                                 pending_slides.append((rn, rs_str, "down"))
                             elif slide == guitarpro.SlideType.outUpwards:
@@ -872,8 +869,8 @@ def convert_track(
                         rn.palm_mute = True
                     if eff.accentuatedNote or eff.heavyAccentuatedNote:
                         rn.accent = True
-                    if eff.ghostNote:
-                        rn.mute = True
+                    # Ghost notes are played quietly, not muted: leave them
+                    # as normal pitched notes (a dead note is NoteType.dead).
                     if getattr(eff, "vibrato", False):
                         rn.vibrato = True
                     if eff.tremoloPicking:
@@ -1022,10 +1019,12 @@ def convert_track(
     rs_notes.sort(key=lambda n: n.time)
     rs_chords.sort(key=lambda c: c.time)
 
-    # Resolve slide targets now that every note on each string is known. A
-    # pitched slide takes its target fret from the NEXT note on the same
-    # string; out-slides are unpitched (approximate ±5 frets).
-    if pending_slides:
+    # Resolve slide targets and hammer-on/pull-off destinations now that
+    # every note on each string is known. A pitched slide takes its target
+    # fret from the NEXT note on the same string; only a legato slide links
+    # into it (link_next: the target is not re-struck) — a shift slide's
+    # target is picked again. Out-slides are unpitched (approximate ±5 frets).
+    if pending_slides or pending_hopos:
         _by_string: dict = {}
         for _n in rs_notes:
             _by_string.setdefault(_n.string, []).append(_n)
@@ -1035,15 +1034,27 @@ def convert_track(
         for _lst in _by_string.values():
             _lst.sort(key=lambda n: n.time)
         for _rn, _sstr, _kind in pending_slides:
-            if _kind == "pitched":
+            if _kind in ("legato", "shift"):
                 _seq = _by_string.get(_sstr, [])
                 _nxt = next((x for x in _seq if x.time > _rn.time), None)
                 if _nxt is not None and _nxt.fret != _rn.fret:
                     _rn.slide_to = _nxt.fret
-            elif _kind == "down":
+                    if _kind == "legato":
+                        _rn.link_next = True
+            elif _kind == "down" and _rn.fret > 1:
+                # nothing below fret 1 to slide down to (an open or first-fret
+                # note would otherwise get a degenerate "slide down" to fret 1)
                 _rn.slide_unpitch_to = max(1, _rn.fret - 5)
             elif _kind == "up":
                 _rn.slide_unpitch_to = _rn.fret + 5
+        for _rn, _sstr in pending_hopos:
+            _seq = _by_string.get(_sstr, [])
+            _nxt = next((x for x in _seq if x.time > _rn.time), None)
+            if _nxt is not None and _nxt.fret != _rn.fret:
+                if _nxt.fret < _rn.fret:
+                    _nxt.pull_off = True
+                else:
+                    _nxt.hammer_on = True
 
     # ── Compute anchors ───────────────────────────────────────────────────
     # Exclude open strings (fret 0) — they span the full highway and
