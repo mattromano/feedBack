@@ -3636,6 +3636,11 @@
     // selector entry lands.
     window.slopsmithViz_drum_highway_3d.matchesArrangement = function (songInfo) {
         if (!songInfo || !songInfo.has_drum_tab) return false;
+        // mattromano build: the `drums` plugin is our drum highway. It sorts
+        // after this one, so step aside in Auto when it is installed (this
+        // view stays selectable from the picker).
+        const drums = window.feedBackViz_drums;
+        if (typeof drums === 'function' && typeof drums.matchesArrangement === 'function') return false;
         const arr = songInfo.arrangement || '';
         if (/\b(?:drums?|percussion)\b/i.test(arr)) return true;
         if (songInfo.has_notation) return false;
