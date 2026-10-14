@@ -1,0 +1,9 @@
+{
+  "id": "guitar_volume",
+  "name": "_Guitar Volume",
+  "version": "2.0.0",
+  "private": true,
+  "script": "screen.js",
+  "category": "audio",
+  "description": "A Guitar fader in the mixer: a master level for the guitar you're playing (the native amp chain), on top of every preset's own level. Desktop app only."
+}

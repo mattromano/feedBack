@@ -63,6 +63,8 @@ plugins/sync_lab/__pycache__/
 !plugins/tone_pack/
 !plugins/tone_pack/**
 plugins/tone_pack/__pycache__/
+!plugins/guitar_volume/
+!plugins/guitar_volume/**
 node_modules/
 test-results/
 playwright-report/
