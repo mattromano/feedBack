@@ -41,6 +41,9 @@
         // Personal difficulty (song_user_meta.user_difficulty, 1-5); unrated
         // songs sort last either way.
         ['difficulty', 'Difficulty (easiest first)'], ['difficulty-desc', 'Difficulty (hardest first)'],
+        // Native play count (song_stats.play_count, feedBack#49); never-played
+        // songs sort last.
+        ['plays', 'Most played'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
@@ -63,7 +66,7 @@
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
         filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
-        page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [], genres: [],
+        page: 0, total: 0, loading: false, built: false, accuracy: {}, plays: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
@@ -164,7 +167,7 @@
         if (!saved || typeof saved !== 'object') return;
         if (SORTS.some(([v]) => v === saved.sort)) state.sort = saved.sort;
         if (FORMATS.some(([v]) => v === saved.format)) state.format = saved.format;
-        if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder' || saved.view === 'albums') state.view = saved.view;
+        if (['grid', 'tree', 'folder', 'albums', 'table'].includes(saved.view)) state.view = saved.view;
         if (typeof saved.grouping === 'boolean') state.grouping = saved.grouping;
         const f = saved.filters;
         if (f && typeof f === 'object') {
@@ -483,23 +486,40 @@
         if (window.syncLibrarySong && sid) window.syncLibrarySong(state.provider, sid, { playWhenReady: true });
     }
 
-    // Accuracy badge markup. `variant` is 'grid' (overlay pill on the card art,
-    // default) or 'tree' (inline percentage in the list row). Both carry the
-    // .fb-acc-badge class so a post-play refresh (repaintAccuracy) can find and
-    // replace them in place without re-rendering the whole list.
+    // Practice badge markup: play count, best accuracy and full combo.
+    // `variant` is 'grid' (overlay pill on the card art, default) or 'tree'
+    // (inline in the list row). Both carry the .fb-acc-badge class so a
+    // post-play refresh (repaintAccuracy) can find and replace them in place
+    // without re-rendering the whole list. Each part is independent: an
+    // unscored song that has been played shows just its count.
     function accuracyBadge(filename, variant) {
         const acc = state.accuracy[filename];
-        if (acc == null) return '';
+        const pc = state.plays[filename];               // [play_count, full_combos]
+        const plays = pc ? pc[0] : 0, fcs = pc ? pc[1] : 0;
+        if (acc == null && !plays && !fcs) return '';
         // Floor, never round: 100% must mean every note hit.
-        const pct = Math.floor(acc * 100);
+        const pct = acc == null ? null : Math.floor(acc * 100);
+        const playsTip = 'Played ' + plays + ' time' + (plays === 1 ? '' : 's');
+        const fcTip = fcs + ' full combo' + (fcs === 1 ? '' : 's') + ' (whole song, no misses)';
         if (variant === 'tree') {
             const color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
-            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + pct + '%</span>';
+            return '<span class="fb-acc-badge flex items-center gap-1.5 shrink-0 text-xs font-bold">' +
+                (plays ? '<span class="text-fb-textDim font-normal" title="' + playsTip + '">▶ ' + plays + '</span>' : '') +
+                (pct != null ? '<span class="' + color + '">' + pct + '%</span>' : '') +
+                (fcs ? '<span class="text-fb-gold" title="' + fcTip + '">FC</span>' : '') +
+                '</span>';
         }
-        const color = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
+        // Played-but-unscored: a neutral pill (no accuracy colour to borrow).
+        const bg = acc == null ? 'bg-black/70'
+            : (acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low')) + '/90';
         const text = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + color + '/90 ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%</span>';
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + bg + ' ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
+            (plays ? '<span class="font-normal" title="' + playsTip + '">▶ ' + plays + '</span>' : '') +
+            (pct != null
+                ? '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%'
+                : '') +
+            (fcs ? '<span class="bg-fb-gold text-black rounded-sm px-1" title="' + fcTip + '">FC</span>' : '') +
+            '</span>';
     }
 
     // ── Metadata-refresh per-tile state (the "Refresh Metadata" batch) ─────────
@@ -583,14 +603,18 @@
 
     async function applyScoreRefresh() {
         if (!_dirtyScores.size) return;
-        const fresh = await jget('/api/stats/best');
+        const [fresh, plays] = await Promise.all([jget('/api/stats/best'), jget('/api/stats/plays')]);
         // Fetch failed — keep the entries dirty so the next trigger (or screen
         // enter) retries rather than silently dropping the badge update.
-        if (!fresh) return;
+        if (!fresh || !plays) return;
         state.accuracy = fresh;
+        state.plays = plays;
         const keys = Array.from(_dirtyScores);
         _dirtyScores.clear();
         keys.forEach(repaintAccuracy);
+        // The table carries the same numbers — refetch it in place (it keeps
+        // its scroll position and column sort).
+        if (state.view === 'table') loadTable();
         // A new score shifts the repertoire meter + the keep-practicing shelf.
         renderLibraryHome();
     }
@@ -2632,7 +2656,7 @@
     // artist page can own the scroller, and back again on close.
     function _setBrowseHostsHidden(hidden) {
         if (hidden) {
-            ['v3-songs-gridsizer', 'v3-songs-tree', 'v3-songs-albums', 'lib-folder-tree',
+            ['v3-songs-gridsizer', 'v3-songs-tree', 'v3-songs-albums', 'v3-songs-table', 'lib-folder-tree',
              'v3-lib-home', 'v3-songs-azrail', 'v3-songs-azbubble']
                 .forEach((id) => document.getElementById(id)?.classList.add('hidden'));
             const fc = document.getElementById('lib-folder-controls');
@@ -2641,6 +2665,7 @@
             document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
             document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
             document.getElementById('v3-songs-albums')?.classList.toggle('hidden', state.view !== 'albums');
+            document.getElementById('v3-songs-table')?.classList.toggle('hidden', state.view !== 'table');
             document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
             const fc = document.getElementById('lib-folder-controls');
             if (fc) fc.style.display = state.view === 'folder' ? 'flex' : 'none';
@@ -2872,6 +2897,29 @@
     // Global opener — the drawer link, plugins, and other views reach the page
     // without touching this module's internals.
     window.__fbOpenArtistPage = openArtistPage;
+
+    // Table view: the whole filtered library (same params as the grid, so
+    // search / format / drawer filters / grouping all apply) as sortable,
+    // virtualised rows. Column sorting is the table's own (click a header);
+    // the toolbar sort applies to the grid. Practice stats are local, so the
+    // table is offered for the local library only.
+    function loadTable() {
+        const host = document.getElementById('v3-songs-table');
+        if (!host) return Promise.resolve();
+        if (state.provider !== 'local') {
+            host.innerHTML = '<p class="text-fb-textDim text-sm">The table view shows your local library (with your play stats) — switch the source to My Library.</p>';
+            return Promise.resolve();
+        }
+        if (!window.v3SongsTable) { host.innerHTML = '<p class="text-fb-textDim text-sm">Table view unavailable.</p>'; return Promise.resolve(); }
+        const extra = groupingActive() ? { group: 1 } : {};
+        return window.v3SongsTable.render(host, {
+            url: '/api/library/table?' + queryParams(extra).toString(),
+            play: (row) => {
+                _saveLibraryScrollSnapshot();
+                if (window.playSong) window.playSong(enc(row.playFilename));
+            },
+        });
+    }
 
     async function loadTree() {
         const host = document.getElementById('v3-songs-tree');
@@ -3601,6 +3649,7 @@
         document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
         document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
         document.getElementById('v3-songs-albums')?.classList.toggle('hidden', state.view !== 'albums');
+        document.getElementById('v3-songs-table')?.classList.toggle('hidden', state.view !== 'table');
         // Refresh the A–Z jump rail (shows only for the grid + alphabetical
         // sorts; hides itself otherwise). Independent of the grid load.
         refreshRail();
@@ -3612,7 +3661,8 @@
             _applyMainScrollTop(0);
             return _ensureFolderLibrary().then(() => window.folderLibrary?.load());
         }
-        const loaded = state.view === 'grid' ? loadGrid(true) : state.view === 'albums' ? loadAlbums() : loadTree();
+        const loaded = state.view === 'grid' ? loadGrid(true) : state.view === 'albums' ? loadAlbums()
+            : state.view === 'table' ? loadTable() : loadTree();
         _applyMainScrollTop(0);
         return loaded;
     }
@@ -3649,6 +3699,7 @@
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
+            (async () => { state.plays = (await jget('/api/stats/plays')) || {}; })(),
             jget('/api/library/tuning-names?provider=' + enc(state.provider)
                 + '&instrument=' + enc(libInstrument())),
             loadArtistCatalog(),
@@ -3684,7 +3735,7 @@
             (providers.length > 1 ? '<select id="v3-songs-provider" class="' + ctrl + '">' + provOpts + '</select>' : '') +
             '<select id="v3-songs-artist" class="' + ctrl + ' max-w-[11rem]" aria-label="Artist">' + artistSelectHtml() + '</select>' +
             '<select id="v3-songs-album" class="' + ctrl + ' max-w-[11rem]" aria-label="Album"' + (state.artist ? '' : ' disabled') + '>' + albumSelectHtml() + '</select>' +
-            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button><button id="v3-songs-albums-btn" title="Albums" class="px-3 py-2 text-sm">💿</button><button id="v3-songs-folder-btn" class="px-3 py-2 text-sm" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:2.25rem"><svg fill="currentColor" viewBox="0 0 16 16" style="width:12px;height:12px;flex-shrink:0"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.086a1.5 1.5 0 011.06.44l.915.914H13.5A1.5 1.5 0 0115 4.914V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg></button></div>' +
+            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button><button id="v3-songs-albums-btn" title="Albums" class="px-3 py-2 text-sm">💿</button><button id="v3-songs-table-btn" title="Table (sortable: plays, best, last played…)" aria-label="Table view" class="px-3 py-2 text-sm">☷</button><button id="v3-songs-folder-btn" class="px-3 py-2 text-sm" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:2.25rem"><svg fill="currentColor" viewBox="0 0 16 16" style="width:12px;height:12px;flex-shrink:0"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.086a1.5 1.5 0 011.06.44l.915.914H13.5A1.5 1.5 0 0115 4.914V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg></button></div>' +
             // Name the perspective on the SORT too, not just the filter: tuning
             // sort orders by musical distance from standard, and for a bass
             // player that distance is measured on the bass tuning. Unlabelled,
@@ -3713,6 +3764,9 @@
             '</div>' +
             '<div id="v3-songs-tree" class="hidden"></div>' +
             '<div id="v3-songs-albums" class="hidden"></div>' +
+            // Table view host (songs-table.js) — the whole filtered library as
+            // sortable, virtualised rows.
+            '<div id="v3-songs-table" class="hidden"></div>' +
             // Artist page host (PR-B) — an openAlbum-style in-place sub-render;
             // populated + shown by openArtistPage, cleared on close/reload.
             '<div id="v3-songs-artistpage" class="hidden"></div>' +
@@ -3805,6 +3859,7 @@
             byId('v3-songs-tree-btn').className = 'px-3 py-2 text-sm ' + (v === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-folder-btn').className = 'px-3 py-2 text-sm ' + (v === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             { const ab = byId('v3-songs-albums-btn'); if (ab) ab.className = 'px-3 py-2 text-sm ' + (v === 'albums' ? 'bg-fb-primary text-white' : 'text-fb-textDim'); }
+            { const tb = byId('v3-songs-table-btn'); if (tb) tb.className = 'px-3 py-2 text-sm ' + (v === 'table' ? 'bg-fb-primary text-white' : 'text-fb-textDim'); }
             if (v === 'folder') await _ensureFolderLibrary();
             return reload();
         };
@@ -3812,6 +3867,7 @@
         byId('v3-songs-tree-btn').addEventListener('click', () => setView('tree'));
         byId('v3-songs-folder-btn').addEventListener('click', () => setView('folder'));
         byId('v3-songs-albums-btn')?.addEventListener('click', () => setView('albums'));
+        byId('v3-songs-table-btn')?.addEventListener('click', () => setView('table'));
         // Await the initial load so a caller awaiting render() (the scroll
         // restore on screen re-entry) sees a populated grid + real state.total
         // before it tries to page deeper.
@@ -3874,6 +3930,15 @@
                 _clearLibraryScrollSnapshot();
                 return;
             }
+            // Table: applyScoreRefresh above already refetched it in place
+            // (scroll + column sort kept) when a play landed; just re-show it.
+            if (state.view === 'table' && document.querySelector('#v3-songs-table .v3-table-box')) {
+                document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', true);
+                document.getElementById('v3-songs-table')?.classList.toggle('hidden', false);
+                syncChromeFromState();
+                _clearLibraryScrollSnapshot();
+                return;
+            }
         }
 
         // Sidebar return without a player snapshot — keep grid, refresh chrome.
@@ -3886,6 +3951,7 @@
             if (state.renderedHash !== _libraryStateHash()) { reload(); return; }
             document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
             document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
+            document.getElementById('v3-songs-table')?.classList.toggle('hidden', state.view !== 'table');
             document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
             { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
             updateLibraryHome();   // select-mode clear on leave re-shows the home block
@@ -4399,7 +4465,7 @@
         // badge (song:stop fires before the POST resolves, so it's too early).
         // If the library is visible right now, repaint immediately; otherwise
         // mark it dirty and onV3SongsScreenEnter applies it on return.
-        sm.on('stats:recorded', (e) => {
+        const onStatsChanged = (e) => {
             // Decode to the library-card key space — the event carries the
             // encodeURIComponent'd filename, but cards (data-fn) and
             // state.accuracy key on the decoded library filename. Without this
@@ -4414,7 +4480,12 @@
             // the set, so repainting against a hidden grid would drop the update).
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') applyScoreRefresh();
-        });
+        };
+        sm.on('stats:recorded', onStatsChanged);
+        // A play count / full combo moved (stats-recorder, feedBack#49) — same
+        // badge repaint, but its own event so unscored plays don't fire the
+        // scored-run reactions that listen to stats:recorded.
+        sm.on('stats:play-counted', onStatsChanged);
         // A library scan (rescan / full rescan from Settings, or a DLC-folder
         // change) can add or remove songs while this grid is cached — the
         // Settings rescan only refreshed the classic library, so the v3 grid

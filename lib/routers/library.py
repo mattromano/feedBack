@@ -299,6 +299,78 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
             "next_cursor": next_cursor}
 
 
+# Library table view: the whole filtered library in one compact payload, so
+# the client can sort any column locally and virtualise the rows. Bounded so a
+# pathological library can't balloon the response (the client says so).
+TABLE_MAX_ROWS = 20000
+TABLE_COLS = ["filename", "play_filename", "artist", "title", "album", "year", "duration",
+              "tuning", "arrangements", "format", "plays", "best_accuracy", "full_combos",
+              "last_played", "seconds"]
+
+
+@router.get("/api/library/table")
+async def library_table(q: str = "", favorites: int = 0, format: str = "",
+                        artist: str = "", album: str = "",
+                        arrangements_has: str = "", arrangements_lacks: str = "",
+                        stems_has: str = "", stems_lacks: str = "",
+                        has_lyrics: str = "", tunings: str = "", provider: str = "local",
+                        mastery: str = "", tags: str = "", user_difficulty: str = "",
+                        match: str = "", genre: str = "", group: int = 0,
+                        naming_mode: str = "legacy", instrument: str = "",
+                        tuning_match: str = "", playable_offsets: str = "",
+                        playable_instrument: str = "", playable_string_count: str = ""):
+    """Every song matching the library filters as columnar rows
+    (`{cols, rows, total, truncated}`) joined to the local practice stats —
+    plays, best accuracy, full combos, last played, time played — for the
+    sortable table view. Takes the same filters as /api/library (no paging,
+    no sort: the client sorts). `play_filename` is the chart a grouped row
+    plays (its `display_chart` when an intrinsic filter matched a member)."""
+    library_provider = _get_library_provider(provider)
+    _require_library_provider_capability(library_provider, "library.read")
+    songs, total = await _call_library_provider_async(
+        library_provider,
+        "query_page",
+        page=0,
+        size=TABLE_MAX_ROWS,
+        sort="artist",
+        direction="asc",
+        group=bool(group),
+        naming_mode=naming_mode,
+        mastery=_split_csv(mastery),
+        tags_has=_split_csv(tags),
+        user_difficulty_in=_split_csv(user_difficulty),
+        match_states=_split_csv(match),
+        genre=_split_csv(genre),
+        **_library_filter_args(
+            q=q, favorites=favorites, format=format,
+            artist=artist, album=album,
+            arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+            stems_has=stems_has, stems_lacks=stems_lacks,
+            has_lyrics=has_lyrics, tunings=tunings, instrument=instrument,
+            tuning_match=tuning_match, playable_offsets=playable_offsets,
+            playable_instrument=playable_instrument,
+            playable_string_count=playable_string_count,
+        ),
+    )
+    stats = await run_in_threadpool(appstate.meta_db.table_stats_map, bool(group))
+    rows = []
+    for s in songs:
+        fn = s.get("filename") or ""
+        shown = s.get("display_chart") or {}
+        plays, best, fcs, last, secs = stats.get(fn) or (0, None, 0, None, 0.0)
+        rows.append([
+            fn, shown.get("filename") or fn,
+            s.get("artist") or "", s.get("title") or "", s.get("album") or "",
+            s.get("year") or "", round(float(s.get("duration") or 0)),
+            shown.get("tuning_name") or s.get("tuning_name") or "",
+            [a.get("name") or "" for a in (s.get("arrangements") or []) if isinstance(a, dict)],
+            s.get("format") or "",
+            plays, best, fcs, last, round(secs),
+        ])
+    return {"cols": TABLE_COLS, "rows": rows, "total": total,
+            "truncated": total > len(rows)}
+
+
 @router.get("/api/library/albums")
 async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
                               favorites: int = 0, format: str = "",
