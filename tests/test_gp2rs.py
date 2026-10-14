@@ -19,9 +19,12 @@ import pytest
 
 from gp2rs import (
     GP_TICKS_PER_QUARTER,
+    RsChord,
+    RsNote,
     TempoEvent,
     _bend_intent_from_values,
     _build_playback_schedule,
+    _compute_anchors,
     _compute_tuning,
     _extract_year,
     _gp_bend_shape,
@@ -1484,3 +1487,68 @@ def test_dead_note_is_still_muted():
     note = _ct_note(guitarpro.NoteType.dead, 1, 0)
     (out,) = _ct_notes_xml([_ct_beat(0, 4, [note])])
     assert out.get("mute") == "1"
+
+# ── _compute_anchors: fret-hand window per onset ─────────────────────────────
+
+def _an_chord(t, frets):
+    """A chord at time t; frets listed from the low string up (-1 = unplayed)."""
+    notes = [RsNote(time=t, string=s, fret=f) for s, f in enumerate(frets) if f >= 0]
+    return RsChord(time=t, template_idx=0, notes=notes)
+
+
+def _an_frets(anchors):
+    return [(a.time, a.fret, a.width) for a in anchors]
+
+
+def test_anchor_index_finger_on_chord_root_no_pad():
+    # A5 power chord at the 5th fret: the hand frame starts AT fret 5 (index
+    # finger), not one fret left of it.
+    anchors = _compute_anchors([], [_an_chord(1.0, [5, 7, 7])], audio_offset=0.0)
+    assert _an_frets(anchors) == [(0.0, 5, 4)]
+
+
+def test_anchor_does_not_flap_on_repeated_wide_chord():
+    # A 5-fret-wide shape (5..9) used to emit two anchors per strum (one for
+    # its low note, one for its high note) and flip between them on every
+    # repeat. It's one event now: a single widened anchor for the whole run.
+    chords = [_an_chord(t, [5, 7, 7, 9]) for t in (1.0, 1.5, 2.0, 2.5)]
+    anchors = _compute_anchors([], chords, audio_offset=0.0)
+    assert _an_frets(anchors) == [(0.0, 5, 5)]
+
+
+def test_anchor_does_not_flap_between_chord_and_its_repeats():
+    # Chord 3..5, then a lick reaching fret 6, then the chord again: one
+    # window (3..6) covers everything, so no anchor change at all.
+    notes = [RsNote(time=2.0, string=0, fret=6)]
+    chords = [_an_chord(1.0, [3, 5, 5]), _an_chord(3.0, [3, 5, 5])]
+    anchors = _compute_anchors(notes, chords, audio_offset=0.5)
+    assert _an_frets(anchors) == [(0.5, 3, 4)]
+
+
+def test_anchor_moves_once_and_looks_ahead():
+    # Run at 5..8, then a phrase at 10, 12, 13: one shift, to the lowest fret
+    # that fits the whole upcoming phrase (10..13) — not 9 (old fret-1 pad).
+    notes = [RsNote(time=t, string=0, fret=f) for t, f in
+             [(1.0, 5), (1.25, 7), (1.5, 8), (2.0, 10), (2.25, 12), (2.5, 13)]]
+    anchors = _compute_anchors(notes, [], audio_offset=0.0)
+    assert _an_frets(anchors) == [(0.0, 5, 4), (2.0, 10, 4)]
+
+
+def test_anchor_ignores_open_strings_and_defaults_to_fret_1():
+    notes = [RsNote(time=1.0, string=0, fret=0), RsNote(time=2.0, string=1, fret=0)]
+    assert _an_frets(_compute_anchors(notes, [], audio_offset=0.25)) == [(0.25, 1, 4)]
+    # an open string inside a chord doesn't drag the window down to fret 1
+    anchors = _compute_anchors([], [_an_chord(1.0, [0, 7, 9])], audio_offset=0.0)
+    assert _an_frets(anchors) == [(0.0, 7, 4)]
+
+
+def test_convert_track_emits_unpadded_chord_anchor():
+    # End to end through convert_track: an A5 at fret 5 anchors at 5.
+    def a5():
+        return [_ct_note(guitarpro.NoteType.normal, gp_string=s, fret=f)
+                for s, f in ((6, 5), (5, 7), (4, 7))]
+    beats = [_ct_beat(tick=i * GP_TICKS_PER_QUARTER, dur_value=4, notes=a5())
+             for i in range(4)]
+    root = ET.fromstring(convert_track(_ct_song(beats), track_index=0))  # noqa: S314
+    anchors = root.findall(".//anchors/anchor")
+    assert [(a.get("fret"), a.get("width")) for a in anchors] == [("5", "4")]
