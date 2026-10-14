@@ -17,6 +17,7 @@
 // module already imports player-controls (_applyMastery, _autoplayExitEnabled, …), so a direct
 // back-import would close a cycle. player-controls keeps reading it through the host seam, and
 // app.js — the root, which imports both — wires it. That is exactly what the seam is for.
+import { setAllHighwaysAvOffset } from './highway-av-offset.js';
 import { hwcInitSettingsUI } from './highway-colors.js';
 import { _getArrangementNamingMode, _setLibraryProfile } from './library.js';
 import {
@@ -598,7 +599,12 @@ export function setAvOffsetMs(ms, skipPersist) {
     // the audio-aligned chart time so plugins (note detection, etc.)
     // keep scoring against the real chart clock regardless of visual
     // calibration.
-    if (window.highway?.setAvOffset) window.highway.setAvOffset(_avOffsetMs);
+    // Every highway, not only window.highway: splitscreen panels are their own
+    // createHighway() instances and must draw on the same clock.
+    setAllHighwaysAvOffset(_avOffsetMs);
+    if (window.highway?.setAvOffset && window.highway.getAvOffset?.() !== _avOffsetMs) {
+        window.highway.setAvOffset(_avOffsetMs);
+    }
     // Sync any visible Settings slider
     const avSlider = document.getElementById('setting-av-offset');
     if (avSlider) {

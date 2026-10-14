@@ -68,6 +68,7 @@ import {
     getChordTemplateInfo,
     strumGroupBuckets,
 } from './js/highway-draw.js';
+import { registerHighwayAvOffset } from './js/highway-av-offset.js';
 
 function createHighway() {
   // R3c: per-instance mutable state in one object, so extracted renderer/ws
@@ -2966,6 +2967,8 @@ function createHighway() {
          */
         isDefaultRenderer() { return hwState._renderer === _defaultRenderer || hwState._renderer == null; },
     };
+    // Every highway (main + splitscreen panels) draws with the machine's A/V offset.
+    registerHighwayAvOffset(api);
     // Let cross-instance coordinators discover this highway.
     if (window.feedBack && typeof window.feedBack.emit === 'function') {
         try { window.feedBack.emit('highway:created', { highway: api }); }
