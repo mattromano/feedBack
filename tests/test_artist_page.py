@@ -159,6 +159,41 @@ def test_page_counts_albums_and_files(client, server):
     assert page["art_urls"] and all("/art" in u for u in page["art_urls"])
 
 
+def _put_track(server, fn, album, year, track=None, disc=None, title=None):
+    server.meta_db.put(fn, 0, 0, {
+        "title": title or fn.split(".")[0], "artist": "AC/DC", "album": album,
+        "year": year, "track_number": track, "disc": disc, "duration": 200,
+        "arrangements": [{"name": "Lead", "index": 0}],
+    })
+
+
+def test_page_albums_oldest_first_and_files_in_release_track_order(client, server):
+    # Inserted out of order on purpose: names sort the opposite way to years,
+    # and track numbers the opposite way to titles.
+    _put_track(server, "rz2.sloppak", "Razors Edge", "1990", track=2, title="A Moneytalks")
+    _put_track(server, "rz1.sloppak", "Razors Edge", "1990-09-24", track=1, title="Z Thunderstruck")
+    _put_track(server, "bb2.sloppak", "Back in Black", "1980", track=2, title="A Shoot to Thrill")
+    _put_track(server, "bb1.sloppak", "Back in Black", "1980", track=1, title="Z Hells Bells")
+    _put_track(server, "hw.sloppak", "Highway to Hell", "1979", track=1)
+    _put_track(server, "nd.sloppak", "Anthology", "")           # unknown year → after dated
+    _put_track(server, "loose.sloppak", "", "")                  # no album → last
+    page = _page(client)
+    assert [a["name"] for a in page["albums"]] == [
+        "Highway to Hell", "Back in Black", "Razors Edge", "Anthology"]
+    assert page["files"] == [
+        "hw.sloppak", "bb1.sloppak", "bb2.sloppak", "rz1.sloppak", "rz2.sloppak",
+        "nd.sloppak", "loose.sloppak"]
+
+
+def test_page_files_follow_disc_then_track_within_an_album(client, server):
+    _put_track(server, "d2t1.sloppak", "Live", "1992", track=1, disc=2)
+    _put_track(server, "d1t2.sloppak", "Live", "1992", track=2, disc=1)
+    _put_track(server, "d1t1.sloppak", "Live", "1992", track=1, disc=1)
+    _put_track(server, "untracked.sloppak", "Live", "1992")      # no track → after tracked
+    assert _page(client)["files"] == [
+        "d1t1.sloppak", "d1t2.sloppak", "d2t1.sloppak", "untracked.sloppak"]
+
+
 def test_page_unknown_artist_is_zero_count_not_error(client, server):
     page = _page(client, "Nobody Here")
     assert page["artist"] == "Nobody Here"

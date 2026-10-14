@@ -369,6 +369,15 @@ def next_library_cursor(sort: str, last_song: dict | None) -> str | None:
 MASTERY_ACCURACY = 0.9
 
 
+def _album_year_sort_key(album: dict) -> tuple:
+    """Discography order for an artist page's albums: oldest release first,
+    albums with no parseable year after every dated one, then album name.
+    `year` is free text from tags ("1990", "1990-07-23", "") — the first
+    four-digit run is the year; anything else counts as unknown."""
+    m = re.search(r"\d{4}", str(album.get("year") or ""))
+    return (m is None, int(m.group(0)) if m else 0, (album.get("name") or "").lower())
+
+
 _SMART_TYPE_BASE: dict[str, int] = {"Lead": 0, "Rhythm": 10, "Bass": 20}
 
 
@@ -2141,7 +2150,7 @@ class MetadataDB:
             f"ORDER BY album COLLATE NOCASE, (track_number IS NULL) ASC, "
             f"COALESCE(disc, 1), track_number, title COLLATE NOCASE",
             variants or [canonical]).fetchall()
-        # Albums: distinct non-empty album names in shelf order, each with the
+        # Albums: distinct non-empty album names, each with the
         # earliest authored year, a track count, and a representative cover
         # song (the first row → also the mosaic's source).
         albums: dict = {}
@@ -2157,7 +2166,14 @@ class MetadataDB:
             albums[k]["count"] += 1
             if not albums[k]["year"] and year:
                 albums[k]["year"] = year
-        album_list = [albums[k] for k in album_order]
+        # Oldest album first (unknown year last, then name), so the page reads
+        # as a discography and Play all runs the catalogue in release order.
+        # The SQL above already put each album's songs in disc/track order;
+        # regroup the rows by the sorted albums (stable, so that order holds),
+        # with album-less loose songs trailing.
+        album_list = sorted((albums[k] for k in album_order), key=_album_year_sort_key)
+        rank = {a["name"].lower(): i for i, a in enumerate(album_list)}
+        rows = sorted(rows, key=lambda r: rank.get((r[2] or "").strip().lower(), len(rank)))
         # "also shown as": the raw variants actually present in the library
         # (the canonical itself is the headline, so it's excluded).
         vrows = self.conn.execute(
@@ -2236,7 +2252,8 @@ class MetadataDB:
             "mb_artist_id": self.artist_known_mb_id(variants),
             "similar": similar,
             "art_urls": [f"/api/song/{quote(fn)}/art" for fn in art_files],
-            # Play-all seed (album/track order, same as the rows above).
+            # Play-all seed: albums oldest first, each in disc/track order,
+            # then loose songs (same order as the rows above).
             # Bounded so a pathological library can't balloon the payload.
             "files": fns[:1000],
         }

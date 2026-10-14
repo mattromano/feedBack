@@ -43,6 +43,23 @@
         },
     });
 
+    // "+" on the card's hover row: add the song to the play queue's "up next"
+    // list (window.feedBack.playQueue.enqueue). The ⋮ menu carries the same
+    // action as a built-in "Add to queue" row (songs.js openCardMenu), so the
+    // tree view and album/artist rows reach it too.
+    reg.register({
+        id: 'core.add-to-queue',
+        pluginId: 'core',
+        label: 'Add to queue',
+        icon: '+',
+        placement: 'inline',
+        order: 5,
+        applies: (song) => !!(song && song.filename && sm.playQueue && typeof sm.playQueue.enqueue === 'function'),
+        run: (song) => {
+            sm.playQueue.enqueue([{ filename: song.filename, title: song.title || '', artist: song.artist || '' }]);
+        },
+    });
+
     reg.register({
         id: 'core.retune-estd',
         pluginId: 'core',
