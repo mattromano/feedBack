@@ -1,0 +1,11 @@
+{
+  "id": "tone_pack",
+  "name": "Tone Pack (auto presets for Tone Automation)",
+  "version": "2.0.0",
+  "private": true,
+  "script": "screen.js",
+  "routes": "routes.py",
+  "category": "audio",
+  "description": "Builds Audio-plugin presets for every Tone Automation category (Clean, OD, Dist, Solo, Bass, Acoustic, Mod) from the NAM captures and cab IRs on this computer. Desktop app only.",
+  "settings": { "html": "settings.html" }
+}

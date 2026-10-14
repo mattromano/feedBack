@@ -1,0 +1,160 @@
+{
+ "reference_lufs": -14.21,
+ "categories": {
+  "clean": {
+   "source_ir": "cab_hg212c_04.wav",
+   "ir": "clean.wav",
+   "eq_db": [
+    0.0,
+    0.1,
+    2.2,
+    0.4,
+    -0.3,
+    -8.0
+   ],
+   "chain_lufs": -31.87,
+   "makeup_db": 19.99,
+   "spectrum": [
+    -14.4,
+    -14.7,
+    -14.2,
+    -4.4,
+    -2.9,
+    -19.4
+   ],
+   "lufs_makeup_db": 19.8
+  },
+  "od": {
+   "source_ir": "cab_orangeppc412_00.wav",
+   "ir": "od.wav",
+   "eq_db": [
+    0.6,
+    0.8,
+    0.2,
+    -0.1,
+    0.7,
+    -8.0
+   ],
+   "chain_lufs": -26.47,
+   "makeup_db": 13.17,
+   "spectrum": [
+    -14.4,
+    -14.9,
+    -11.6,
+    -3.6,
+    -3.9,
+    -17.4
+   ],
+   "lufs_makeup_db": 13.17
+  },
+  "dist": {
+   "source_ir": "cab_en212c_08.wav",
+   "ir": "dist.wav",
+   "eq_db": [
+    0.7,
+    0.9,
+    -1.3,
+    -0.1,
+    1.7,
+    -8.0
+   ],
+   "chain_lufs": -35.71,
+   "makeup_db": 21.43,
+   "spectrum": [
+    -14.4,
+    -15.1,
+    -11.1,
+    -3.6,
+    -4.2,
+    -14.8
+   ],
+   "lufs_makeup_db": 21.45
+  },
+  "solo": {
+   "source_ir": "cab_orangeppc212ob_04.wav",
+   "ir": "solo.wav",
+   "eq_db": [
+    2.8,
+    0.8,
+    -0.6,
+    -2.1,
+    3.7,
+    -8.0
+   ],
+   "chain_lufs": -24.94,
+   "makeup_db": 10.66,
+   "spectrum": [
+    -15.1,
+    -15.1,
+    -11.9,
+    -2.5,
+    -5.3,
+    -20.1
+   ],
+   "lufs_makeup_db": 10.96
+  },
+  "mod": {
+   "source_ir": "cab_hg212c_04.wav",
+   "ir": "mod.wav",
+   "eq_db": [
+    6.8,
+    4.8,
+    4.1,
+    2.4,
+    -1.2,
+    -5.7
+   ],
+   "chain_lufs": -30.09,
+   "makeup_db": 17.01,
+   "spectrum": [
+    -21.7,
+    -19.5,
+    -15.6,
+    -7.4,
+    -1.1,
+    -23.3
+   ],
+   "lufs_makeup_db": 16.38
+  },
+  "bass": {
+   "source_ir": "bass_cab_at810bc_00.wav",
+   "ir": "bass.wav",
+   "eq_db": [
+    -0.0,
+    -0.0,
+    -0.0,
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "chain_lufs": -33.65,
+   "makeup_db": 23.04,
+   "spectrum": [
+    -12.0,
+    -8.2,
+    -4.0,
+    -8.9,
+    -6.9,
+    -13.0
+   ],
+   "lufs_makeup_db": 22.98
+  },
+  "acoustic": {
+   "source_ir": null,
+   "ir": null,
+   "eq_db": null,
+   "chain_lufs": -24.2,
+   "makeup_db": 13.27,
+   "spectrum": [
+    -19.2,
+    -7.3,
+    -7.8,
+    -3.9,
+    -6.9,
+    -15.6
+   ],
+   "lufs_makeup_db": 14.22
+  }
+ },
+ "input_peak_dbfs": -12.0
+}
