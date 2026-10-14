@@ -390,6 +390,17 @@
         if (typeof navigator === 'undefined' || typeof navigator.requestMIDIAccess !== 'function') return;
         const BLOCK = /(midi through|thru|iac)/i;   // loopback / passthrough ports
         let access = null;
+        // requestMIDIAccess() can hang (a permission prompt nobody answers, a
+        // wedged driver). Give up after 4 s so discovery still reaches the other
+        // providers (e.g. a native/desktop MIDI input); a later call retries.
+        const ACCESS_TIMEOUT_MS = 4000;
+        const _requestAccess = () => new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('Web MIDI did not answer')), ACCESS_TIMEOUT_MS);
+            navigator.requestMIDIAccess({ sysex: false }).then(
+                (a) => { clearTimeout(timer); resolve(a); },
+                (e) => { clearTimeout(timer); reject(e); },
+            );
+        });
         _registerProvider({
             providerId: 'web-midi',
             label: 'Web MIDI',
@@ -399,7 +410,7 @@
             // a provider swap/hot-reload, leaving midi-input with no owner.
             participantId: 'core.midi-input.web-midi',
             enumerate: async () => {
-                access = await navigator.requestMIDIAccess({ sysex: false });
+                access = await _requestAccess();
                 try { access.onstatechange = () => { _discover(); }; } catch (_) { /* best-effort */ }
                 const out = [];
                 access.inputs.forEach((input) => {
@@ -409,7 +420,7 @@
                 return out;
             },
             open: async (sourceId) => {
-                if (!access) access = await navigator.requestMIDIAccess({ sysex: false });
+                if (!access) access = await _requestAccess();
                 const input = access.inputs.get(sourceId);
                 if (!input) throw new Error('MIDI input not found');
                 // Listeners get (data, timeStamp): the event's arrival time on the

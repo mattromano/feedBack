@@ -229,3 +229,18 @@ test('built-in Web-MIDI provider passes each message\'s arrival time to listener
     input.onmidimessage({ data: [0x99, 38, 100], timeStamp: 1234.5 });
     assert.deepEqual(got, [[[0x99, 38, 100], 1234.5]]);
 });
+
+test('a hung Web-MIDI permission prompt does not block other providers\' devices', async () => {
+    const window = createWindow();
+    window.navigator = { requestMIDIAccess: () => new Promise(() => {}) };   // never answers
+    const context = vm.createContext(window);
+    vm.runInContext(fs.readFileSync(CAPABILITIES_JS, 'utf8'), context, { filename: CAPABILITIES_JS });
+    vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
+    window.feedBack.midiInput.registerProvider({
+        providerId: 'native', label: 'Direct', participantId: 'drums',
+        enumerate: async () => [{ sourceId: 'alesis', label: 'Alesis' }],
+        open: async () => ({ addListener() {}, removeListener() {} }),
+    });
+    await window.feedBack.midiInput.discover();
+    assert.deepEqual(Array.from(window.feedBack.midiInput.listSources(), s => s.logicalSourceKey), ['native::alesis']);
+});
