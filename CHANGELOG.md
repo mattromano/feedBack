@@ -344,6 +344,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a shift per note. A single shape wider than four frets widens its
   anchor instead of splitting it; open strings are still ignored. Re-import a
   GP file to pick this up. Tests: `tests/test_gp2rs.py`.
+- **A library arrangement chip opens the arrangement it names.** The library
+  indexes a feedpak's arrangements Lead > Combo > Rhythm > Bass > other
+  (`extract_meta`), and its arrangement chips and playlists' pinned
+  arrangements pass that index to the highway as `?arrangement=N` — but
+  `load_song` kept the manifest's order, so on any pack whose manifest isn't
+  already in that order (e.g. Rhythm listed before Lead, or Keys first) a chip
+  opened a different part than the one it was labelled with. `load_song` now
+  sorts the same way (carrying `arrangement_ids` along, so notation still
+  resolves to the right part), and `extract_meta` lists `type: drums` entries
+  after every fretted part — they never become a highway arrangement, so ahead
+  of a part like Keys they shifted its index by one. Packs already in library
+  order load exactly as before.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
