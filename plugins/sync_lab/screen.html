@@ -1,0 +1,61 @@
+<!-- Sync Lab screen (nav → Sync). screen.js fills in the values and wires the buttons. Styles are inline (no Tailwind classes needed). -->
+<style>
+#sync-lab-root { max-width: 46rem; margin: 0 auto; padding: 6rem 1.5rem 4rem; color: #d1d5db; font-family: system-ui, sans-serif; }
+#sync-lab-root h2 { font-size: 1.875rem; font-weight: 700; color: #fff; margin: 0 0 .35rem; }
+#sync-lab-root .sl-lead { color: #9ca3af; font-size: .875rem; margin: 0 0 2rem; line-height: 1.45; }
+#sync-lab-root .sl-card { background: rgb(16 16 30 / .6); border: 1px solid #1f2937; border-radius: .9rem; padding: .25rem 1.1rem .9rem; margin-bottom: 1.25rem; }
+#sync-lab-root .sl-card > h3 { font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #60a0ff; margin: .9rem 0 .5rem; }
+#sync-lab-root .sl-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-top: 1px solid rgb(31 41 55 / .6); font-size: .875rem; }
+#sync-lab-root .sl-card > h3 + .sl-row { border-top: 0; }
+#sync-lab-root .sl-d { font-size: .75rem; color: #6b7280; margin-top: .15rem; line-height: 1.4; }
+#sync-lab-root .sl-v { color: #fff; font-weight: 600; text-align: right; }
+#sync-lab-root button { cursor: pointer; padding: .45rem .9rem; border-radius: .5rem; border: 1px solid #374151; background: #1f2937; color: #e5e7eb; font-weight: 600; font-size: .85rem; }
+#sync-lab-root button:hover { background: #374151; }
+#sync-lab-root .sl-starts { display: flex; flex-wrap: wrap; gap: .5rem; margin: .4rem 0 .2rem; }
+#sync-lab-root ol { margin: .2rem 0 .4rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.55; color: #9ca3af; }
+</style>
+<div id="sync-lab-root">
+    <h2>Sync Lab</h2>
+    <p class="sl-lead">Measures how far your picture, sound, guitar and drums are apart on this computer, and sets the
+        offsets so notes are judged exactly when you play them. Uses the normal player, so it works in split view too
+        (one result per panel).</p>
+
+    <div class="sl-card">
+        <h3>Calibrate</h3>
+        <ol>
+            <li>Pick who is playing. The 64-second "Sync Calibration" song opens (one note per beat: open A string for
+                guitar and bass, snare for drums).</li>
+            <li><b>Listen</b> (screen goes black): close your eyes and play on every click.</li>
+            <li><b>Watch</b> (no clicks): play exactly when the notes hit the line.</li>
+            <li><b>Play</b>: normal. Then the results appear: Apply all.</li>
+        </ol>
+        <div class="sl-starts">
+            <button data-start="lead">Guitar</button>
+            <button data-start="bass">Bass</button>
+            <button data-start="drums">Drums</button>
+            <button data-start="split-gd">Split: guitar + drums</button>
+            <button data-start="split-gg">Split: two guitars</button>
+        </div>
+        <div class="sl-d">Drum pad sounds are muted during calibration (they arrive late, see below). Guitar needs Note
+            Detection on; tune to E standard.</div>
+    </div>
+
+    <div class="sl-card">
+        <h3>Current offsets (this computer)</h3>
+        <div class="sl-row"><div>A/V offset<div class="sl-d">Moves the picture against the sound. One per computer.</div></div><div class="sl-v" data-k="av"></div></div>
+        <div class="sl-row"><div>Guitar latency<div class="sl-d">Note Detection's Audio Latency Offset (every guitar panel).</div></div><div class="sl-v" data-k="gl"></div></div>
+        <div class="sl-row"><div>Drums input offset<div class="sl-d">Subtracted from every pad hit (every drum panel).</div></div><div class="sl-v" data-k="dr"></div></div>
+        <div class="sl-row"><div>Audio output latency<div class="sl-d">How far ahead of your speakers / headphones the song is rendered (Web Audio reports it).</div></div><div class="sl-v" data-k="ah"></div></div>
+        <div class="sl-row"><div>Follow output changes<div class="sl-d">When the output latency changes (other headphones, speakers), shift the A/V offset by the same amount so picture and sound stay together.</div></div><div><input type="checkbox" data-k="follow"></div></div>
+        <div class="sl-row"><div>Last calibration<div class="sl-d" data-k="last"></div></div></div>
+    </div>
+
+    <div class="sl-card">
+        <h3>Drums: pad sound delay</h3>
+        <div class="sl-row"><div>feedBack's pad sounds<div class="sl-d" data-k="pad"></div></div></div>
+        <div class="sl-row"><div>For Clone Hero feel, hear your kit module instead<div class="sl-d">Clone Hero plays no pad
+            sounds: you hear the module, instantly. Do the same: set the pad sound volume to 0, plug the computer's
+            headphone output into the module's AUX IN and wear headphones on the module. The game still judges every hit
+            on time; only the sound changes.</div></div><button data-act="module-sound">Pad sounds off</button></div>
+    </div>
+</div>

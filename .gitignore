@@ -57,6 +57,9 @@ plugins/keys_highway_3d/__pycache__/
 !plugins/highway_tweaks/
 !plugins/highway_tweaks/**
 plugins/highway_tweaks/__pycache__/
+!plugins/sync_lab/
+!plugins/sync_lab/**
+plugins/sync_lab/__pycache__/
 node_modules/
 test-results/
 playwright-report/
