@@ -412,8 +412,11 @@
                 if (!access) access = await navigator.requestMIDIAccess({ sysex: false });
                 const input = access.inputs.get(sourceId);
                 if (!input) throw new Error('MIDI input not found');
+                // Listeners get (data, timeStamp): the event's arrival time on the
+                // performance.now() clock, so rhythm plugins (drums) can judge a hit by
+                // when it was struck rather than when the handler ran.
                 const listeners = new Set();
-                input.onmidimessage = (e) => { listeners.forEach((fn) => { try { fn(e.data); } catch (_) { /* listener isolation */ } }); };
+                input.onmidimessage = (e) => { listeners.forEach((fn) => { try { fn(e.data, e.timeStamp); } catch (_) { /* listener isolation */ } }); };
                 return {
                     addListener: (fn) => { if (typeof fn === 'function') listeners.add(fn); },
                     removeListener: (fn) => listeners.delete(fn),

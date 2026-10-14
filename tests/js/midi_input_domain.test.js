@@ -214,3 +214,18 @@ test('diagnostics are redaction-safe (no device labels, no raw messages)', async
     assert.ok(!serialized.includes('My Keyboard'), 'device labels are redacted from diagnostics');
     for (const s of contrib.sources) assert.ok(!('label' in s), 'source entries carry no label');
 });
+
+test('built-in Web-MIDI provider passes each message\'s arrival time to listeners', async () => {
+    const input = { id: 'kit', name: 'Drum Kit', onmidimessage: null };
+    const window = createWindow();
+    window.navigator = { requestMIDIAccess: async () => ({ inputs: new Map([['kit', input]]) }) };
+    const context = vm.createContext(window);
+    vm.runInContext(fs.readFileSync(CAPABILITIES_JS, 'utf8'), context, { filename: CAPABILITIES_JS });
+    vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
+    await window.feedBack.midiInput.discover();
+    const { handle } = await window.feedBack.midiInput.open({ logicalSourceKey: 'web-midi::kit' });
+    const got = [];
+    handle.addListener((data, timeStamp) => got.push([data, timeStamp]));
+    input.onmidimessage({ data: [0x99, 38, 100], timeStamp: 1234.5 });
+    assert.deepEqual(got, [[[0x99, 38, 100], 1234.5]]);
+});
