@@ -1,0 +1,13 @@
+{
+  "id": "highway_tweaks",
+  "name": "_Highway Tweaks",
+  "version": "2.0.0",
+  "private": true,
+  "script": "screen.js",
+  "routes": "routes.py",
+  "category": "tools",
+  "description": "Personal sync and diagnostics tweaks: frame-exact stems clock for renderers and plugins, Rock Band-style hit / miss on the 3D highway, frame-drop watchdog and per-song judgment logs.",
+  "diagnostics": {
+    "server_files": ["highway_tweaks/jank_log.jsonl"]
+  }
+}
