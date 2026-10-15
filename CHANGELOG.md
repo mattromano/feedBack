@@ -439,6 +439,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Songs loaded from an unpacked Rocksmith tree keep their cent offset.**
+  `song.load_song()` read arrangement names and path flags from the manifest
+  JSON but not `CentOffset`, and arrangement XML decoded from a binary chart has
+  no `<centOffset>`, so those songs (and sloppaks converted from them through
+  `load_song` + `arrangement_to_wire`) came out at 0 c; e.g. a recording at
+  +45 c. An authored XML `<centOffset>` still wins.
 - **3D highway: hits on sustained notes and chords flash again with Note
   Detection.** The engine verifier judges a sustained note once its sustain
   ends, but the 3D highway kept a gem for its verdict only 0.75 s past the
