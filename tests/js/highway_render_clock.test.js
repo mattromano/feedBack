@@ -66,7 +66,7 @@ function buildRenderClockSandbox(perfNow) {
     const sandbox = {
         hwState,
         _CHART_MAX_INTERP_MS: 100,
-        _PLL_GAIN: 0.10,
+        _PLL_GAIN_60FPS: 0.07,
         _PLL_RATE_ALPHA: 0.05,
         _PLL_MAX_ERR_SEC: 0.25,
         _PLL_RESYNC_MS: 120,
@@ -107,8 +107,14 @@ function simulate(fps, { seconds = 6, quantumMs = 23 } = {}) {
     let prev = null;
     const deltas = [];
     for (let t = 0; t < seconds * 1000; t += frameMs) {
+        // The transport poll is app.js's own 60 Hz setInterval, independent
+        // of the render rate: run every tick that fell due since last frame.
+        while (nextTick <= t) {
+            now = nextTick;
+            sb.setTime(audioAt(nextTick));
+            nextTick += tickMs;
+        }
         now = t;
-        if (t >= nextTick) { sb.setTime(audioAt(t)); nextTick = t + tickMs; }
         const c = sb.renderClock(t);
         // Ignore the settling window while the loop seeds and locks.
         if (prev !== null && t > 1000) deltas.push((c - prev) * 1000);
@@ -197,4 +203,81 @@ test('stop() clears the phase-locked clock so re-init starts fresh', () => {
     const stopBlock = extractBlock(src, 'stop() {');
     assert.match(stopBlock, /hwState\._pllTime\s*=\s*NaN/, 'stop() must reset _pllTime');
     assert.match(stopBlock, /hwState\._pllSeeded\s*=\s*false/, 'stop() must reset _pllSeeded');
+});
+
+test('a lagging target under the resync threshold never steps the clock backward', () => {
+    // Review finding on #974: at 200 fps (dt = 5 ms) a -200 ms phase error
+    // pulled 20 ms per frame against a 5 ms advance, a 15 ms backward frame,
+    // and still under the 250 ms hard-resync threshold.
+    for (const fps of [60, 200, 360]) {
+        let now = 0;
+        const sb = buildRenderClockSandbox(() => now);
+        const frameMs = 1000 / fps;
+        let prev = null;
+        let nextTick = 0;
+        let jump = 0;
+        for (let t = 0; t < 3000; t += frameMs) {
+            if (t >= 1500) jump = 0.2;   // transport steps back 200 ms
+            while (nextTick <= t) {
+                now = nextTick;
+                sb.setTime(nextTick / 1000 - jump);
+                nextTick += 1000 / 60;
+            }
+            now = t;
+            const c = sb.renderClock(t);
+            if (prev !== null) {
+                assert.ok(c - prev >= -1e-9,
+                    `${fps} fps: clock regressed by ${((c - prev) * 1000).toFixed(2)} ms at t=${t.toFixed(1)}`);
+            }
+            prev = c;
+        }
+        // ...and it has re-locked onto the transport by the end.
+        assert.ok(Math.abs(prev - (3000 / 1000 - 0.2)) < 0.02,
+            `${fps} fps: did not re-lock (clock ${prev.toFixed(3)})`);
+    }
+});
+
+test('phase correction settles in the same wall time at any frame rate', () => {
+    // Start 100 ms behind a perfectly smooth transport; measure how long the
+    // error takes to fall under 5 ms. A fixed per-frame gain made this 6x
+    // faster at 360 fps than at 60.
+    const settle = (fps) => {
+        let now = 0;
+        const sb = buildRenderClockSandbox(() => now);
+        const frameMs = 1000 / fps;
+        sb.setTime(0);
+        sb.renderClock(0);
+        sb.hwState._pllTime = -0.1;
+        let nextTick = 0;
+        for (let t = frameMs; t < 3000; t += frameMs) {
+            while (nextTick <= t) { now = nextTick; sb.setTime(nextTick / 1000); nextTick += 1000 / 60; }
+            now = t;
+            const c = sb.renderClock(t);
+            if (Math.abs(c - t / 1000) < 0.005) return t;
+        }
+        return Infinity;
+    };
+    const t60 = settle(60);
+    for (const fps of [144, 240, 360]) {
+        const tf = settle(fps);
+        assert.ok(Math.abs(tf - t60) < 80,
+            `${fps} fps settled in ${tf.toFixed(0)} ms vs ${t60.toFixed(0)} ms at 60 fps`);
+    }
+});
+
+test('a clock source returning null hands the frame back to setTime (count-in rewind)', () => {
+    const src = highwaySources();
+    const draw = extractBlock(src, 'function draw() {');
+    assert.match(draw, /_t === null/, 'draw() must honour a null (hold) clock reading');
+    const getTime = extractBlock(src, 'getTime() {');
+    assert.match(getTime, /_hold/, 'getTime() must skip the frame clock while the source holds');
+    const app = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'app.js'), 'utf8');
+    assert.match(app, /setClockSource\(\(\) => \{\s*if \(isCountingIn\(\)\) return null;/,
+        'app.js must hold the frame clock during a count-in');
+});
+
+test('renderer bundle carries the render offset (chart + A/V), independent of the frame clock', () => {
+    const src = highwaySources();
+    const mk = extractBlock(src, 'function _makeBundle() {');
+    assert.match(mk, /b\.renderOffset\s*=\s*hwState\.songOffset\s*\+\s*hwState\.avOffsetSec/);
 });

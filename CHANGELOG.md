@@ -458,6 +458,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bypassing the interpolator entirely. Separately, the default 2D renderer had
   never used the interpolated clock at all — it positioned notes from the raw
   60 Hz staircase.
+- **Render clock follow-ups.** The phase pull is scaled by the real frame
+  interval (it settled 6x faster at 360 fps than at 60) and can no longer step
+  the clock backward when the transport lags by less than the resync
+  threshold; a count-in's rewind sweep is drawn again in desktop (JUCE) mode,
+  where the frame clock had overridden it; `getTime()` extrapolates between
+  frames instead of returning the last frame's value; renderer bundles carry
+  `renderOffset` (chart + A/V offset) and `highway.getClockSource()` lets a
+  plugin wrap the frame clock.
 - **Guitar Pro (GP3-5) import: hammer-ons, pull-offs and slides land on the
   right notes; ghost notes stay playable.** GP stores a hammer-on/pull-off on
   the note the slur *starts* from, but `lib/gp2rs.py` flagged that origin note

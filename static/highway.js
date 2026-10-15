@@ -554,6 +554,13 @@ function createHighway() {
         const b = _bundleReused;
         // Timing
         b.currentTime = hwState.currentTime;
+        // Render time minus raw transport time (per-song chart offset + this
+        // highway's A/V offset). currentTime is now a frame-time clock, so
+        // "currentTime minus the last setTime() value" is no longer a clean
+        // offset; plugins that map their own audio clock onto this highway's
+        // render time (highway_tweaks' stems clock, drums' input timing) read
+        // this instead.
+        b.renderOffset = hwState.songOffset + hwState.avOffsetSec;
         b.songInfo = hwState.songInfo;
         b.isReady = hwState.ready;
         // True while the chart clock is actively advancing; false when
@@ -1221,12 +1228,15 @@ function createHighway() {
     }
 
     // Frame-time transport clock, or NaN when no source is installed (or the
-    // source can't currently give a continuous reading). See setClockSource.
+    // source can't currently give a continuous reading), or null when the
+    // source says the host is driving time through setTime() itself (count-in
+    // rewind). See setClockSource.
     function _clockNow() {
         const src = hwState._clockSource;
         if (typeof src !== 'function') return NaN;
         try {
             const t = src();
+            if (t === null) return null;
             return Number.isFinite(t) ? t : NaN;
         } catch (err) {
             console.warn('[highway] clock source threw; falling back:', err);
@@ -1238,8 +1248,12 @@ function createHighway() {
     // The anchored estimate setTime() implies: anchor + observed-rate * elapsed.
     // Same math getTime() falls back to. Returns raw chartTime when
     // interpolation isn't warranted (no anchor, or the audio clock has stalled).
-    const _PLL_GAIN = 0.10;        // phase-correction gain per frame
-    const _PLL_RATE_ALPHA = 0.05;  // EMA weight for the noisy observed rate
+    // Phase-correction gain, stated per 60 fps frame and scaled by the real
+    // frame interval in _renderClock, so the loop settles in the same wall
+    // time at 30 fps and at 360 fps. 0.07 (vs #974's 0.10 per frame): at
+    // 30 fps a time-scaled 0.10 left 2.4 ms of frame-to-frame jitter.
+    const _PLL_GAIN_60FPS = 0.07;
+    const _PLL_RATE_ALPHA = 0.05;  // EMA weight for the noisy observed rate (per 60 fps frame)
     const _PLL_MAX_ERR_SEC = 0.25; // beyond this, it's a seek → hard resync
     const _PLL_RESYNC_MS = 120;    // loop went stale (paused/hidden) → resync
 
@@ -1272,12 +1286,16 @@ function createHighway() {
         if (!Number.isFinite(target)) return NaN;
         // Smooth the (noisy) observed rate. Seed on first use so a genuine
         // speed-slider change is picked up immediately rather than crawled to.
+        // Like the phase gain, the EMA weight is per 60 fps frame, scaled by
+        // the real frame interval.
         if (!hwState._pllSeeded) {
             hwState._pllRate = hwState._chartObservedRate;
             hwState._pllSeeded = true;
         } else {
-            hwState._pllRate = hwState._pllRate * (1 - _PLL_RATE_ALPHA)
-                + hwState._chartObservedRate * _PLL_RATE_ALPHA;
+            const dtR = Math.min(Math.max(0, nowP - hwState._pllAt), _PLL_RESYNC_MS) / 1000;
+            const a = 1 - Math.pow(1 - _PLL_RATE_ALPHA, dtR * 60);
+            hwState._pllRate = hwState._pllRate * (1 - a)
+                + hwState._chartObservedRate * a;
         }
         // Cold start, or the loop went stale while paused/hidden → resync hard.
         if (Number.isNaN(hwState._pllTime) || (nowP - hwState._pllAt) > _PLL_RESYNC_MS) {
@@ -1287,12 +1305,20 @@ function createHighway() {
         }
         const dt = (nowP - hwState._pllAt) / 1000;
         hwState._pllAt = nowP;
+        const prev = hwState._pllTime;
         hwState._pllTime += hwState._pllRate * dt;          // free-run
         const err = target - hwState._pllTime;
         if (Math.abs(err) > _PLL_MAX_ERR_SEC) {
             hwState._pllTime = target;                       // seek / loop wrap
         } else {
-            hwState._pllTime += err * _PLL_GAIN;             // gentle phase pull
+            // Gentle phase pull, time-based (a fixed per-frame gain settles
+            // 3x faster at 180 fps than at 60). Never below last frame: a
+            // lagging target (e.g. -200 ms, under the resync threshold) would
+            // otherwise pull more than one frame's advance and step backward;
+            // holding still lets the target catch up instead. Real backward
+            // seeks take the hard-resync branch above.
+            const gain = 1 - Math.pow(1 - _PLL_GAIN_60FPS, Math.max(0, dt) * 60);
+            hwState._pllTime = Math.max(prev, hwState._pllTime + err * gain);
         }
         return hwState._pllTime;
     }
@@ -1401,7 +1427,11 @@ function createHighway() {
         // the beat completely (see setClockSource).
         if (!_paused && _audioIsPlaying()) {
             const _t = _clockNow();
-            if (Number.isFinite(_t)) {
+            if (_t === null) {
+                // Host is driving time itself (count-in rewind sweep): draw
+                // the pushed value, and re-seed the loop when playback resumes.
+                hwState._pllTime = NaN;
+            } else if (Number.isFinite(_t)) {
                 hwState.chartTime = _t + hwState.songOffset;
                 hwState.currentTime = hwState.chartTime + hwState.avOffsetSec;
             } else {
@@ -2633,9 +2663,16 @@ function createHighway() {
         // qualifies (it interpolates between its 100 ms IPC polls); a bare
         // HTMLAudioElement.currentTime does NOT (it is quantised to ~23 ms), so
         // in browser mode the source should return NaN and let the interpolator
-        // run. Pass null to uninstall.
+        // run. Returning null means "the host is driving time through setTime()
+        // right now" (count-in rewind): the renderer draws the pushed value and
+        // getTime() uses the plain interpolator. Pass null to uninstall.
         setClockSource(fn) {
             hwState._clockSource = (typeof fn === 'function') ? fn : null;
+        },
+        // The installed clock source (or null), so a plugin with a better
+        // clock for some songs can wrap it rather than replace it.
+        getClockSource() {
+            return hwState._clockSource;
         },
 
         setTime(t) {
@@ -2718,10 +2755,12 @@ function createHighway() {
             // tests/js/highway_monotonic_clock.test.js (which supplies a bare
             // hwState with no _clockSource) falls straight through to the
             // interpolator below and keeps testing it.
+            let _hold = false;
             if (typeof hwState._clockSource === 'function') {
                 let _t;
                 try { _t = hwState._clockSource(); } catch (_) { _t = NaN; }
                 if (Number.isFinite(_t)) return _t + hwState.songOffset;
+                _hold = _t === null;
             }
             // Phase-locked render clock, when the draw loop is live (browser
             // mode). Keeps plugins and the renderer on ONE clock. Guarded on
@@ -2729,9 +2768,14 @@ function createHighway() {
             // tests/js/highway_monotonic_clock.test.js — which supplies a bare
             // hwState with no _pllTime — falls through to the interpolator below
             // and keeps testing it.
-            if (Number.isFinite(hwState._pllTime)
-                && (performance.now() - hwState._pllAt) <= 120) {
-                return hwState._pllTime;
+            // Extrapolated from the last frame at the loop's rate, so a plugin
+            // reading between frames (note detection judges on this) doesn't
+            // see a staircase that steps once per rendered frame.
+            if (!_hold && Number.isFinite(hwState._pllTime)) {
+                const _sinceMs = performance.now() - hwState._pllAt;
+                if (_sinceMs >= 0 && _sinceMs <= 120) {
+                    return hwState._pllTime + (hwState._pllRate * _sinceMs) / 1000;
+                }
             }
             // No anchor yet (called before the first setTime, e.g. during
             // early boot before the 60 Hz tick has fired): just return
@@ -3091,6 +3135,7 @@ function createHighway() {
             hwState._pllAt = 0;
             hwState._pllRate = 1;
             hwState._pllSeeded = false;
+            // Release the renderer's GPU / DOM / event-listener resources
             // when leaving the player — anything it allocated in init()
             // should be torn down here so navigating away doesn't leak.
             // Crucially we KEEP `_renderer` (the instance/selection) so

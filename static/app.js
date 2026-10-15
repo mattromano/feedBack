@@ -1986,7 +1986,14 @@ setInterval(() => {
 // A bare HTMLAudioElement.currentTime is quantised to ~23 ms, so pulling it
 // per-frame would just swap the beat for a staircase — return NaN there and let
 // highway's interpolator do the smoothing instead.
-window.highway.setClockSource(() => (window._juceMode ? _audioTime() : NaN));
+//
+// During a count-in the host animates the highway itself (the loop's B->A rewind
+// sweep goes through setTime() while S.isPlaying stays true and the engine is
+// paused), so the source returns null there: "draw what setTime() pushed".
+window.highway.setClockSource(() => {
+    if (isCountingIn()) return null;
+    return window._juceMode ? _audioTime() : NaN;
+});
 
 _installSectionPracticeDrawHook();
 
