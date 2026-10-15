@@ -65,6 +65,12 @@ plugins/sync_lab/__pycache__/
 plugins/tone_pack/__pycache__/
 !plugins/guitar_volume/
 !plugins/guitar_volume/**
+!plugins/rs_profile_counts/
+!plugins/rs_profile_counts/**
+plugins/rs_profile_counts/__pycache__/
+!plugins/song_cents/
+!plugins/song_cents/**
+plugins/song_cents/__pycache__/
 node_modules/
 test-results/
 playwright-report/

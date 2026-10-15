@@ -1,0 +1,62 @@
+<!-- Rocksmith Play Counts settings. Inline styles only (no Tailwind classes): an in-tree plugin's
+     classes would otherwise have to be added to core's prebuilt static/tailwind.min.css. -->
+<div id="rspc-settings" style="display:flex;flex-direction:column;gap:.75rem">
+    <p style="font-size:12px;color:#6b7280">Adds how often you played each song in Rocksmith 2014 to feedBack's play count
+        (Most played, play badges, table view). The Rocksmith profile and PSARCs are only read. Importing again only adds
+        the plays since the last import.</p>
+    <label style="font-size:13px;color:#d1d5db">Rocksmith profile (<code>*_prfldb</code>)
+        <input id="rspc-profile" type="text" placeholder="Auto: the newest profile in Steam userdata"
+            style="display:block;width:100%;margin-top:.25rem;background:#1a1a2e;border:1px solid #374151;border-radius:.5rem;padding:.25rem .5rem;font-size:12px;color:#d1d5db">
+    </label>
+    <div id="rspc-found" style="font-size:11px;color:#6b7280"></div>
+    <label style="font-size:13px;color:#d1d5db">Folders with Rocksmith PSARCs (one per line)
+        <textarea id="rspc-dirs" rows="2" placeholder="Auto: Steam's Rocksmith2014 folder (songs.psarc + dlc)"
+            style="display:block;width:100%;margin-top:.25rem;background:#1a1a2e;border:1px solid #374151;border-radius:.5rem;padding:.25rem .5rem;font-size:12px;color:#d1d5db"></textarea>
+    </label>
+    <label style="font-size:13px;color:#d1d5db;display:flex;gap:.5rem;align-items:center">
+        <input id="rspc-auto" type="checkbox"> Import on start when the profile has changed
+    </label>
+    <div style="display:flex;align-items:center;gap:.75rem">
+        <button type="button" id="rspc-import" style="padding:.35rem .75rem;border-radius:.5rem;background:#374151;color:#e5e7eb;font-size:12px;border:0;cursor:pointer">Import Rocksmith plays now</button>
+        <span id="rspc-status" style="font-size:12px;color:#9ca3af"></span>
+    </div>
+    <script>
+    (function () {
+        const API = '/api/plugins/rs_profile_counts';
+        const $ = (id) => document.getElementById(id);
+        const prof = $('rspc-profile'), dirs = $('rspc-dirs'), auto = $('rspc-auto'), out = $('rspc-status');
+        const describe = (r) => !r ? '' : r.ok === false ? ('Failed: ' + r.error)
+            : r.skipped ? r.skipped
+            : (r.rocksmith_plays + ' Rocksmith plays on ' + r.charts + ' songs; this import '
+               + (r.added ? '+' + r.added : 'no new plays') + (r.removed ? ', -' + r.removed : '') + ' (' + r.at + ')');
+        async function load() {
+            try {
+                const s = await (await fetch(API + '/status')).json();
+                prof.value = s.settings.profile || '';
+                dirs.value = (s.settings.psarc_dirs || []).join('\n');
+                auto.checked = !!s.settings.auto_import;
+                $('rspc-found').textContent = s.profile ? ('Using: ' + s.profile + (s.profiles_found.length > 1 ? ' (' + s.profiles_found.length + ' profiles found)' : '')) : 'No profile found yet.';
+                out.textContent = s.running ? 'Importing…' : s.error ? ('Failed: ' + s.error) : describe(s.last);
+            } catch (e) { out.textContent = 'Plugin not loaded: ' + e.message; }
+        }
+        async function save() {
+            await fetch(API + '/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ profile: prof.value, psarc_dirs: dirs.value, auto_import: auto.checked }) });
+        }
+        prof.addEventListener('change', () => save().then(load));
+        dirs.addEventListener('change', () => save().then(load));
+        auto.addEventListener('change', save);
+        $('rspc-import').addEventListener('click', async (ev) => {
+            const b = ev.currentTarget;
+            b.disabled = true;
+            out.textContent = 'Importing… (the first run reads every PSARC, a minute or two)';
+            try {
+                await save();
+                out.textContent = describe(await (await fetch(API + '/import', { method: 'POST' })).json());
+            } catch (e) { out.textContent = 'Failed: ' + e.message; }
+            b.disabled = false;
+        });
+        load();
+    })();
+    </script>
+</div>
