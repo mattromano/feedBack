@@ -161,8 +161,8 @@ test('3D highway captures _ndHasProvider via bundle.getNoteStateProvider (feedBa
     // Verdict-window cull and chord-frame hold floor + smart drawNote
     // cull must all gate on _ndHasProvider (not _ndGetNoteState alone).
     assert.match(src, /ndVerdictT0\s*=\s*_ndHasProvider/, 'ndVerdictT0 outer-loop extension must gate on _ndHasProvider');
-    assert.match(src, /if\s*\(\s*_ndHasProvider\s*&&\s*chordTailHoldS\s*<\s*NOTEDETECT_GEM_VERDICT_WINDOW/,
+    assert.match(src, /if\s*\(\s*_ndHasProvider\s*&&\s*chordTailHoldS\s*<\s*maxSus\s*\+\s*NOTEDETECT_GEM_VERDICT_WINDOW/,
         'chord-frame hold floor must gate on _ndHasProvider');
-    assert.match(src, /if\s*\(\s*!_ndHasProvider\s*\|\|\s*dt\s*<\s*-NOTEDETECT_GEM_VERDICT_WINDOW\s*\)\s*return/,
+    assert.match(src, /if\s*\(\s*!_ndHasProvider\s*\|\|\s*susEnd\s*-\s*now\s*<\s*-NOTEDETECT_GEM_VERDICT_WINDOW\s*\)\s*return/,
         'drawNote smart-cull provider probe must gate on _ndHasProvider');
 });
