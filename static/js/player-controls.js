@@ -41,6 +41,46 @@ export function _countdownBeforeSongEnabled() {
     try { return localStorage.getItem('countdownBeforeSong') === '1'; } catch (_) { return false; }
 }
 
+// mattromano build (0.2.9 play_queue's count-in extras). "Auto": count in only
+// when the chart's first note comes within AUTO_COUNT_IN_FIRST_NOTE_S of the
+// start, so songs with a long intro just play. Client-only localStorage pref
+// (`countdownBeforeSongAuto`); absence = ON.
+export const AUTO_COUNT_IN_FIRST_NOTE_S = 3.0;
+export function _countdownBeforeSongAuto() {
+    try { return localStorage.getItem('countdownBeforeSongAuto') !== '0'; } catch (_) { return true; }
+}
+
+// Earliest note / chord time of the loaded chart (Infinity when it has none,
+// e.g. a drum-tab or notation-only part).
+export function _firstChartNoteTime() {
+    let t = Infinity;
+    const hw = window.highway;
+    for (const get of ['getNotes', 'getChords']) {
+        try {
+            const arr = hw && typeof hw[get] === 'function' ? hw[get]() : null;
+            if (Array.isArray(arr)) {
+                for (const n of arr) { if (n && Number.isFinite(n.t)) { t = Math.min(t, n.t); break; } }
+            }
+        } catch (_) { /* no chart yet */ }
+    }
+    return t;
+}
+
+// Should the song-start path count in? The Countdown setting, minus a queue
+// moving on to its next song (a queue plays back to back), minus songs whose
+// first note is far enough in when Auto is on. A chart with no fretted notes
+// (drums, keys) still counts in: there's nothing to judge the intro by.
+export function _wantSongCountIn() {
+    if (!_countdownBeforeSongEnabled()) return false;
+    try {
+        const q = window.feedBack && window.feedBack.playQueue;
+        if (q && typeof q.isContinuation === 'function' && q.isContinuation()) return false;
+    } catch (_) { /* no queue */ }
+    if (!_countdownBeforeSongAuto()) return true;
+    const first = _firstChartNoteTime();
+    return !Number.isFinite(first) || first < AUTO_COUNT_IN_FIRST_NOTE_S;
+}
+
 export function _curPlaybackSpeed() {
     try {
         return window._juceMode

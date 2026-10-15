@@ -1,0 +1,14 @@
+{
+  "id": "song_cents",
+  "name": "_Song Cents",
+  "version": "2.0.0",
+  "private": true,
+  "script": "screen.js",
+  "routes": "routes.py",
+  "category": "tools",
+  "description": "Shows how many cents each recording sits off its chart tuning (from the chart, the original PSARC, or measured from the stems) on the library's tuning chip, and lets Live Retune's Match song play in tune with it.",
+  "settings": {
+    "html": "settings.html",
+    "server_files": ["song_cents.json"]
+  }
+}

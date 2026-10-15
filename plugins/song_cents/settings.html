@@ -1,0 +1,24 @@
+<!-- Song Cents settings. Inline styles only (no Tailwind classes): an in-tree plugin's classes
+     would otherwise have to be added to core's prebuilt static/tailwind.min.css. -->
+<div style="display:flex;flex-direction:column;gap:.75rem">
+    <p style="font-size:12px;color:#6b7280">Shows how far each recording sits off its chart tuning (e.g. many Oasis songs are +25 to +50 cents sharp)
+        as a small "+45c" on the library's tuning chip. Songs are measured when you open them; scan to fill in the whole library.
+        Measuring only decodes the guitar stem, nothing plays.</p>
+    <div style="display:flex;align-items:center;gap:.75rem">
+        <button type="button" id="sc-scan-btn" style="padding:.35rem .75rem;border-radius:.5rem;background:#374151;color:#e5e7eb;font-size:12px;border:0;cursor:pointer">Scan library</button>
+        <span id="sc-scan-status" style="font-size:12px;color:#9ca3af"></span>
+    </div>
+    <script>
+    (function () {
+        const b = document.getElementById('sc-scan-btn'), o = document.getElementById('sc-scan-status');
+        b.addEventListener('click', function () {
+            if (!window.__songCents || !window.__songCents.scanLibrary) { o.textContent = 'Plugin not loaded yet.'; return; }
+            b.disabled = true;
+            o.textContent = 'Starting…';
+            window.__songCents.scanLibrary(function (d, t, f) { o.textContent = d + ' / ' + t + (f ? ' (' + f + ' failed)' : ''); })
+                .then(function (r) { b.disabled = false; o.textContent = r ? ('Done: ' + r.total + ' songs' + (r.failed ? ', ' + r.failed + ' failed' : '')) : 'Already scanning.'; })
+                .catch(function (e) { b.disabled = false; o.textContent = 'Scan failed: ' + e.message; });
+        });
+    })();
+    </script>
+</div>

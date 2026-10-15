@@ -501,6 +501,67 @@ export function setViz(id) {
     _maybeShowNotationViewHint(id);
 }
 
+// ── Instrument view takeover (mattromano custom build) ──────────────────────
+// Guitar views (an explicit Classic 2D / 3D Highway / Venue pick) can't show a
+// non-guitar part: a Drums arrangement through the 3D guitar highway draws GM
+// drum numbers as fret gems, a keys part has no fretted notes at all. When the
+// user picked a guitar view and the loaded part is claimed by an instrument viz
+// (its Auto `matchesArrangement` predicate: the drums plugin, the keys highway,
+// piano, ...), that viz takes over for this song only. The picker and the saved
+// choice stay as they are, and the next guitar song gets the picked view back.
+// A guitar part (Lead / Rhythm / Bass / Combo) is never taken over, even on a
+// pack whose drum tab or notation makes an instrument viz's predicate say yes.
+// Exposed as window._instrumentVizOverride: the drums plugin's own takeover
+// stands down when core does this.
+const _GUITAR_VIZ = new Set(['default', 'highway_3d', 'venue']);
+const _GUITAR_PART = /\b(?:lead|rhythm|bass|combo|guitar)\b/i;
+let _instrumentOverrideId = null;
+
+function _activePartName(songInfo) {
+    if (songInfo.arrangement) return String(songInfo.arrangement);
+    const arr = Array.isArray(songInfo.arrangements)
+        ? songInfo.arrangements.find(a => a && a.index === songInfo.arrangement_index) : null;
+    return (arr && arr.name) || '';
+}
+
+// `fresh`: the caller just installed `picked` itself (a picker change), so any
+// earlier takeover is gone.
+export function _instrumentVizOverride(picked, opts) {
+    if ((opts && opts.fresh) || !_GUITAR_VIZ.has(picked)) _instrumentOverrideId = null;
+    if (!_GUITAR_VIZ.has(picked)) return null;
+    const sel = document.getElementById('viz-picker');
+    const songInfo = (typeof window.highway?.getSongInfo === 'function')
+        ? (window.highway.getSongInfo() || {}) : {};
+    let match = null;
+    if (sel && Object.keys(songInfo).length && !_GUITAR_PART.test(_activePartName(songInfo))) {
+        for (const o of Array.from(sel.options)) {
+            const id = o.value;
+            if (id === 'auto' || _GUITAR_VIZ.has(id)) continue;
+            const f = window['feedBackViz_' + id];
+            if (typeof f !== 'function' || typeof f.matchesArrangement !== 'function') continue;
+            if (f.contextType === 'webgl2' && !_canRun3D()) continue;
+            let ok = false;
+            try { ok = !!f.matchesArrangement(songInfo); } catch (_) { ok = false; }
+            if (ok) { match = id; break; }
+        }
+    }
+    if (match) {
+        if (_instrumentOverrideId === match) return match;
+        let r = null;
+        try { r = window['feedBackViz_' + match](); } catch (e) { console.error('instrument viz override failed', e); }
+        if (!r || typeof r.draw !== 'function') return null;
+        _instrumentOverrideId = match;
+        _installVizRenderer(r, match, 'instrument-override');
+        return match;
+    }
+    if (_instrumentOverrideId) {
+        _instrumentOverrideId = null;
+        setViz(picked);          // back to the user's guitar view (same value it already saved)
+    }
+    return null;
+}
+if (typeof window !== 'undefined') window._instrumentVizOverride = _instrumentVizOverride;
+
 // Auto mode: evaluate each registered viz factory's static
 // `matchesArrangement(songInfo)` predicate and install the first
 // matching renderer. No match → fall back to the built-in 2D window.highway.

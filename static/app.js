@@ -6,6 +6,7 @@ import {
 } from './js/plugin-loader.js';
 import {
     _autoMatchViz,
+    _instrumentVizOverride,
     _maybeShowNotationViewHint,
     _populateVizPicker,
     setViz,
@@ -1068,6 +1069,13 @@ window.setCountdownBeforeSong = function (on) {
     if (el && el.checked !== !!on) el.checked = !!on;
     persistSetting('countdown_before_song', !!on);
 };
+// mattromano build: "Countdown: only when needed" (player-controls.js
+// _wantSongCountIn). Client-only; absence of the key = on.
+window.setCountdownBeforeSongAuto = function (on) {
+    try { localStorage.setItem('countdownBeforeSongAuto', on ? '1' : '0'); } catch (_) { /* private mode */ }
+    const el = document.getElementById('setting-countdown-auto');
+    if (el && el.checked !== !!on) el.checked = !!on;
+};
 // One-shot launcher override for the player's return destination.
 window.feedBack.setReturnScreen = function (id) {
     window.feedBack._nextReturnScreen = id || null;
@@ -1717,6 +1725,9 @@ if (window.feedBack) {
             // the fresh-install highway_3d default) would render an empty
             // board with no explanation. Surface the install hint.
             _maybeShowNotationViewHint(sel.value);
+            // mattromano build: a Drums / keys part on an explicit guitar view
+            // is shown by its own instrument view for this song (viz.js).
+            _instrumentVizOverride(sel.value);
         }
     });
 }
@@ -2518,3 +2529,10 @@ Object.assign(window, {
     // pagination; drop one and those buttons throw at click time, nowhere else.
     filterFavTreeLetter, filterTreeLetter, goFavTreePage, goTreePage,
 });
+// mattromano build: a picker change (and the visualization capability's
+// select) re-applies the instrument takeover once the picked view is in, so a
+// Drums / keys part stays on its own view whatever guitar view is picked.
+window.setViz = function (id) {
+    setViz(id);
+    _instrumentVizOverride(id, { fresh: true });
+};

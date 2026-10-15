@@ -1,0 +1,13 @@
+{
+  "id": "rs_profile_counts",
+  "name": "_Rocksmith Play Counts",
+  "version": "1.0.0",
+  "private": true,
+  "routes": "routes.py",
+  "category": "tools",
+  "description": "Adds your Rocksmith 2014 play counts (read from the Steam profile, never written) to feedBack's own play count, so Most played and the play badges include the years of Rocksmith.",
+  "settings": {
+    "html": "settings.html",
+    "server_files": ["rs_profile_counts.json"]
+  }
+}

@@ -66,7 +66,7 @@ import {
 } from './count-in.js';
 import {
     _autoplayExitEnabled,
-    _countdownBeforeSongEnabled,
+    _wantSongCountIn,
     _resetPlaybackSpeedForNewSong,
 } from './player-controls.js';
 import {
@@ -536,7 +536,7 @@ window.feedBack.on('song:ready', () => {
     const start = () => {
         if (S.isPlaying) return;
         if (!document.getElementById('player')?.classList.contains('active')) { hideSongCreditsOverlay(); return; }
-        if (_countdownBeforeSongEnabled()) {
+        if (_wantSongCountIn()) {
             Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
         } else {
             Promise.resolve(togglePlay())
@@ -551,7 +551,7 @@ window.feedBack.on('song:ready', () => {
     if (_autoplayHeld) { _autoplayStart = start; return; }
     // Not gated: a count-in starts now (it owns its on-screen dwell); otherwise
     // let the credits dwell a couple seconds first, then start.
-    if (_countdownBeforeSongEnabled() || !authors.length) start();
+    if (_wantSongCountIn() || !authors.length) start();
     else holdCreditsThen(start);
 });
 
