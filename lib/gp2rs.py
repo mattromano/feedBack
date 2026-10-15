@@ -1,5 +1,6 @@
 """Convert Guitar Pro files (.gp5/.gp4/.gp3) to arrangement XML."""
 
+import bisect
 import json
 import logging
 import re
@@ -1033,10 +1034,20 @@ def convert_track(
                 _by_string.setdefault(_n.string, []).append(_n)
         for _lst in _by_string.values():
             _lst.sort(key=lambda n: n.time)
+        # Per-string onset times, so finding the next note is a bisect rather
+        # than a scan per pending slide/hammer (quadratic on huge tracks).
+        _times_by_string = {k: [n.time for n in v] for k, v in _by_string.items()}
+
+        def _next_on_string(_s, _t):
+            _seq = _by_string.get(_s)
+            if not _seq:
+                return None
+            _i = bisect.bisect_right(_times_by_string[_s], _t)
+            return _seq[_i] if _i < len(_seq) else None
+
         for _rn, _sstr, _kind in pending_slides:
             if _kind in ("legato", "shift"):
-                _seq = _by_string.get(_sstr, [])
-                _nxt = next((x for x in _seq if x.time > _rn.time), None)
+                _nxt = _next_on_string(_sstr, _rn.time)
                 if _nxt is not None and _nxt.fret != _rn.fret:
                     _rn.slide_to = _nxt.fret
                     if _kind == "legato":
@@ -1048,8 +1059,7 @@ def convert_track(
             elif _kind == "up":
                 _rn.slide_unpitch_to = _rn.fret + 5
         for _rn, _sstr in pending_hopos:
-            _seq = _by_string.get(_sstr, [])
-            _nxt = next((x for x in _seq if x.time > _rn.time), None)
+            _nxt = _next_on_string(_sstr, _rn.time)
             if _nxt is not None and _nxt.fret != _rn.fret:
                 if _nxt.fret < _rn.fret:
                     _nxt.pull_off = True
