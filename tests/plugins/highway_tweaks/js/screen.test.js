@@ -38,9 +38,33 @@ test('stems clock: scales the correction by the playback rate and rejects bad ti
 });
 
 test('frameTimeFor: adds the highway render offset, refuses implausible jumps', () => {
-    assert.ok(Math.abs(hwt.frameTimeFor(12.030, 12.000, 12.004) - 12.034) < 1e-9);
-    assert.ok(Number.isNaN(hwt.frameTimeFor(12.030, 12.000, 13)));
+    assert.ok(Math.abs(hwt.frameTimeFor(12.030, 0.030, 12.004) - 12.034) < 1e-9);
+    assert.ok(Number.isNaN(hwt.frameTimeFor(12.030, 0.030, 13)));
     assert.ok(Number.isNaN(hwt.frameTimeFor(12.030, NaN, 12)));
+});
+
+test('renderOffsetOf: prefers the core bundle renderOffset over currentTime - last setTime', () => {
+    // Core's frame clock (#974) moved currentTime 9 ms past the last 60 Hz
+    // sample; the real offset is still 30 ms.
+    assert.equal(hwt.renderOffsetOf({ currentTime: 12.039, renderOffset: 0.030 }, 12.000), 0.030);
+    // Older core: no renderOffset, fall back to the setTime stamp.
+    assert.ok(Math.abs(hwt.renderOffsetOf({ currentTime: 12.030 }, 12.000) - 0.030) < 1e-9);
+    assert.ok(Number.isNaN(hwt.renderOffsetOf({ currentTime: 12.030 }, undefined)));
+    assert.ok(Number.isNaN(hwt.renderOffsetOf(null, 12)));
+});
+
+test('composeClockSource: stems clock first, core source second, a null hold always wins', () => {
+    let precise = NaN;
+    let base = 5;
+    const fn = hwt.composeClockSource(() => precise, () => base);
+    assert.equal(fn(), 5);               // no stems clock: core's source
+    precise = 7.25;
+    assert.equal(fn(), 7.25);            // stems clock running: it wins
+    base = null;
+    assert.equal(fn(), null);            // count-in: host drives time
+    base = NaN;
+    assert.ok(Number.isNaN(hwt.composeClockSource(() => NaN, null)()));
+    assert.equal(fn.__hwtClock, true);
 });
 
 test('frameStats: counts frames over 1.5x the median as dropped', () => {

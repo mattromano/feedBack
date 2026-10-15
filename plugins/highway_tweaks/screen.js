@@ -25,6 +25,10 @@
 //       window.__hwtLastSetT            last raw audio time fed to the main highway
 //     Every renderer bundle is stamped with ITS highway's last setTime
 //     (bundle.__hwtSetT): splitscreen panels are fed on their own timer.
+//     2.1: core runs its own frame clock now (#974, highway.setClockSource):
+//     the stems clock is put in FRONT of core's source on every highway, so
+//     core draws and highway.getTime() reads it, rather than a second
+//     smoothing layer on top; render offsets come from bundle.renderOffset.
 //  2. 3D highway: draws from that clock (smoothNow) and Rock Band-style
 //     verdicts (hits burst and vanish, misses go grey and drift past the
 //     line, partly hit chords get an amber plate). The 3D highway's source is
@@ -67,12 +71,42 @@
         };
     }
 
+    // A highway's render offset (render time - raw audio time: chart offset +
+    // its A/V offset). Core's bundle carries it as renderOffset since the
+    // render clock became a frame-time clock (#974); there bundle.currentTime
+    // minus the last setTime() value also holds however far the clock moved
+    // since that 60 Hz sample (0..17 ms, varying), so it is only the
+    // fallback for an older core.
+    function renderOffsetOf(bundle, setT) {
+        if (!bundle) return NaN;
+        if (Number.isFinite(bundle.renderOffset)) return bundle.renderOffset;
+        return typeof setT === 'number' && Number.isFinite(bundle.currentTime) ? bundle.currentTime - setT : NaN;
+    }
+
     // Frame time for a bundle: precise audio time + that highway's render
     // offset. NaN when unusable (callers fall back to bundle.currentTime).
-    function frameTimeFor(bundleTime, setT, preciseAudio) {
-        if (!Number.isFinite(bundleTime) || !Number.isFinite(setT) || !Number.isFinite(preciseAudio)) return NaN;
-        const t = preciseAudio + (bundleTime - setT);
+    function frameTimeFor(bundleTime, renderOffset, preciseAudio) {
+        if (!Number.isFinite(bundleTime) || !Number.isFinite(renderOffset) || !Number.isFinite(preciseAudio)) return NaN;
+        const t = preciseAudio + renderOffset;
         return Math.abs(t - bundleTime) < 0.1 ? t : NaN;
+    }
+
+    // Core's frame clock source (highway.setClockSource, #974) with the
+    // precise stems clock in front: one clock for the renderer AND for
+    // highway.getTime() readers (Note Detection), instead of core running its
+    // phase-locked loop on the coarse #audio time while the 3D highway draws
+    // from the stems clock. A base reading of null ("host is driving time",
+    // count-in) always wins.
+    function composeClockSource(precise, base) {
+        const fn = function () {
+            const b = typeof base === 'function' ? base() : NaN;
+            if (b === null) return null;
+            const p = precise();
+            return Number.isFinite(p) ? p : b;
+        };
+        fn.__hwtClock = true;
+        fn.__hwtBase = base;
+        return fn;
     }
 
     // Frame-interval window statistics for the watchdog.
@@ -336,11 +370,11 @@
     }
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { createStemsClock, frameTimeFor, frameStats, judgmentRow, rbVerdicts, patchHighway3d };
+        module.exports = { createStemsClock, renderOffsetOf, frameTimeFor, composeClockSource, frameStats, judgmentRow, rbVerdicts, patchHighway3d };
         return;
     }
     if (window.__highwayTweaks) return;
-    window.__highwayTweaks = { version: '2.0.0' };
+    window.__highwayTweaks = { version: '2.1.0' };
 
     const bus = window.feedBack || window.slopsmith;
     const lsGet = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
@@ -426,13 +460,10 @@
     const setTOf = (bundle) => (bundle && typeof bundle.__hwtSetT === 'number' ? bundle.__hwtSetT : window.__hwtLastSetT);
     window.__hwtFrameTime = function (bundle) {
         if (!bundle || bundle.isPlaying === false) return NaN;
-        const setT = setTOf(bundle);
-        if (typeof setT !== 'number') return NaN;
-        return frameTimeFor(bundle.currentTime, setT, preciseAudioTime());
+        return frameTimeFor(bundle.currentTime, renderOffsetOf(bundle, setTOf(bundle)), preciseAudioTime());
     };
     window.__hwtRenderOffset = function (bundle) {
-        const setT = setTOf(bundle);
-        return bundle && typeof setT === 'number' ? bundle.currentTime - setT : NaN;
+        return renderOffsetOf(bundle, setTOf(bundle));
     };
 
     function stampRenderer(hw, r) {
@@ -452,6 +483,14 @@
         hw.setTime = isMain
             ? function (t) { hw.__hwtLastSetT = t; window.__hwtLastSetT = t; return origSet.apply(this, arguments); }
             : function (t) { hw.__hwtLastSetT = t; return origSet.apply(this, arguments); };
+        if (typeof hw.setClockSource === 'function' && lsGet('highwayTweaksNoFrameClock') !== '1') {
+            // Keep the stems clock in front of whatever source core (or anyone
+            // later) installs.
+            const origClock = hw.setClockSource;
+            const install = (base) => origClock.call(hw, base && base.__hwtClock ? base : composeClockSource(preciseAudioTime, base));
+            hw.setClockSource = function (fn) { return install(typeof fn === 'function' ? fn : null); };
+            try { install(typeof hw.getClockSource === 'function' ? hw.getClockSource() : null); } catch (e) { console.warn('[highway_tweaks] clock source hook failed:', e); }
+        }
         if (typeof hw.setRenderer === 'function') {
             const origR = hw.setRenderer;
             hw.setRenderer = function (r) { try { stampRenderer(hw, r); } catch (_) { /* ignore */ } return origR.apply(this, arguments); };
