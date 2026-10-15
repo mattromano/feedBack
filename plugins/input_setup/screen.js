@@ -114,6 +114,13 @@
                     try {
                         await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ active_instrument_profile: target }) });
+                        // Announce it like the host badge does: plugins that keep their
+                        // own instrument (Virtuoso pushes its copy back at boot when it
+                        // diverges) only follow an instrument:changed.
+                        const s = await (await fetch('/api/settings')).json();
+                        window.feedBack.emit?.('instrument:changed', {
+                            instrument: s.instrument, stringCount: s.string_count, tuning: s.tuning, pathway: s.pathway,
+                        });
                     } catch (_) { /* non-fatal */ }
                 }
                 _emitOwner('calibration-done', { completed: completed.slice(), skipped: skipped.slice() });
