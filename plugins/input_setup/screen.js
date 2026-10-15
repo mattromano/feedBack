@@ -15,6 +15,24 @@
 (function () {
     'use strict';
 
+    // custom (mattromano build): each guitar/bass step POSTs its instrument to
+    // /api/settings (so note_detect and the tuner calibrate the right thing),
+    // which left a Guitar -> Bass -> Drums pass on the Bass profile — every song
+    // then opened on Bass. When the wizard ends, put back the profile it started
+    // on if its instrument was set up in this pass, else the first guitar/bass
+    // step's profile; null = no guitar/bass step, nothing to restore.
+    const _PROFILE_INSTRUMENT = { 'guitar-lead': 'guitar', 'guitar-rhythm': 'guitar', bass: 'bass' };
+    function _profileAfterWizard(startProfile, queue) {
+        const audio = (Array.isArray(queue) ? queue : []).filter((i) => i === 'guitar' || i === 'bass');
+        if (!audio.length) return null;
+        if (startProfile && audio.includes(_PROFILE_INSTRUMENT[startProfile])) return startProfile;
+        return audio[0] === 'bass' ? 'bass' : 'guitar-lead';
+    }
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = { _profileAfterWizard };
+        return;
+    }
+
     window.feedBack = window.feedBack || {};
     if (window.feedBackInputSetup && window.feedBackInputSetup.version === 1) return;
 
@@ -85,7 +103,19 @@
             const host = opts.host;
             if (!host) { resolve({ completed, skipped }); return; }
 
-            function finish() {
+            // The profile before any step POSTs an instrument (see _profileAfterWizard).
+            const startProfile = fetch('/api/settings').then((r) => (r.ok ? r.json() : null))
+                .then((s) => (s && typeof s.active_instrument_profile === 'string' ? s.active_instrument_profile : null))
+                .catch(() => null);
+
+            async function finish() {
+                const target = _profileAfterWizard(await startProfile, queue);
+                if (target) {
+                    try {
+                        await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ active_instrument_profile: target }) });
+                    } catch (_) { /* non-fatal */ }
+                }
                 _emitOwner('calibration-done', { completed: completed.slice(), skipped: skipped.slice() });
                 if (typeof opts.onComplete === 'function') { try { opts.onComplete({ completed, skipped }); } catch (_) {} }
                 resolve({ completed, skipped });
@@ -285,7 +315,9 @@
             }
 
             _emitOwner('calibration-started', { instruments: queue.slice() });
-            next();
+            // Start once the starting profile is read, so the first step's
+            // instrument POST can't land before it.
+            startProfile.then(next);
         });
     }
 

@@ -1,7 +1,7 @@
 {
   "id": "input_setup",
   "name": "Input Setup",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "bundled": true,
   "private": false,
   "standards": ["capability-pipelines.v1", "plugin-runtime-idempotent.v1"],
