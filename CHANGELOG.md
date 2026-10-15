@@ -439,6 +439,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **3D highway: hits on sustained notes and chords flash again with Note
+  Detection.** The engine verifier judges a sustained note once its sustain
+  ends, but the 3D highway kept a gem for its verdict only 0.75 s past the
+  note's start (a chord frame 0.75 s, its no-verdict latch 0.55 s), so a
+  note held longer than ~0.4 s was gone before the verdict arrived and about
+  one hit in ten counted without a flash. Those windows now run from the
+  sustain end (a chord's longest member sustain).
 - **Drum-only songs list their drum hit count.** The arrangement picker showed
   "Drums (0)" for a drums-only pack (its placeholder arrangement has no notes;
   the hits live in `drum_tab`); it now shows the hit count.
