@@ -241,7 +241,8 @@
             if (__rbMiss) {
                 _ndState = 'miss'; _ndGood = false;
                 if (!_ndCs) { _ndCs = 'miss'; _ndCsIsObj = false; }
-                noteZ = dZ(dt) * __RB_PAST_SPEED;
+                // a missed sustain stays on the line until its sustain ends, then drifts
+                noteZ = dZ(hasSus ? Math.min(0, susEnd - now) : dt) * __RB_PAST_SPEED;
             }
 `;
     const RB_CHORD_SCAN = `let allHit = chordNotes.length > 0, anyMiss = false, anyHit = false, anyNull = false, anyState = false;
@@ -259,7 +260,8 @@
                                     else if (st === 'miss') { anyMiss = true; allHit = false; anyState = true; }
                                     else { allHit = false; anyNull = true; }
                                 }
-                                const __late = chDt < -_ND_UNMATCHED_LATCH_AFTER;
+                                // late = past the chord's longest sustain + the latch delay (verdicts land after the sustain)
+                                const __late = chDt + maxSus < -_ND_UNMATCHED_LATCH_AFTER;
                                 if (allHit) {
                                     _chordVerdicts.set(verdictKey, 'green');
                                     rimHex = CHORD_BOX_HIT_BRIGHT_HEX;
@@ -283,8 +285,10 @@
                             const __rbL = _chordVerdicts.get(verdictKey);
                             if (chDt <= 0 && _ndHasProvider && __rbPlate && (__rbL === 'amber' || __rbL === 'red')) {
                                 const hex = __rbL === 'amber' ? __RB_AMBER : __RB_MISS_FRAME;
-                                const op = Math.max(0, 1 + chDt / NOTEDETECT_GEM_VERDICT_WINDOW);
-                                const pz = dZ(chDt) * __RB_PAST_SPEED;
+                                // fade and drift from the chord's longest sustain end
+                                const __pe = Math.min(0, chDt + maxSus);
+                                const op = Math.max(0, 1 + __pe / NOTEDETECT_GEM_VERDICT_WINDOW);
+                                const pz = dZ(__pe) * __RB_PAST_SPEED;
                                 const pw = width, ph = fullChordBoxH, py = (yMinF + yMaxF) * 0.5;
                                 const bt = Math.max(1.2 * K, ph * 0.07);
                                 __rbPlateAt(cx, py, pz, pw, ph, hex, 0.3 * op);
