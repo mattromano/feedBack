@@ -957,3 +957,27 @@ def test_reset_with_no_config_is_noop(client, tmp_path):
     r = client.post("/api/settings/reset", json={"keys": ["master_difficulty"]})
     assert r.status_code == 200
     assert r.json()["reset"] == []
+
+
+# ── A/V offset hand-set flag (feedBack#1046) ────────────────────────────────
+
+def test_av_offset_manual_persists_bool(client, tmp_path):
+    r = client.post("/api/settings", json={"av_offset_ms": 42, "av_offset_manual": True})
+    assert "error" not in r.json()
+    cfg = _read_cfg(tmp_path)
+    assert cfg["av_offset_ms"] == 42
+    assert cfg["av_offset_manual"] is True
+    client.post("/api/settings", json={"av_offset_manual": False})
+    assert _read_cfg(tmp_path)["av_offset_manual"] is False
+
+
+@pytest.mark.parametrize("bad_value", [1, "true", [], {}])
+def test_av_offset_manual_rejects_non_bool(client, tmp_path, bad_value):
+    (tmp_path / "config.json").write_text(json.dumps({"av_offset_manual": True}))
+    r = client.post("/api/settings", json={"av_offset_manual": bad_value})
+    assert "error" in r.json()
+    assert _read_cfg(tmp_path)["av_offset_manual"] is True
+
+
+def test_av_offset_manual_is_resettable(server_module):
+    assert "av_offset_manual" in settings_router._RESETTABLE_SETTINGS_KEYS

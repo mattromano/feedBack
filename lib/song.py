@@ -1541,6 +1541,10 @@ def load_song(extracted_dir: str) -> Song:
 
     _manifest_names: dict[str, str] = {}
     _manifest_path_flags: dict[str, dict] = {}
+    # The manifest's CentOffset (cents). Arrangement XML decoded from a binary
+    # note chart carries no <centOffset>, so without this a recording tuned off
+    # A440 (e.g. +45 c) loaded, and was converted to a sloppak, at 0.
+    _manifest_cents: dict[str, float] = {}
     for jf in Path(extracted_dir).rglob("*.json"):
         try:
             data = json.loads(jf.read_text())
@@ -1560,6 +1564,8 @@ def load_song(extracted_dir: str) -> Song:
                         "bonus_arr": bool(_mprop_int("bonusArr", props)),
                         "represent": _mprop_int("represent", props),
                     }
+                    if "CentOffset" in attrs:
+                        _manifest_cents[stem] = _finite_float(attrs.get("CentOffset"))
         except Exception:
             continue
 
@@ -1642,6 +1648,11 @@ def load_song(extracted_dir: str) -> Song:
             arrangement.path_bass = manifest_flags["path_bass"]
             arrangement.bonus_arr = manifest_flags["bonus_arr"]
             arrangement.represent = manifest_flags["represent"]
+
+        # A <centOffset> the XML authored wins; when it has none (or 0), take
+        # the manifest's.
+        if not arrangement.cent_offset:
+            arrangement.cent_offset = _manifest_cents.get(xml_path.stem.lower(), 0.0)
 
         # Try to get the correct name from the manifest JSON
         manifest_name = _manifest_names.get(xml_path.stem.lower())

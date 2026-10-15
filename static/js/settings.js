@@ -143,7 +143,10 @@ export async function loadSettings() {
     // render clock, the Settings slider, the HUD readout, and the
     // module variable all pick it up consistently. Pass skipPersist
     // so we don't echo the loaded value back to the server.
-    setAvOffsetMs(Number(data.av_offset_ms) || 0, /* skipPersist */ true);
+    setAvOffsetMs(Number(data.av_offset_ms) || 0, /* skipPersist */ true, 'load');
+    // Restore the hand-set protection so a value dialed in a prior session
+    // keeps auto-calibrate from overwriting it after reload.
+    _avUserOverride = !!data.av_offset_manual;
     // Arrangement naming mode is localStorage-only (client preference).
     const namingModeEl = document.getElementById('arrangement-naming-mode');
     if (namingModeEl) namingModeEl.value = _getArrangementNamingMode();
@@ -586,13 +589,36 @@ export function handleSliderInput(el) {
 // setAvOffsetMs without saving (skipPersist=true) to avoid an
 // echo-back round-trip.
 export let _avOffsetMs = 0;
+// Sticky once the user dials A/V in by hand this session. An auto-calibrate
+// sweep (note_detect) or any other programmatic caller must NOT overwrite a
+// hand-set value — that's the "I set it and it's wrong again" bug. Persisted as
+// av_offset_manual so it survives a reload too.
+export let _avUserOverride = false;
 
 export let _avSaveDebounce = null;
 
-export function setAvOffsetMs(ms, skipPersist) {
-    // Clamp to the same bounds the Settings/player-bar sliders enforce
-    // (-1000..1000 ms). Defends against bad values from /api/settings
-    // landing as `value` on <input type=range>.
+// `source`:
+//   'manual' — a user control, incl. a plugin's user-clicked Apply (Sync Lab,
+//              scorecard): applies and marks the override;
+//   'reset'  — the user resetting to a value (double-click the player slider):
+//              applies and CLEARS the override, so auto-calibrate may run again;
+//   'load'   — seeding the saved value; 'follow' — a tool keeping the user's
+//              calibration as it is (Sync Lab shifting it for a new output
+//              latency): apply without touching the override;
+//   anything else (undefined — Note Detection's auto-calibrate) is IGNORED
+//   while an override holds.
+// Returns false when the call was ignored, true otherwise.
+const _AV_SOURCES_PAST_OVERRIDE = new Set(['manual', 'reset', 'load', 'follow']);
+export function setAvOffsetMs(ms, skipPersist, source) {
+    if (_avUserOverride && !_AV_SOURCES_PAST_OVERRIDE.has(source)) {
+        console.info(`[settings] A/V offset ${ms} ms ignored: the offset was set by hand (double-click the player A/V slider to hand it back to auto-calibrate)`);
+        return false;
+    }
+    if (source === 'manual') _avUserOverride = true;
+    else if (source === 'reset') _avUserOverride = false;
+    // Clamp to ±1000 (the exact-entry number box may exceed the ±300 slider
+    // range for edge cases); the sliders themselves are ±300 for real
+    // resolution. Defends against bad values from /api/settings.
     const n = Number(ms);
     _avOffsetMs = Math.max(-1000, Math.min(1000, Number.isFinite(n) ? n : 0));
     // Drive the highway's render-time shift. getTime() still returns
@@ -619,6 +645,11 @@ export function setAvOffsetMs(ms, skipPersist) {
         playerAvSlider.value = _avOffsetMs;
         handleSliderInput(playerAvSlider);
     }
+    // Exact-entry number box — don't fight the user while they're typing in it.
+    const playerAvNum = document.getElementById('player-av-offset-num');
+    if (playerAvNum && document.activeElement !== playerAvNum) {
+        playerAvNum.value = Math.round(_avOffsetMs);
+    }
     const playerAvLabel = document.getElementById('player-av-offset-label');
     if (playerAvLabel) {
         const rounded = Math.round(_avOffsetMs);
@@ -633,6 +664,7 @@ export function setAvOffsetMs(ms, skipPersist) {
         hud.classList.toggle('hidden', _avOffsetMs === 0);
     }
     if (!skipPersist) _persistAvOffset();
+    return true;
 }
 
 export function _persistAvOffset() {
@@ -644,7 +676,9 @@ export function _persistAvOffset() {
             await fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ av_offset_ms: _avOffsetMs }),
+                // Persist whether this value was hand-set so a reload keeps
+                // protecting it from auto-calibrate (see setAvOffsetMs / load).
+                body: JSON.stringify({ av_offset_ms: _avOffsetMs, av_offset_manual: _avUserOverride }),
             });
         } catch (e) {
             console.warn('A/V offset save failed:', e);
@@ -653,7 +687,8 @@ export function _persistAvOffset() {
 }
 
 export function nudgeAvOffsetMs(delta) {
-    setAvOffsetMs(Math.max(-1000, Math.min(1000, _avOffsetMs + delta)));
+    // Keyboard [ / ] is a hand adjustment → mark the manual override.
+    setAvOffsetMs(Math.max(-1000, Math.min(1000, _avOffsetMs + delta)), false, 'manual');
 }
 
 export async function saveSettings() {

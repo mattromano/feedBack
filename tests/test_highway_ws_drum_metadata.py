@@ -158,3 +158,14 @@ def test_level_hits_are_chunked(make_client):
     chunks = [f for f in frames if f["type"] == "drum_level_hits"]
     assert [len(c["data"]) for c in chunks] == [500, 500, 203]
     assert all(c["level"] == "medium" and c["total"] == 1203 for c in chunks)
+
+
+def test_drum_only_pack_lists_drums_with_its_hit_count(make_client):
+    # feedBack#1017: the placeholder "Drums" arrangement carries no notes of
+    # its own (the hits live in drum_tab), so the picker said "Drums (0)".
+    server = make_client()
+    _write_pack(server._get_dlc_dir(), FULL_TAB)
+    with TestClient(server.app) as client:
+        frames = _frames(client, "/ws/highway/drumtest.sloppak?arrangement=0")
+    info = next(f for f in frames if f["type"] == "song_info")
+    assert [(a["name"], a["notes"]) for a in info["arrangements"]] == [("Drums", len(FULL_TAB["hits"]))]

@@ -162,6 +162,15 @@ function createHighway() {
     // avOffsetSec is set by setAvOffset(ms); default 0 means old behavior.
     hwState.chartTime = 0;
     hwState.currentTime = 0;
+    // Frame-time clock source (see setClockSource) and the cached <audio> ref
+    // used by draw()'s playing check.
+    hwState._clockSource = null;
+    hwState._audioEl = null;
+    // Phase-locked render clock (browser/HTML5 mode). See _renderClock().
+    hwState._pllTime = NaN;   // continuous chart clock, chart seconds
+    hwState._pllAt = 0;       // performance.now() when it last advanced
+    hwState._pllRate = 1;     // SMOOTHED rate (see _renderClock)
+    hwState._pllSeeded = false;
     hwState.avOffsetSec = 0;
     hwState.songOffset = 0.0;  // per-song chart offset (loose-folder format only)
     // Monotonic getTime support: between setTime() calls, getTime()
@@ -545,6 +554,13 @@ function createHighway() {
         const b = _bundleReused;
         // Timing
         b.currentTime = hwState.currentTime;
+        // Render time minus raw transport time (per-song chart offset + this
+        // highway's A/V offset). currentTime is now a frame-time clock, so
+        // "currentTime minus the last setTime() value" is no longer a clean
+        // offset; plugins that map their own audio clock onto this highway's
+        // render time (highway_tweaks' stems clock, drums' input timing) read
+        // this instead.
+        b.renderOffset = hwState.songOffset + hwState.avOffsetSec;
         b.songInfo = hwState.songInfo;
         b.isReady = hwState.ready;
         // True while the chart clock is actively advancing; false when
@@ -1211,6 +1227,115 @@ function createHighway() {
         try { return r.needsContinuousFrames() === true; } catch (_) { return false; }
     }
 
+    // Frame-time transport clock, or NaN when no source is installed (or the
+    // source can't currently give a continuous reading), or null when the
+    // source says the host is driving time through setTime() itself (count-in
+    // rewind). See setClockSource.
+    function _clockNow() {
+        const src = hwState._clockSource;
+        if (typeof src !== 'function') return NaN;
+        try {
+            const t = src();
+            if (t === null) return null;
+            return Number.isFinite(t) ? t : NaN;
+        } catch (err) {
+            console.warn('[highway] clock source threw; falling back:', err);
+            hwState._clockSource = null;
+            return NaN;
+        }
+    }
+
+    // The anchored estimate setTime() implies: anchor + observed-rate * elapsed.
+    // Same math getTime() falls back to. Returns raw chartTime when
+    // interpolation isn't warranted (no anchor, or the audio clock has stalled).
+    // Phase-correction gain, stated per 60 fps frame and scaled by the real
+    // frame interval in _renderClock, so the loop settles in the same wall
+    // time at 30 fps and at 360 fps. 0.07 (vs #974's 0.10 per frame): at
+    // 30 fps a time-scaled 0.10 left 2.4 ms of frame-to-frame jitter.
+    const _PLL_GAIN_60FPS = 0.07;
+    const _PLL_RATE_ALPHA = 0.05;  // EMA weight for the noisy observed rate (per 60 fps frame)
+    const _PLL_MAX_ERR_SEC = 0.25; // beyond this, it's a seek → hard resync
+    const _PLL_RESYNC_MS = 120;    // loop went stale (paused/hidden) → resync
+
+    function _anchoredChartTime(nowP) {
+        if (Number.isNaN(hwState._chartAnchorPerfNow)) return hwState.chartTime;
+        if (nowP - hwState._chartLastAdvanceAt > _CHART_MAX_INTERP_MS) return hwState.chartTime;
+        const elapsedMs = nowP - hwState._chartAnchorPerfNow;
+        if (elapsedMs > _CHART_MAX_INTERP_MS) return hwState.chartTime;
+        return hwState._chartAnchorAudioT
+            + (hwState._chartObservedRate * elapsedMs) / 1000
+            + hwState.songOffset;
+    }
+
+    // Phase-locked render clock for browser/HTML5 mode.
+    //
+    // audio.currentTime advances in ~23 ms steps, and setTime() re-anchors only
+    // when it CHANGES — so the gap between anchors is either one 60 Hz tick
+    // (16.7 ms) or two (33.3 ms) while the audio delta is always ~23 ms. The
+    // instantaneous rate estimate therefore alternates between ~1.38 and ~0.69:
+    // the interpolator built to SMOOTH the clock is what makes it lurch. Worse,
+    // each re-anchor snaps the output onto a stale quantised sample, which can
+    // drive the chart clock BACKWARD — measured at ~10% of frames on a 200 Hz
+    // display, by as much as 50 ms.
+    //
+    // Instead: free-run a continuous clock at a SMOOTHED rate and pull it gently
+    // toward the anchored estimate. Never snap (except on a real seek). Output
+    // is monotone and frame-rate independent; error stays bounded and invisible.
+    function _renderClock(nowP) {
+        const target = _anchoredChartTime(nowP);
+        if (!Number.isFinite(target)) return NaN;
+        // Smooth the (noisy) observed rate. Seed on first use so a genuine
+        // speed-slider change is picked up immediately rather than crawled to.
+        // Like the phase gain, the EMA weight is per 60 fps frame, scaled by
+        // the real frame interval.
+        if (!hwState._pllSeeded) {
+            hwState._pllRate = hwState._chartObservedRate;
+            hwState._pllSeeded = true;
+        } else {
+            const dtR = Math.min(Math.max(0, nowP - hwState._pllAt), _PLL_RESYNC_MS) / 1000;
+            const a = 1 - Math.pow(1 - _PLL_RATE_ALPHA, dtR * 60);
+            hwState._pllRate = hwState._pllRate * (1 - a)
+                + hwState._chartObservedRate * a;
+        }
+        // Cold start, or the loop went stale while paused/hidden → resync hard.
+        if (Number.isNaN(hwState._pllTime) || (nowP - hwState._pllAt) > _PLL_RESYNC_MS) {
+            hwState._pllTime = target;
+            hwState._pllAt = nowP;
+            return target;
+        }
+        const dt = (nowP - hwState._pllAt) / 1000;
+        hwState._pllAt = nowP;
+        const prev = hwState._pllTime;
+        hwState._pllTime += hwState._pllRate * dt;          // free-run
+        const err = target - hwState._pllTime;
+        if (Math.abs(err) > _PLL_MAX_ERR_SEC) {
+            hwState._pllTime = target;                       // seek / loop wrap
+        } else {
+            // Gentle phase pull, time-based (a fixed per-frame gain settles
+            // 3x faster at 180 fps than at 60). Never below last frame: a
+            // lagging target (e.g. -200 ms, under the resync threshold) would
+            // otherwise pull more than one frame's advance and step backward;
+            // holding still lets the target catch up instead. Real backward
+            // seeks take the hard-resync branch above.
+            const gain = 1 - Math.pow(1 - _PLL_GAIN_60FPS, Math.max(0, dt) * 60);
+            hwState._pllTime = Math.max(prev, hwState._pllTime + err * gain);
+        }
+        return hwState._pllTime;
+    }
+
+    // Cached <audio> ref for the per-frame playing check. Re-queried only when
+    // the ref is missing or detached (same pattern as app.js's _hudTimeEl) so
+    // draw() never does a per-frame DOM lookup.
+    function _audioIsPlaying() {
+        if (!hwState._audioEl || !hwState._audioEl.isConnected) {
+            hwState._audioEl = (typeof document !== 'undefined')
+                ? document.getElementById('audio')
+                : null;
+        }
+        const el = hwState._audioEl;
+        return !!el && !el.paused && !el.ended;
+    }
+
     function draw() {
         hwState.animFrame = requestAnimationFrame(draw);
         if (!hwState.canvas || !hwState._renderer) return;
@@ -1285,6 +1410,38 @@ function createHighway() {
                 if (!_rendererNeedsContinuousFrames()
                     && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return;
                 hwState._lastPausedDrawAt = _nowP;
+            }
+        }
+        // Render clock — PULL, don't accept the push.
+        //
+        // app.js runs a 60 Hz setInterval that samples the transport clock and
+        // pushes it into hwState.currentTime via setTime(). rAF is not
+        // synchronised with that timer, so the sample the renderer draws with is
+        // stale by a varying 0..16.7 ms. That beat is visible as jitter, and it
+        // gets WORSE as frame rate rises: at 200 fps the renderer draws 3-4
+        // frames per tick, so the interpolator extrapolates further between
+        // samples and the correction snap when the next sample lands is bigger —
+        // large enough to run the chart clock BACKWARD on ~3% of frames.
+        //
+        // Sampling the clock here, inside the frame that will draw it, removes
+        // the beat completely (see setClockSource).
+        if (!_paused && _audioIsPlaying()) {
+            const _t = _clockNow();
+            if (_t === null) {
+                // Host is driving time itself (count-in rewind sweep): draw
+                // the pushed value, and re-seed the loop when playback resumes.
+                hwState._pllTime = NaN;
+            } else if (Number.isFinite(_t)) {
+                hwState.chartTime = _t + hwState.songOffset;
+                hwState.currentTime = hwState.chartTime + hwState.avOffsetSec;
+            } else {
+                // No frame-time source (browser/HTML5 mode). audio.currentTime is
+                // quantised to ~23 ms, so run the phase-locked clock instead.
+                const _p = _renderClock(performance.now());
+                if (Number.isFinite(_p)) {
+                    hwState.chartTime = _p;
+                    hwState.currentTime = _p + hwState.avOffsetSec;
+                }
             }
         }
         // Skip bundle allocation when the default renderer is active —
@@ -2500,6 +2657,24 @@ function createHighway() {
             };
         },
 
+        // Install a function returning the transport's current time, in raw
+        // audio seconds, evaluated AT CALL TIME. Only appropriate for a clock
+        // that is continuous in performance.now() — jucePlayer.currentTime
+        // qualifies (it interpolates between its 100 ms IPC polls); a bare
+        // HTMLAudioElement.currentTime does NOT (it is quantised to ~23 ms), so
+        // in browser mode the source should return NaN and let the interpolator
+        // run. Returning null means "the host is driving time through setTime()
+        // right now" (count-in rewind): the renderer draws the pushed value and
+        // getTime() uses the plain interpolator. Pass null to uninstall.
+        setClockSource(fn) {
+            hwState._clockSource = (typeof fn === 'function') ? fn : null;
+        },
+        // The installed clock source (or null), so a plugin with a better
+        // clock for some songs can wrap it rather than replace it.
+        getClockSource() {
+            return hwState._clockSource;
+        },
+
         setTime(t) {
             // chartTime is what getTime() exposes to plugins — bake the
             // per-song offset in here so plugins (scoring, note detect,
@@ -2574,6 +2749,34 @@ function createHighway() {
         // so plugins don't see a clock drifting forward against silent
         // audio.
         getTime() {
+            // Prefer the frame-time clock source when one is installed, so
+            // plugins and the renderer read the SAME clock. Guarded on hwState
+            // only, so the source-extraction sandbox in
+            // tests/js/highway_monotonic_clock.test.js (which supplies a bare
+            // hwState with no _clockSource) falls straight through to the
+            // interpolator below and keeps testing it.
+            let _hold = false;
+            if (typeof hwState._clockSource === 'function') {
+                let _t;
+                try { _t = hwState._clockSource(); } catch (_) { _t = NaN; }
+                if (Number.isFinite(_t)) return _t + hwState.songOffset;
+                _hold = _t === null;
+            }
+            // Phase-locked render clock, when the draw loop is live (browser
+            // mode). Keeps plugins and the renderer on ONE clock. Guarded on
+            // hwState alone so the source-extraction sandbox in
+            // tests/js/highway_monotonic_clock.test.js — which supplies a bare
+            // hwState with no _pllTime — falls through to the interpolator below
+            // and keeps testing it.
+            // Extrapolated from the last frame at the loop's rate, so a plugin
+            // reading between frames (note detection judges on this) doesn't
+            // see a staircase that steps once per rendered frame.
+            if (!_hold && Number.isFinite(hwState._pllTime)) {
+                const _sinceMs = performance.now() - hwState._pllAt;
+                if (_sinceMs >= 0 && _sinceMs <= 120) {
+                    return hwState._pllTime + (hwState._pllRate * _sinceMs) / 1000;
+                }
+            }
             // No anchor yet (called before the first setTime, e.g. during
             // early boot before the 60 Hz tick has fired): just return
             // chartTime. Without this guard, elapsedMs would be NaN and
@@ -2926,6 +3129,12 @@ function createHighway() {
             hwState._chartAnchorPerfNow = NaN;
             hwState._chartLastAdvanceAt = 0;
             hwState._chartObservedRate = 1;
+            // Drop the phase-locked clock too, so a re-init can't inherit a
+            // stale continuous clock (or a rate EMA) from the previous song.
+            hwState._pllTime = NaN;
+            hwState._pllAt = 0;
+            hwState._pllRate = 1;
+            hwState._pllSeeded = false;
             // Release the renderer's GPU / DOM / event-listener resources
             // when leaving the player — anything it allocated in init()
             // should be torn down here so navigating away doesn't leak.

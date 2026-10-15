@@ -938,12 +938,21 @@
     // ~0.35-0.5 s after the line — so the default ~50 ms note linger /
     // ~0.48 s chord linger lapses before the tint can apply. Drives both
     // the outer-loop cull (ndVerdictT0) and the smart drawNote cull below.
+    //
+    // Measured from the note's SUSTAIN END (a chord's longest member
+    // sustain), not its start: the desktop engine verifier judges a sustained
+    // note / chord once the sustain is over, so its verdict lands
+    // ~0.35-0.5 s after susEnd. Counting from n.t culled a gem with a sustain
+    // longer than ~0.4 s before its verdict arrived — about one hit in ten
+    // counted without a flash. notedetect:hit / :miss carry `verdictAt` and
+    // `noteEnd` (n.t + longest sustain) for consumers that want the exact lag.
     const NOTEDETECT_GEM_VERDICT_WINDOW = 0.75;
     // chDt threshold past the hit line at which the chord-frame scan
     // gives up on an arpeggio-style frame whose constituents never come
     // in. Must be < NOTEDETECT_GEM_VERDICT_WINDOW (the rim's draw life
     // in detect mode); placing it at 0.55 s leaves ~0.2 s of the visible
-    // window for the latch to fire and skip subsequent scans.
+    // window for the latch to fire and skip subsequent scans. Like the
+    // verdict window, measured from the chord's longest member sustain end.
     const _ND_UNMATCHED_LATCH_AFTER = 0.55;
     // Sample approach offsets dt in [0, AHEAD] into strips. Lane quads use
     // z = dZ(dt) + TS*BEHIND = TS*(BEHIND - dt), while notes use z = dZ(n.t-now).
@@ -4952,6 +4961,10 @@
         // entries the forward-only prune can't reach, so we wipe the
         // map instead of paying an O(n) scan per frame to find them.
         let _chordVerdictsLastNow = null;
+        // Longest chord sustain seen (s, capped): the latch pruner keys on
+        // chord START time, so a sustained chord's latch must outlive its
+        // sustain plus the verdict window.
+        let _chordVerdictsMaxSus = 0;
         // Numeric encoding for the _chordVerdicts key — replaces
         // ``${ch.id}|${ch.t}`` which allocated a string per chord per
         // frame in detect mode. Encoded so the key is monotonic in
@@ -11005,7 +11018,7 @@
                 if (_chordVerdictsLastNow !== null && now < _chordVerdictsLastNow - 0.25) {
                     // already cleared above
                 } else {
-                    const pruneBefore = ndVerdictT0 - 0.5; // safety margin
+                    const pruneBefore = ndVerdictT0 - 0.5 - _chordVerdictsMaxSus; // safety margin + sustain
                     const pruneBeforeKey = Math.round(pruneBefore * _CV_KEY_TIME_MUL) * _CV_KEY_TIME_SLOT;
                     for (const k of _chordVerdicts.keys()) {
                         if (k < pruneBeforeKey) _chordVerdicts.delete(k);
@@ -12062,6 +12075,7 @@
                     // attached so async verdicts still land while drawable.
                     const _chFilterSus = maxSus > 0 ? maxSus : AHEAD;
                     if (ch.t + _chFilterSus < ndVerdictT0) continue;
+                    if (maxSus > _chordVerdictsMaxSus) _chordVerdictsMaxSus = Math.min(maxSus, 30);
                     if (ch.t > t1) break;
 
                     // Repeat-chord detection (consecutive same shape, short gap).
@@ -12280,8 +12294,11 @@
                     // right trade: verdict visibility beats the cleaner
                     // approach silhouette. Without detect mode the
                     // original clip still applies.
-                    if (_ndHasProvider && chordTailHoldS < NOTEDETECT_GEM_VERDICT_WINDOW) {
-                        chordTailHoldS = NOTEDETECT_GEM_VERDICT_WINDOW;
+                    //
+                    // Counted from the chord's longest member sustain end:
+                    // a sustained chord's verdict lands after the sustain.
+                    if (_ndHasProvider && chordTailHoldS < maxSus + NOTEDETECT_GEM_VERDICT_WINDOW) {
+                        chordTailHoldS = maxSus + NOTEDETECT_GEM_VERDICT_WINDOW;
                     }
                     const chordTailFadeS = Math.min(CHORD_HWY_FADE_S, chordTailHoldS);
 
@@ -12668,7 +12685,7 @@
                                 } else if (allHit) {
                                     _chordVerdicts.set(verdictKey, 'green');
                                     rimHex = CHORD_BOX_HIT_BRIGHT_HEX;
-                                } else if (chDt < -_ND_UNMATCHED_LATCH_AFTER && !anyState) {
+                                } else if (chDt + maxSus < -_ND_UNMATCHED_LATCH_AFTER && !anyState) {
                                     // The engine verdict typically lands
                                     // ~0.4 s after the chord crosses the
                                     // line, so after the
@@ -14307,7 +14324,9 @@
                 // teardown/seek clears the Map. !hasSus notes never wrote to
                 // the latch, so Map.delete is a harmless no-op there.
                 if (hasSus) _susVerdictLatch.delete(Math.round(n.t * 1e4) * 10 + n.s);
-                if (!_ndHasProvider || dt < -NOTEDETECT_GEM_VERDICT_WINDOW) return;
+                // Window counted from the sustain end (= n.t without one): a
+                // sustained note's verdict lands after its sustain.
+                if (!_ndHasProvider || susEnd - now < -NOTEDETECT_GEM_VERDICT_WINDOW) return;
                 let _ndProbe = null;
                 try { _ndProbe = _ndGetNoteState(n, n.t); } catch (e) { _ndProbe = null; }
                 _ndProbed = true;
@@ -15895,6 +15914,7 @@
             _fxElemSeen = new WeakSet();
             _fxRingMs = _fxBreakMs = -1e9;
             _chordVerdicts = new Map();
+            _chordVerdictsMaxSus = 0;
             if (bcCtrl) { try { bcCtrl.destroy(); } catch (e) {} bcCtrl = null; }
             _bgUnmountStyle();
             bgGroup = null; _bgLastT = 0;

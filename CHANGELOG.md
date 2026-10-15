@@ -439,6 +439,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Songs loaded from an unpacked Rocksmith tree keep their cent offset.**
+  `song.load_song()` read arrangement names and path flags from the manifest
+  JSON but not `CentOffset`, and arrangement XML decoded from a binary chart has
+  no `<centOffset>`, so those songs (and sloppaks converted from them through
+  `load_song` + `arrangement_to_wire`) came out at 0 c; e.g. a recording at
+  +45 c. An authored XML `<centOffset>` still wins.
+- **3D highway: hits on sustained notes and chords flash again with Note
+  Detection.** The engine verifier judges a sustained note once its sustain
+  ends, but the 3D highway kept a gem for its verdict only 0.75 s past the
+  note's start (a chord frame 0.75 s, its no-verdict latch 0.55 s), so a
+  note held longer than ~0.4 s was gone before the verdict arrived and about
+  one hit in ten counted without a flash. Those windows now run from the
+  sustain end (a chord's longest member sustain).
+- **Drum-only songs list their drum hit count.** The arrangement picker showed
+  "Drums (0)" for a drums-only pack (its placeholder arrangement has no notes;
+  the hits live in `drum_tab`); it now shows the hit count.
+- **A/V offset you set by hand stays set.** The A/V sliders span ±300 ms (was
+  ±1000, where the useful range was a few pixels), the player popover takes an
+  exact value, and once you set the offset by hand (slider, number box, [ / ],
+  or a plugin's Apply button) Note Detection's auto-calibrate no longer
+  overwrites it, across reloads too (`av_offset_manual`). Double-click the
+  player slider to reset to 0 and hand it back to auto-calibrate.
+  `setAvOffsetMs(ms, skipPersist, source)` takes `'manual' | 'reset' | 'load'
+  | 'follow'` and returns false when a call was ignored.
+- **Highway jitter during playback (chart-clock interpolator)** — the note
+  highway shimmered while a song played, and the chart clock could run
+  *backward* on roughly 10% of frames (measured at -52 ms on a 200 Hz display).
+  The interpolator that exists to smooth the clock was the source of the
+  jitter: it derived playback rate from a single quantised sample gap —
+  `audio.currentTime` steps ~23 ms while `setTime()` re-anchors on a 60 Hz
+  poll, so consecutive anchors sit 16.7 ms or 33.3 ms apart and the estimate
+  alternated between ~1.38x and ~0.69x — and then snapped its output onto each
+  stale anchor. The render clock is now phase-locked: it free-runs at a
+  smoothed rate and is pulled gently toward the anchored estimate instead of
+  snapping, hard-resyncing only on a genuine seek. Output is monotone and
+  frame-rate independent (verified 30-360 fps), and plugins and the renderer
+  now read one clock. Not a draw-cost problem — it reproduced with the highway
+  drawing in 0.8 ms and the adaptive scaler fully disengaged. In JUCE mode the
+  renderer now samples `jucePlayer.currentTime` (already continuous in
+  `performance.now()`) directly at frame time via a new `setClockSource()`,
+  bypassing the interpolator entirely. Separately, the default 2D renderer had
+  never used the interpolated clock at all — it positioned notes from the raw
+  60 Hz staircase.
+- **Render clock follow-ups.** The phase pull is scaled by the real frame
+  interval (it settled 6x faster at 360 fps than at 60) and can no longer step
+  the clock backward when the transport lags by less than the resync
+  threshold; a count-in's rewind sweep is drawn again in desktop (JUCE) mode,
+  where the frame clock had overridden it; `getTime()` extrapolates between
+  frames instead of returning the last frame's value; renderer bundles carry
+  `renderOffset` (chart + A/V offset) and `highway.getClockSource()` lets a
+  plugin wrap the frame clock.
 - **Guitar Pro (GP3-5) import: hammer-ons, pull-offs and slides land on the
   right notes; ghost notes stay playable.** GP stores a hammer-on/pull-off on
   the note the slur *starts* from, but `lib/gp2rs.py` flagged that origin note
@@ -481,7 +532,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves to the right part), and `extract_meta` lists `type: drums` entries
   after every fretted part — they never become a highway arrangement, so ahead
   of a part like Keys they shifted its index by one. Packs already in library
-  order load exactly as before.
+  order load exactly as before. `song_stats` is keyed by arrangement index, so
+  on packs whose manifest wasn't in library order, rows recorded before this
+  change (already inconsistent between chip and highway) may show under a
+  different arrangement once; new rows are recorded under the right one.
 - **Songs no longer open on their drum part by default.** With no arrangement
   requested, no instrument routing and no saved default arrangement, the
   highway falls back to the arrangement with the most notes. Packs from GP

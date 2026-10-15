@@ -703,3 +703,57 @@ def test_cent_offset_non_finite_sanitized_through_wire(tmp_path):
     # corrupt sloppak JSON) is coerced to 0.0 on the way back in.
     arr = arrangement_from_wire({"centOffset": float("nan")})
     assert arr.cent_offset == 0.0
+
+
+# ── load_song: the manifest's CentOffset (unpacked RS2014 tree) ──────────────
+
+def _rs_tree(tmp_path, stem, xml_cents=None, manifest_cents=None, arr_name="Lead"):
+    """An unpacked RS2014-style tree: songs/arr/<stem>.xml + manifests/.../<stem>.json."""
+    arr_dir = tmp_path / "songs" / "arr"
+    arr_dir.mkdir(parents=True, exist_ok=True)
+    xml = (
+        "<song>"
+        + "<title>T</title><artistName>A</artistName>"
+        + "<arrangement>Lead</arrangement>"
+        + (f"<centOffset>{xml_cents}</centOffset>" if xml_cents is not None else "")
+        + _TUNING_AND_TEMPLATES
+        + '<levels count="1">'
+        + '<level difficulty="0">'
+        + '<notes count="0"/><chords count="0"/>'
+        + '<anchors count="0"/><handShapes count="0"/>'
+        + "</level></levels>"
+        + "</song>"
+    )
+    (arr_dir / f"{stem}.xml").write_text(xml, encoding="utf-8")
+    man_dir = tmp_path / "manifests" / "songs_dlc_x"
+    man_dir.mkdir(parents=True, exist_ok=True)
+    attrs = {"ArrangementName": arr_name, "ArrangementProperties": {"pathLead": 1}}
+    if manifest_cents is not None:
+        attrs["CentOffset"] = manifest_cents
+    (man_dir / f"{stem}.json").write_text(
+        __import__("json").dumps({"Entries": {"ID1": {"Attributes": attrs}}}), encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_load_song_takes_cent_offset_from_the_manifest(tmp_path):
+    # Official DLC: the arrangement XML is decoded from the binary chart and
+    # has no <centOffset>; the manifest JSON carries it (Oasis, Don't Look
+    # Back in Anger: +45 c). A psarc -> sloppak conversion wrote 0.
+    from song import load_song, arrangement_to_wire
+    song = load_song(_rs_tree(tmp_path, "dlbia_lead", manifest_cents=45.0))
+    assert [a.name for a in song.arrangements] == ["Lead"]
+    assert song.arrangements[0].cent_offset == 45.0
+    assert arrangement_to_wire(song.arrangements[0])["centOffset"] == 45.0
+
+
+def test_load_song_keeps_an_authored_xml_cent_offset(tmp_path):
+    from song import load_song
+    song = load_song(_rs_tree(tmp_path, "x_lead", xml_cents=-1200, manifest_cents=0.0))
+    assert song.arrangements[0].cent_offset == -1200.0
+
+
+def test_load_song_manifest_cent_offset_absent_or_bad_stays_zero(tmp_path):
+    from song import load_song
+    assert load_song(_rs_tree(tmp_path / "a", "y_lead")).arrangements[0].cent_offset == 0.0
+    song = load_song(_rs_tree(tmp_path / "b", "z_lead", manifest_cents="NaN"))
+    assert song.arrangements[0].cent_offset == 0.0

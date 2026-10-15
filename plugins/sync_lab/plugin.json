@@ -1,7 +1,7 @@
 {
   "id": "sync_lab",
   "name": "_Sync Lab",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "nav": { "label": "Sync", "screen": "plugin-sync_lab" },
   "screen": "screen.html",
