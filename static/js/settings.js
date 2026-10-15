@@ -597,12 +597,25 @@ export let _avUserOverride = false;
 
 export let _avSaveDebounce = null;
 
-// `source`: 'manual' = a user control (marks the override); 'load' = seeding the
-// saved value (no override); anything else (undefined — the plugin's
-// window.setAvOffsetMs auto-calibrate call) is IGNORED while an override holds.
+// `source`:
+//   'manual' — a user control, incl. a plugin's user-clicked Apply (Sync Lab,
+//              scorecard): applies and marks the override;
+//   'reset'  — the user resetting to a value (double-click the player slider):
+//              applies and CLEARS the override, so auto-calibrate may run again;
+//   'load'   — seeding the saved value; 'follow' — a tool keeping the user's
+//              calibration as it is (Sync Lab shifting it for a new output
+//              latency): apply without touching the override;
+//   anything else (undefined — Note Detection's auto-calibrate) is IGNORED
+//   while an override holds.
+// Returns false when the call was ignored, true otherwise.
+const _AV_SOURCES_PAST_OVERRIDE = new Set(['manual', 'reset', 'load', 'follow']);
 export function setAvOffsetMs(ms, skipPersist, source) {
-    if (source !== 'manual' && source !== 'load' && _avUserOverride) return;
+    if (_avUserOverride && !_AV_SOURCES_PAST_OVERRIDE.has(source)) {
+        console.info(`[settings] A/V offset ${ms} ms ignored: the offset was set by hand (double-click the player A/V slider to hand it back to auto-calibrate)`);
+        return false;
+    }
     if (source === 'manual') _avUserOverride = true;
+    else if (source === 'reset') _avUserOverride = false;
     // Clamp to ±1000 (the exact-entry number box may exceed the ±300 slider
     // range for edge cases); the sliders themselves are ±300 for real
     // resolution. Defends against bad values from /api/settings.
@@ -651,6 +664,7 @@ export function setAvOffsetMs(ms, skipPersist, source) {
         hud.classList.toggle('hidden', _avOffsetMs === 0);
     }
     if (!skipPersist) _persistAvOffset();
+    return true;
 }
 
 export function _persistAvOffset() {

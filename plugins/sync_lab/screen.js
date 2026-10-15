@@ -224,11 +224,14 @@
 
     // ── apply ──
     let setByUs = false;
-    function setAv(v) {
+    // Core ignores untagged A/V changes once the user has set the offset by
+    // hand (feedBack#1046), so say what each one is: an Apply click is the
+    // user's ('manual'); auto-follow keeps the user's calibration ('follow').
+    function setAv(v, source) {
         setByUs = true;
-        try { window.setAvOffsetMs(v); } finally { setByUs = false; lastAv = avMs(); }
+        try { window.setAvOffsetMs(v, false, source); } finally { setByUs = false; lastAv = avMs(); }
     }
-    function applyAv(v) { setAv(v); saveRef(v); }
+    function applyAv(v) { setAv(v, 'manual'); saveRef(v); }
     function detectors() {
         if (window.__hwtDetectors) return window.__hwtDetectors();
         const out = window.noteDetect ? [window.noteDetect] : [];
@@ -272,7 +275,7 @@
         const ah = renderAhead();
         const want = followAv(ref, ah, avMs());
         if (want === null) return;
-        setAv(want);
+        setAv(want, 'follow');
         toast('Audio output latency changed (' + Math.round(ref.aheadMs) + ' → ' + Math.round(ah) + ' ms): A/V offset ' +
             ref.av + ' → ' + want + ' ms');
         post({ kind: 'av-follow', from: ref, aheadMs: ah, av: want });
@@ -575,5 +578,5 @@
     setInterval(tick, 50);
     (function waitScreen() { if (document.getElementById('sync-lab-root')) wireScreen(); else setTimeout(waitScreen, 500); })();
 
-    window.__syncLab = { version: '2.0.0', start, analyse: () => (run ? summary(result()) : null), get run() { return run; }, get plan() { return plan; } };
+    window.__syncLab = { version: '2.0.1', start, analyse: () => (run ? summary(result()) : null), get run() { return run; }, get plan() { return plan; } };
 })();

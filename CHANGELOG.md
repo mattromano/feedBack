@@ -439,6 +439,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **A/V offset you set by hand stays set.** The A/V sliders span ±300 ms (was
+  ±1000, where the useful range was a few pixels), the player popover takes an
+  exact value, and once you set the offset by hand (slider, number box, [ / ],
+  or a plugin's Apply button) Note Detection's auto-calibrate no longer
+  overwrites it, across reloads too (`av_offset_manual`). Double-click the
+  player slider to reset to 0 and hand it back to auto-calibrate.
+  `setAvOffsetMs(ms, skipPersist, source)` takes `'manual' | 'reset' | 'load'
+  | 'follow'` and returns false when a call was ignored.
 - **Highway jitter during playback (chart-clock interpolator)** — the note
   highway shimmered while a song played, and the chart clock could run
   *backward* on roughly 10% of frames (measured at -52 ms on a 200 Hz display).

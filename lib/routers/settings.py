@@ -457,6 +457,10 @@ def _validate_server_config_types(cfg: dict) -> str | None:
             return "server_config.av_offset_ms must be a number between -1000 and 1000"
         if not (-1000 <= v <= 1000):
             return "server_config.av_offset_ms must be between -1000 and 1000"
+    if "av_offset_manual" in cfg:
+        v = cfg["av_offset_manual"]
+        if v is not None and not isinstance(v, bool):
+            return "server_config.av_offset_manual must be a boolean"
     # fee[dB]ack v0.3.0 tuner/instrument keys — keep in sync with POST /api/settings.
     if "reference_pitch" in cfg:
         v = cfg["reference_pitch"]

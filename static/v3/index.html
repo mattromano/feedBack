@@ -1208,7 +1208,7 @@
                 <div class="v3-pop-row">
                     <span class="v3-pop-label" id="player-av-offset-slider-label">A/V sync (ms)</span>
                     <span class="flex items-center gap-2">
-                        <input type="range" id="player-av-offset-slider" min="-300" max="300" value="0" step="1" oninput="setAvOffsetMs(this.value, false, 'manual')" class="accent-accent slider-input" title="A/V sync offset (ms). Higher = notes reach the strike line SOONER (visuals sped up); lower = later. [ and ] adjust ±10 ms (Shift = ±50). Double-click to reset." ondblclick="setAvOffsetMs(0, false, 'manual')" aria-labelledby="player-av-offset-slider-label">
+                        <input type="range" id="player-av-offset-slider" min="-300" max="300" value="0" step="1" oninput="setAvOffsetMs(this.value, false, 'manual')" class="accent-accent slider-input" title="A/V sync offset (ms). Higher = notes reach the strike line SOONER (visuals sped up); lower = later. [ and ] adjust ±10 ms (Shift = ±50). Double-click to reset to 0 and let auto-calibrate set it again." ondblclick="setAvOffsetMs(0, false, 'reset')" aria-labelledby="player-av-offset-slider-label">
                         <input type="number" id="player-av-offset-num" min="-1000" max="1000" step="1" value="0" onchange="setAvOffsetMs(this.value, false, 'manual')" class="v3-pop-val tabular-nums" style="width:4.4em" title="Type an exact A/V offset in ms (arrows step ±1)" aria-labelledby="player-av-offset-slider-label">
                     </span>
                 </div>
