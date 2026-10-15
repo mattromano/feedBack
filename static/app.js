@@ -6,6 +6,7 @@ import {
 } from './js/plugin-loader.js';
 import {
     _autoMatchViz,
+    _instrumentVizOverride,
     _maybeShowNotationViewHint,
     _populateVizPicker,
     setViz,
@@ -1717,6 +1718,9 @@ if (window.feedBack) {
             // the fresh-install highway_3d default) would render an empty
             // board with no explanation. Surface the install hint.
             _maybeShowNotationViewHint(sel.value);
+            // mattromano build: a Drums / keys part on an explicit guitar view
+            // is shown by its own instrument view for this song (viz.js).
+            _instrumentVizOverride(sel.value);
         }
     });
 }
@@ -2494,3 +2498,10 @@ Object.assign(window, {
     // pagination; drop one and those buttons throw at click time, nowhere else.
     filterFavTreeLetter, filterTreeLetter, goFavTreePage, goTreePage,
 });
+// mattromano build: a picker change (and the visualization capability's
+// select) re-applies the instrument takeover once the picked view is in, so a
+// Drums / keys part stays on its own view whatever guitar view is picked.
+window.setViz = function (id) {
+    setViz(id);
+    _instrumentVizOverride(id, { fresh: true });
+};
