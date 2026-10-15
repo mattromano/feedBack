@@ -45,6 +45,33 @@ function _canRun3D() {
     return _webgl2Probe;
 }
 
+// ── custom: only the main highways in the pickers ────────────────────────
+// mattromano build: the main player's picker (and split view's per-panel one,
+// via window._vizHiddenInPicker) lists Auto, 3D Highway, the Drums view and
+// Keys Highway 3D only. Hidden renderers keep their <option> (marked hidden),
+// so a saved vizSelection, Auto and the instrument override still reach them.
+const PICKER_HIDDEN_VIZ = new Set([
+    'default',          // built-in 2D highway
+    'venue',            // 3D Highway venue mode
+    'drum_highway_3d',  // stock drum view; the drums plugin's view replaces it
+    'piano', 'tabview', 'jumpingtab', 'staffview', 'slopscale',
+]);
+function _vizHiddenInPicker(id) { return PICKER_HIDDEN_VIZ.has(id); }
+window._vizHiddenInPicker = _vizHiddenInPicker;
+
+export function _applyPickerHideList(sel) {
+    if (!sel) return;
+    for (const opt of Array.from(sel.options)) opt.hidden = _vizHiddenInPicker(opt.value);
+}
+
+// A notation-only part: no wire notes on the active arrangement.
+function _isNotationOnly(songInfo) {
+    const arr = Array.isArray(songInfo.arrangements)
+        ? songInfo.arrangements.find(a => a.index === songInfo.arrangement_index)
+        : null;
+    return !!(songInfo.has_notation && arr && arr.notes === 0);
+}
+
 // ── Migration / nag flags ────────────────────────────────────────────────
 // `feedBack_3d_promoted_v1` is set the first time we auto-flip an existing
 // `vizSelection='default'` user to `'highway_3d'`. Persistence ensures we
@@ -225,6 +252,7 @@ export async function _populateVizPicker(plugins) {
         sel.appendChild(opt);
     }
     _ensureVenueVizOption(sel);
+    _applyPickerHideList(sel);
     // Refresh the visualization capability domain's provider registry from
     // the picker entries just built (the domain host introspects each
     // factory global for contextType / predicate metadata).
@@ -774,6 +802,25 @@ export function _autoMatchViz() {
         _installVizRenderer(renderer, id, 'auto-match');
         _noteVizAutoMatch(id, true);
         return;
+    }
+    // custom: nothing claimed the song — use the 3D Highway rather than the
+    // built-in 2D one (the 2D view is hidden from the picker), unless the part
+    // is notation-only (a 3D board would be empty too) or WebGL2 is missing.
+    const h3d = window.feedBackViz_highway_3d;
+    if (hasSong && typeof h3d === 'function' && _canRun3D() && !_isNotationOnly(songInfo)) {
+        let renderer = null;
+        try { renderer = h3d(); }
+        catch (err) { console.error('viz auto: 3D Highway fallback threw', err); }
+        if (renderer && typeof renderer.draw === 'function') {
+            const h3dOpt = Array.from(sel.options).find(o => o.value === 'highway_3d');
+            const labelText = h3dOpt ? h3dOpt.text : '3D Highway';
+            function _onFallbackReady() { if (sel.value === 'auto') _setAutoVizLabel(labelText); }
+            window.feedBack.on('viz:renderer:ready', _onFallbackReady, { once: true });
+            _cancelPendingAutoLabel = () => window.feedBack.off('viz:renderer:ready', _onFallbackReady);
+            _installVizRenderer(renderer, 'highway_3d', 'auto-match');
+            _noteVizAutoMatch('highway_3d', true);
+            return;
+        }
     }
     // No match — restore the built-in 2D window.highway. setRenderer(null) is
     // a no-op when the default is already active. If the previous Auto
