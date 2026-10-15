@@ -90,6 +90,19 @@ test('3D highway patch: every anchor matches the in-tree highway_3d and the resu
     assert.match(out, /__rbV\.set\(__rbK, __rbE\)/);
 });
 
+test('3D highway patch options: stock hit/miss look by default, frame clock on', () => {
+    const store = (o) => (k) => (k in o ? o[k] : null);
+    assert.deepEqual(hwt.patchOptions(store({})), { noRb: true, noFrameClock: false });
+    // Rock Band verdicts are opt-in now; the old kill switch still means off.
+    assert.deepEqual(hwt.patchOptions(store({ highwayTweaksRbVerdicts: '1' })), { noRb: false, noFrameClock: false });
+    assert.deepEqual(hwt.patchOptions(store({ highwayTweaksRbVerdicts: '1', highwayTweaksNoRbVerdicts: '1' })),
+        { noRb: true, noFrameClock: false });
+    assert.deepEqual(hwt.patchOptions(store({ highwayTweaksNoFrameClock: '1' })), { noRb: true, noFrameClock: true });
+    const hits = [];
+    hwt.patchHighway3d(H3D, hits, hwt.patchOptions(store({})));
+    assert.deepEqual(hits, ['frame-clock']);
+});
+
 test('3D highway patch: kill switches leave the source alone', () => {
     const hits = [];
     assert.equal(hwt.patchHighway3d(H3D, hits, { noRb: true, noFrameClock: true }), H3D);

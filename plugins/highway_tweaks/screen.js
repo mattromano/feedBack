@@ -29,11 +29,13 @@
 //     the stems clock is put in FRONT of core's source on every highway, so
 //     core draws and highway.getTime() reads it, rather than a second
 //     smoothing layer on top; render offsets come from bundle.renderOffset.
-//  2. 3D highway: draws from that clock (smoothNow) and Rock Band-style
-//     verdicts (hits burst and vanish, misses go grey and drift past the
-//     line, partly hit chords get an amber plate). The 3D highway's source is
-//     rewritten on load; any anchor that no longer matches skips that piece.
-//     Kill switches: localStorage highwayTweaksNoRbVerdicts / highwayTweaksNoFrameClock = '1'.
+//  2. 3D highway: draws from that clock (smoothNow). The 3D highway's source
+//     is rewritten on load; any anchor that no longer matches skips that piece.
+//     Kill switch: localStorage highwayTweaksNoFrameClock = '1'.
+//     2.2: the stock hit/miss look is the default again. The optional Rock
+//     Band-style verdicts (hits burst and vanish, misses go grey and drift
+//     past the line, partly hit chords get an amber plate) are opt-in:
+//     localStorage highwayTweaksRbVerdicts = '1', then reload.
 //  3. window.__hwtDetectors(): every live Note Detection instance.
 //  4. Frame-drop watchdog: while a song plays, 5 s windows of frame times; two
 //     bad windows in a row post a snapshot (canvases, WebGL contexts, DOM
@@ -163,7 +165,7 @@
     //  - partly hit chord: an amber frame scrolls past with its grey notes.
     // Hit vs miss differs in brightness and motion (burst-and-gone vs grey
     // and moving), not only in hue, so it reads with colour blindness.
-    // Kill switch: localStorage.highwayTweaksNoRbVerdicts = '1', then reload.
+    // Opt-in (off by default since 2.2): localStorage.highwayTweaksRbVerdicts = '1', then reload.
     const RB_DECL = `
         // [highway_tweaks] Rock Band-style verdicts. __rbV: verdict latch per note
         // (key __rbKey(t, s)) or chord (key -1 - verdictKey) ->
@@ -360,6 +362,17 @@
     }
 
 
+    // Which highway_3d patches to apply, from localStorage (get(key) -> string|null).
+    // Rock Band verdicts are opt-in (highwayTweaksRbVerdicts = '1'): the stock
+    // note-state look (outline, sparkle, shockwave, red miss wash; gems run past the
+    // line and fade) is the default. The frame clock stays on unless killed.
+    function patchOptions(get) {
+        return {
+            noRb: get('highwayTweaksRbVerdicts') !== '1' || get('highwayTweaksNoRbVerdicts') === '1',
+            noFrameClock: get('highwayTweaksNoFrameClock') === '1',
+        };
+    }
+
     function patchHighway3d(code, hits, opts) {
         opts = opts || {};
         if (!opts.noFrameClock) {
@@ -374,11 +387,11 @@
     }
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { createStemsClock, renderOffsetOf, frameTimeFor, composeClockSource, frameStats, judgmentRow, rbVerdicts, patchHighway3d };
+        module.exports = { createStemsClock, renderOffsetOf, frameTimeFor, composeClockSource, frameStats, judgmentRow, rbVerdicts, patchOptions, patchHighway3d };
         return;
     }
     if (window.__highwayTweaks) return;
-    window.__highwayTweaks = { version: '2.1.0' };
+    window.__highwayTweaks = { version: '2.2.0' };
 
     const bus = window.feedBack || window.slopsmith;
     const lsGet = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
@@ -395,10 +408,7 @@
     // <script data-plugin-id="highway_3d"> before it is appended.
     const PATCHERS = {
         highway_3d(code, hits) {
-            return patchHighway3d(code, hits, {
-                noRb: lsGet('highwayTweaksNoRbVerdicts') === '1',
-                noFrameClock: lsGet('highwayTweaksNoFrameClock') === '1',
-            });
+            return patchHighway3d(code, hits, patchOptions(lsGet));
         },
     };
     const origAppendChild = Node.prototype.appendChild;
