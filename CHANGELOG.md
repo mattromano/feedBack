@@ -481,7 +481,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves to the right part), and `extract_meta` lists `type: drums` entries
   after every fretted part — they never become a highway arrangement, so ahead
   of a part like Keys they shifted its index by one. Packs already in library
-  order load exactly as before.
+  order load exactly as before. `song_stats` is keyed by arrangement index, so
+  on packs whose manifest wasn't in library order, rows recorded before this
+  change (already inconsistent between chip and highway) may show under a
+  different arrangement once; new rows are recorded under the right one.
 - **Songs no longer open on their drum part by default.** With no arrangement
   requested, no instrument routing and no saved default arrangement, the
   highway falls back to the arrangement with the most notes. Packs from GP
