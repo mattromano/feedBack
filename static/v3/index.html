@@ -538,6 +538,20 @@
                             </label>
                         </div>
                     </div>
+                    <!-- Countdown: only for songs that start right away (mattromano build) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m-3 5a9 9 0 100-18 9 9 0 000 18z"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Countdown: only when needed</div>
+                            <div class="fb-srow-desc">Count in only when the first note comes within 3 seconds. Never when a queue moves on to its next song.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-countdown-auto" onchange="setCountdownBeforeSongAuto(this.checked)">
+                                <span class="fb-switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
                     <!-- Fail behavior (stub) -->
                     <div class="fb-srow">
                         <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></span>

@@ -1069,6 +1069,13 @@ window.setCountdownBeforeSong = function (on) {
     if (el && el.checked !== !!on) el.checked = !!on;
     persistSetting('countdown_before_song', !!on);
 };
+// mattromano build: "Countdown: only when needed" (player-controls.js
+// _wantSongCountIn). Client-only; absence of the key = on.
+window.setCountdownBeforeSongAuto = function (on) {
+    try { localStorage.setItem('countdownBeforeSongAuto', on ? '1' : '0'); } catch (_) { /* private mode */ }
+    const el = document.getElementById('setting-countdown-auto');
+    if (el && el.checked !== !!on) el.checked = !!on;
+};
 // One-shot launcher override for the player's return destination.
 window.feedBack.setReturnScreen = function (id) {
     window.feedBack._nextReturnScreen = id || null;

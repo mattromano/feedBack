@@ -29,7 +29,7 @@
         gameplay: {
             server: ['master_difficulty', 'av_offset_ms', 'miss_penalty',
                 'fail_behavior', 'countdown_before_song', 'default_arrangement', 'pathway'],
-            local: ['lefty', 'autoplayExit', 'showUpNext', 'confirmExitSong', 'arrangementNamingMode', 'countdownBeforeSong'],
+            local: ['lefty', 'autoplayExit', 'showUpNext', 'confirmExitSong', 'arrangementNamingMode', 'countdownBeforeSong', 'countdownBeforeSongAuto'],
             after: function () {
                 // Left-handed is held on the highway object, not re-derived
                 // from localStorage on load — flip it back to the default.
