@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Karaoke library filter.** The Filters drawer has a one-click
+  **Karaoke-ready** button that shows songs with synced lyrics and a separated
+  vocals stem. The Arrangements facet no longer offers a **Vocals** pill: the
+  server ignored it, so it silently filtered nothing.
 - **Songs table view.** A fifth library view (☷, next to grid / list /
   albums / folders) shows the whole filtered library as one dense, sortable
   table: FC, artist, title, album, year, tuning, parts (L/R/B/C/K/D/V), length,

@@ -46,7 +46,9 @@
         ['plays', 'Most played'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
-    const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
+    // No 'Vocals': the scanner never stores a vocals arrangement and the server
+    // ignores it — karaoke songs are found via the Karaoke facet (lyrics + vocals stem).
+    const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo'];
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'piano', 'other'];
     const PAGE_SIZE = 24;
     // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
@@ -177,7 +179,7 @@
             // the filter drawer indexes f.mastery/f.match/f.genre unconditionally,
             // so dropping them here breaks the drawer for anyone with saved prefs.
             state.filters = {
-                arr_has: arr(f.arr_has), arr_lacks: arr(f.arr_lacks),
+                arr_has: arr(f.arr_has).filter((a) => ARRANGEMENTS.includes(a)), arr_lacks: arr(f.arr_lacks).filter((a) => ARRANGEMENTS.includes(a)),
                 stem_has: arr(f.stem_has), stem_lacks: arr(f.stem_lacks),
                 lyrics: f.lyrics || '', tunings: arr(f.tunings),
                 mastery: [], match: [], genre: [],
@@ -3040,6 +3042,15 @@
                         + (on ? '✕ ' : '') + 'Not split</button>';
                 })()) +
             section('Lyrics', ['', '1', '0'].map((v) => '<button data-lyrics="' + v + '" class="px-2 py-1 rounded-md text-xs border ' + (f.lyrics === v ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + (v === '' ? 'Any' : v === '1' ? 'Has lyrics' : 'No lyrics') + '</button>').join('')) +
+            // Karaoke needs synced lyrics AND a separated vocals stem; one click
+            // sets both facets (toggles off if both are already on).
+            section('Karaoke', (() => {
+                const on = f.lyrics === '1' && f.stem_has.includes('vocals');
+                return '<button data-karaoke class="px-2 py-1 rounded-md text-xs border '
+                    + (on ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700')
+                    + '" title="Songs with synced lyrics and a separated vocals track">'
+                    + (on ? '✕ ' : '') + 'Karaoke-ready</button>';
+            })()) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
             section('Progress', [['mastered', 'Mastered'], ['in_progress', 'In progress'], ['not_started', 'Not started']].map((it) => '<button data-mastery="' + it[0] + '" class="px-2 py-1 rounded-md text-xs border ' + (f.mastery.includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + it[1] + '</button>').join('')) +
             // Match (P8) — the song's metadata-match lifecycle state, a triage
@@ -3138,6 +3149,17 @@
             renderDrawer();
         });
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
+        d.querySelectorAll('[data-karaoke]').forEach((b) => b.addEventListener('click', () => {
+            if (f.lyrics === '1' && f.stem_has.includes('vocals')) {
+                f.lyrics = '';
+                f.stem_has = f.stem_has.filter((s) => s !== 'vocals');
+            } else {
+                f.lyrics = '1';
+                if (!f.stem_has.includes('vocals')) f.stem_has.push('vocals');
+                f.stem_lacks = f.stem_lacks.filter((s) => s !== 'vocals');
+            }
+            renderDrawer();
+        }));
         d.querySelectorAll('[data-mastery]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-mastery'); const i = f.mastery.indexOf(v); if (i >= 0) f.mastery.splice(i, 1); else f.mastery.push(v); renderDrawer(); }));
         d.querySelector('[data-grouping]')?.addEventListener('click', () => {
             state.grouping = !(state.grouping !== false);
