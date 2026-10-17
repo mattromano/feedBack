@@ -322,14 +322,14 @@ def _finish(raw, five_lane, mix, tempo: TempoMap, offset, sections, sp, fills, s
 
 # ── notes.mid ───────────────────────────────────────────────────────────────
 
-def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
+def read_mid(path: Path):
+    """A notes.mid as (TempoMap, EVENTS sections [(tick, name)], {UPPER track name: track}).
+    Shared by the drums importer here and the vocals importer in lib/vocalchart.py."""
     import mido
-    ini = ini or {}
     mid = mido.MidiFile(str(path), clip=True)   # Phase Shift sysex carries bytes > 127
     if mid.ticks_per_beat <= 0:
         raise ValueError("SMPTE-timed MIDI files are not supported")
-    tempos, sigs, sections = [], [], []
-    drum_track = None
+    tempos, sigs, sections, tracks = [], [], [], {}
     for tr in mid.tracks:
         name = next((m.name for m in tr if m.type == "track_name"), "").strip()
         tick = 0
@@ -348,21 +348,20 @@ def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -
                     s = _section_name(m.text)
                     if s:
                         sections.append((tick, s))
-        if up in DRUM_TRACK_NAMES:
-            # PART DRUMS overrides; the alternates only fill in when it's missing (TrackOverrides)
-            if drum_track is None or up == "PART DRUMS":
-                drum_track = tr
-    if drum_track is None:
-        raise ValueError(f"{Path(path).name}: no PART DRUMS track")
+        tracks.setdefault(up, tr)
     # tempo changes at the same tick: last one wins
     tempo = TempoMap(mid.ticks_per_beat, list({t: b for t, b in sorted(tempos)}.items()),
                      list({t: (t, n, d) for t, n, d in sorted(sigs)}.values()))
+    return tempo, sections, tracks
 
-    base = DIFF_START[difficulty]
-    texts, events = [], []     # (tick, text); (start, end, note, velocity)
+
+def track_events(track) -> tuple[list, list]:
+    """One MIDI track as (texts [(tick, text)], notes [(start, end, note, velocity)] sorted).
+    Text, marker and lyrics meta events all count as text; unterminated notes get zero length."""
+    texts, events = [], []
     open_notes: dict[tuple, list] = {}
     tick = 0
-    for m in drum_track:
+    for m in track:
         tick += m.time
         if m.type in ("text", "marker", "lyrics"):
             texts.append((tick, m.text))
@@ -376,6 +375,19 @@ def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -
     for (note, _), q in open_notes.items():   # unterminated: zero length
         events += [(st, st, note, vel) for st, vel in q]
     events.sort()
+    return texts, events
+
+
+def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
+    ini = ini or {}
+    tempo, sections, tracks = read_mid(path)
+    # PART DRUMS overrides; the alternates only fill in when it's missing (TrackOverrides)
+    drum_track = next((tracks[n] for n in DRUM_TRACK_NAMES if n in tracks), None)
+    if drum_track is None:
+        raise ValueError(f"{Path(path).name}: no PART DRUMS track")
+
+    base = DIFF_START[difficulty]
+    texts, events = track_events(drum_track)
 
     dynamics = any(_normalize_text(t) == CHART_DYNAMICS_TEXT for _, t in texts)
     raw, sp, fills, solos, markers = [], [], [], [], []

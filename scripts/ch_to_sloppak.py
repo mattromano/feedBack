@@ -17,6 +17,9 @@ The pack it writes (feedpak 1.20.0):
   and marked ``generated``). A chart with star power but no fills gets YARG's
   generated activation fills. Spec §7.5 "Drum gameplay metadata".
 - ``song_timeline.json`` — tempo map, time signatures, beats and sections.
+- ``lyrics.json`` + ``vocal_pitch.json`` — when ``notes.mid`` has a ``PART VOCALS`` part: the
+  chart's syllables, line breaks and sung pitches (spec §7.1 / §7.2, ``lyrics_source: authored``;
+  rules in lib/vocalchart.py), so the pack is karaoke-ready with the chart's ``vocals`` stem.
 - ``manifest.yaml`` — one ``type: drums`` arrangement pointing at the tab, with the
   song-level ``drum_tab`` key as its primary-part alias (spec §7.5 "Multiple drum
   parts"; the pack has no pitched arrangement, and ``arrangements`` may not be empty).
@@ -50,6 +53,7 @@ import audio  # noqa: E402
 import drumchart  # noqa: E402
 import drumchart_gen  # noqa: E402
 import sngfile  # noqa: E402
+import vocalchart  # noqa: E402
 
 log = logging.getLogger("feedBack.scripts.ch_to_sloppak")
 
@@ -170,6 +174,12 @@ def convert(src: Path, out: Path, title=None, artist=None, album=None, year=None
                                             encoding="utf-8")
         (work / "song_timeline.json").write_text(json.dumps(drumchart.song_timeline(chart),
                                                             separators=(",", ":")), encoding="utf-8")
+        vocals = vocalchart.load_song_folder(folder)
+        pitch = vocalchart.vocal_pitch_json(vocals) if vocals else {"notes": []}
+        if vocals:
+            (work / "lyrics.json").write_text(json.dumps(vocalchart.lyrics_json(vocals), ensure_ascii=False,
+                                                         separators=(",", ":")), encoding="utf-8")
+            (work / "vocal_pitch.json").write_text(json.dumps(pitch, separators=(",", ":")), encoding="utf-8")
         manifest = {
             "feedpak_version": FEEDPAK_VERSION,
             "title": title or ini.get("name") or folder.name,
@@ -188,6 +198,11 @@ def convert(src: Path, out: Path, title=None, artist=None, album=None, year=None
                                      "drum_tab": "drum_tab.json"}]
         manifest["drum_tab"] = "drum_tab.json"
         manifest["song_timeline"] = "song_timeline.json"
+        if vocals:
+            manifest["lyrics"] = "lyrics.json"
+            manifest["lyrics_source"] = "authored"
+            if pitch["notes"]:
+                manifest["vocal_pitch"] = "vocal_pitch.json"
         (work / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
                                             encoding="utf-8")
         out = Path(out)
@@ -205,7 +220,9 @@ def convert(src: Path, out: Path, title=None, artist=None, album=None, year=None
             "star_power": len(chart.star_power), "fills": len(chart.fills), "solos": len(chart.solos),
             "sections": len(chart.sections), "delay": chart.offset, "five_lane": chart.five_lane,
             "levels_generated": sorted(chart.levels_generated),
-            "stems": [s["id"] for s in stems], "duration": manifest["duration"]}
+            "stems": [s["id"] for s in stems], "duration": manifest["duration"],
+            "lyrics": len(vocals.notes) if vocals else 0, "vocal_pitch": len(pitch["notes"]),
+            "vocal_phrases": len(vocals.phrases) if vocals else 0}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,9 +243,10 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", e)
         return 1
     log.info("wrote %s: %d drum notes (%s), %d star power, %d fills, %d solos, %d sections, "
-             "delay %+.3fs, generated levels %s, stems %s", s["out"], s["notes"], s["format"],
-             s["star_power"], s["fills"], s["solos"], s["sections"], s["delay"],
-             ", ".join(s["levels_generated"]) or "none", ", ".join(s["stems"]))
+             "delay %+.3fs, generated levels %s, stems %s; vocals: %d syllables, %d pitched, %d phrases",
+             s["out"], s["notes"], s["format"], s["star_power"], s["fills"], s["solos"], s["sections"],
+             s["delay"], ", ".join(s["levels_generated"]) or "none", ", ".join(s["stems"]),
+             s["lyrics"], s["vocal_pitch"], s["vocal_phrases"])
     return 0
 
 
