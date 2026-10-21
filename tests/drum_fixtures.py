@@ -61,7 +61,7 @@ def write_chart(path: Path, lines, *, resolution=192, tempos=((0, 120.0),), sigs
     sync = [f"  {t} = TS {n}" for t, n in sigs] + [f"  {t} = B {int(round(b * 1000))}" for t, b in tempos]
     sync.sort(key=lambda s: int(s.split("=")[0]))
     ev = [f'  {t} = E "section {n}"' for t, n in events]
-    def track(name, items):
+    def track(sec, items):
         out = []
         for item in sorted(items, key=lambda x: (x[0], x[1])):
             t, kind = item[0], item[1]
@@ -69,7 +69,7 @@ def write_chart(path: Path, lines, *, resolution=192, tempos=((0, 120.0),), sigs
                 out.append(f"  {t} = {kind} {item[2]} {item[3]}")
             else:
                 out.append(f"  {t} = E {item[2]}")
-        return [f"[{name}]", "{", *out, "}"]
+        return [f"[{sec}]", "{", *out, "}"]
 
     body = ["[Song]", "{", *song, "}", "[SyncTrack]", "{", *sync, "}", "[Events]", "{", *ev, "}",
             *track(section, lines)]

@@ -463,11 +463,9 @@ _chart_sections = chart_sections
 _chart_song_section = chart_song_section
 
 
-def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
-    ini = ini or {}
-    secs = _chart_sections(Path(path).read_text(encoding="utf-8-sig", errors="replace"))
-    song = _chart_song_section(secs)
-    res = int(float(song.get("Resolution", 192)))
+def chart_tempo(secs: dict, resolution: int) -> TempoMap:
+    """The [SyncTrack] of chart_sections() output (``B`` tempos, ``TS`` time signatures)
+    as a TempoMap. Shared with lib/fivefretchart.py."""
     tempos, sigs = [], []
     for line in secs.get("SyncTrack", []):
         k, _, v = line.partition("=")
@@ -480,7 +478,15 @@ def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert")
         elif parts[0] == "TS":
             den = 2 ** int(parts[2]) if len(parts) > 2 else 4
             sigs.append((t, int(parts[1]), den))
-    tempo = TempoMap(res, tempos, sigs)
+    return TempoMap(resolution, tempos, sigs)
+
+
+def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
+    ini = ini or {}
+    secs = _chart_sections(Path(path).read_text(encoding="utf-8-sig", errors="replace"))
+    song = _chart_song_section(secs)
+    res = int(float(song.get("Resolution", 192)))
+    tempo = chart_tempo(secs, res)
     sections = []
     for line in secs.get("Events", []):
         k, _, v = line.partition("=")

@@ -40,12 +40,14 @@ Rules implemented (YARG behaviour in brackets):
   After a chord: .mid needs the fret to be outside that chord; .chart always counts.
 - Threshold [SongEntry.IniBase]: ``hopo_frequency`` ticks if set; else
   ``eighthnote_hopo`` (res/2 when true, res/3 when false); else legacy
-  ``hopofreq`` 0..5 (4*res / 24,16,12,8,6,4); else res/3. When it was not
+  ``hopofreq`` 0..5 (4*res / 24,16,12,8,6,4; any other value falls back to
+  res/3, where YARG throws); else res/3. When it was not
   ``hopo_frequency``, .chart adds res//192. .mid always adds 1 [MidReader].
 - Sustains shorter than ``sustain_cutoff_threshold`` become 0. Default: res/3
   for .mid (0 in song.ini means 1 tick); no cutoff for .chart.
 - Notes on one tick merge into one note with OR-ed frets and the longest
-  sustain. An open plus frets keeps the frets.
+  sustain. An open plus frets keeps the frets, but still counts as a chord
+  (open bit included) when working out HOPOs, as in YARG.
 - ``song.ini`` ``delay`` (ms; .chart ``Offset`` as fallback) is added to every time.
 
 Where these differ from the original plan (task 3 brief), YARG wins:
@@ -69,8 +71,8 @@ from pathlib import Path
 import drumchart
 import fivefret
 from drumchart import (DIFF_START, LOWER_LEVELS, TempoMap, chart_sections, chart_song_section,
-                       find_chart_file, ini_bool, ini_delay_seconds, load_song_ini, normalize_text,
-                       read_mid, track_events)
+                       chart_tempo, find_chart_file, ini_bool, ini_delay_seconds, load_song_ini,
+                       normalize_text, read_mid, track_events)
 
 PARTS = fivefret.PARTS
 PART_NAMES = {"guitar": "Guitar", "rhythm": "Rhythm", "bass": "Bass"}
@@ -275,21 +277,6 @@ def parse_mid(path: Path, ini: dict | None = None, part: str = "guitar", difficu
 
 # ── notes.chart ─────────────────────────────────────────────────────────────
 
-def _chart_tempo(secs: dict, resolution: int) -> TempoMap:
-    tempos, sigs = [], []
-    for line in secs.get("SyncTrack", []):
-        k, _, v = line.partition("=")
-        parts = v.split()
-        if not parts:
-            continue
-        t = int(k.strip())
-        if parts[0] == "B":
-            tempos.append((t, int(parts[1]) / 1000.0))
-        elif parts[0] == "TS":
-            sigs.append((t, int(parts[1]), 2 ** int(parts[2]) if len(parts) > 2 else 4))
-    return TempoMap(resolution, tempos, sigs)
-
-
 def parse_chart(path: Path, ini: dict | None = None, part: str = "guitar",
                 difficulty: str = "expert") -> FiveFretChart:
     ini = ini or {}
@@ -336,7 +323,7 @@ def parse_chart(path: Path, ini: dict | None = None, part: str = "guitar",
         chart_off = float(song.get("Offset", 0) or 0)
     except ValueError:
         chart_off = 0.0
-    return _build(part, raw, resolve, _chart_tempo(secs, res), ini_delay_seconds(ini, chart_off),
+    return _build(part, raw, resolve, chart_tempo(secs, res), ini_delay_seconds(ini, chart_off),
                   hopo_threshold(ini, res, "chart"), sustain_cutoff(ini, res, "chart"), False, sp, solos,
                   "chart")
 

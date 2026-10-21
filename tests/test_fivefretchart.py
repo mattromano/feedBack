@@ -116,6 +116,49 @@ def test_ini_hopo_and_sustain_overrides(tmp_path):
     assert cut.notes[0].length == 0.0
 
 
+def test_mid_hopo_frequency_adds_one_tick(tmp_path):
+    # MidReader: threshold = hopo_frequency + 1, so 100 -> notes up to 101 ticks apart are HOPOs
+    ini = {"hopo_frequency": "100"}
+    at = fivefretchart.parse_mid(_mid(tmp_path / "a.mid", [(0, G, 10), (101, R, 10)]), ini)
+    past = fivefretchart.parse_mid(_mid(tmp_path / "b.mid", [(0, G, 10), (102, R, 10)]), ini)
+    assert _hopos(at) == [False, True]
+    assert _hopos(past) == [False, False]
+
+
+def test_legacy_hopofreq(tmp_path):
+    # hopofreq 5 -> 4 * 480 / 4 = 480 ticks (+1 for .mid); out-of-range values fall back to 480/3
+    def gap(ticks, ini):
+        return _hopos(fivefretchart.parse_mid(_mid(tmp_path / f"{ticks}.mid", [(0, G, 10), (ticks, R, 10)]), ini))[1]
+    assert gap(481, {"hopofreq": "5"}) is True
+    assert gap(482, {"hopofreq": "5"}) is False
+    assert gap(161, {"hopofreq": "9"}) is True
+    assert gap(162, {"hopofreq": "9"}) is False
+    assert fivefretchart.hopo_threshold({"hopofreq": "0"}, 480, "chart") == 4 * 480 // 24 + 2
+
+
+def test_mid_sustain_cutoff_zero_means_one_tick(tmp_path):
+    assert fivefretchart.sustain_cutoff({"sustain_cutoff_threshold": "0"}, 480, "mid") == 1
+    assert fivefretchart.sustain_cutoff({"sustain_cutoff_threshold": "0"}, 480, "chart") == 0
+    c = fivefretchart.parse_mid(_mid(tmp_path / "n.mid", [(0, G, 100)]), {"sustain_cutoff_threshold": "0"})
+    assert c.notes[0].length > 0                   # not the 160-tick default
+
+
+def test_mid_marker_precedence(tmp_path):
+    tap_vs_hopo = fivefretchart.parse_mid(_mid(tmp_path / "a.mid", [(0, G, 10), (120, R, 10), (120, TAP, 10),
+                                                                    (120, FORCE_HOPO, 10)]))
+    assert (tap_vs_hopo.notes[1].tap, tap_vs_hopo.notes[1].hopo) == (True, False)
+    hopo_vs_strum = fivefretchart.parse_mid(_mid(tmp_path / "b.mid", [(0, G, 10), (240, R, 10),
+                                                                      (240, FORCE_STRUM, 10),
+                                                                      (240, FORCE_HOPO, 10)]))
+    assert _hopos(hopo_vs_strum) == [False, True]
+
+
+def test_mid_marker_excludes_end_tick(tmp_path):
+    # A force-HOPO marker on ticks 0..240 covers [0, 239]: the note at 240 keeps its natural (strum) state.
+    c = fivefretchart.parse_mid(_mid(tmp_path / "n.mid", [(0, G, 10), (240, R, 10), (0, FORCE_HOPO, 240)]))
+    assert _hopos(c) == [True, False]
+
+
 def test_star_power_and_solo_ranges(tmp_path):
     c = fivefretchart.parse_mid(_mid(tmp_path / "n.mid", [(0, G, 10), (0, 116, 960), (960, 103, 480)]))
     assert c.star_power == [(0.0, 1.0)]
@@ -180,6 +223,22 @@ def test_chart_hopo_threshold_and_no_default_sustain_cutoff(tmp_path):
     assert _hopos(c) == [False, True, False]
     assert c.notes[0].length > 0
     assert fivefretchart.parse_chart(p, {"sustain_cutoff_threshold": "64"}).notes[0].length == 0.0
+    assert fivefretchart.hopo_threshold({}, 480, "chart") == 162          # 480/3 + 480//192, not 480/3 + 1
+
+
+def test_chart_single_after_chord_is_hopo(tmp_path):
+    # .chart has no subset exception: a single note within the threshold after a chord is a HOPO,
+    # even when its fret was in that chord (it would be a strum in .mid).
+    p = write_chart(tmp_path / "notes.chart", [(0, "N", 0, 0), (0, "N", 1, 0), (64, "N", 1, 0)],
+                    section="ExpertSingle")
+    assert _hopos(fivefretchart.parse_chart(p)) == [False, True]
+
+
+def test_chart_tap_beats_forced(tmp_path):
+    p = write_chart(tmp_path / "notes.chart", [(0, "N", 0, 0), (192, "N", 1, 0), (192, "N", 5, 0),
+                                               (192, "N", 6, 0)], section="ExpertSingle")
+    n = fivefretchart.parse_chart(p).notes[1]
+    assert (n.tap, n.hopo) == (True, False)
 
 
 def test_chart_missing_part_raises(tmp_path):
