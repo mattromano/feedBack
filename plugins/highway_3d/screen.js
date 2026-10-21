@@ -812,6 +812,13 @@
         return /bass/i.test(bundle?.songInfo?.arrangement || '') ? 4 : NSTR;
     }
 
+    // Fret-number label multiplier from core's highway.setLabelScale
+    // (bundle.labelScale, per highway instance). Older cores omit it → 1.
+    function resolveLabelScale(bundle) {
+        const v = bundle && bundle.labelScale;
+        return (typeof v === 'number' && Number.isFinite(v)) ? Math.max(0.75, Math.min(2.5, v)) : 1;
+    }
+
     /** Chart-format tuning entries are semitone offsets from instrument standard. */
     const _NOTE_NAMES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -4863,6 +4870,10 @@
         let textSize = 0.5;
         let _textSizeMul = 1.0;
         let _textSizeMulApplied = -1;
+        // Fret-number glyph multiplier (bundle.labelScale). Scales only the
+        // fret-number sprites in world space — textures are untouched, so the
+        // txtMat cache gains nothing per scale step. Refreshed in update().
+        let _labelScaleMul = 1;
         // Visual look dials (issue: pastel/washed-out feel + too-much-glow
         // complaint). vibrancy raises idle string/note opacity and de-whites
         // the hit-note body; glow scales every emissive contribution +
@@ -9643,7 +9654,7 @@
                 mat.depthWrite = false;
                 mat.opacity = 0.55;
                 const lbl = new T.Sprite(mat);
-                const scale = 5.5 * (0.5 + textSize) * fretLabelScaleForFret(f);
+                const scale = 5.5 * (0.5 + textSize) * _labelScaleMul * fretLabelScaleForFret(f);
                 lbl.scale.set(scale * K, scale * K, 1);
                 lbl.position.set(xFretMid(f), yTop - S_GAP * 0.4, -K);
                 lbl.visible = inlayLabelsVisible;
@@ -10899,15 +10910,17 @@
             // textSize ∈ [0,1]; _textSizeMul ∈ [0.5, 1.5] with 0.5 ↦ 1.0×
             // so default behaviour matches what the renderer did pre-slider.
             _textSizeMul = 0.5 + textSize;
+            _labelScaleMul = resolveLabelScale(bundle);
             // Rescale inlay labels to track the live text-size slider.
             // buildBoard() sets an initial scale using (0.5 + textSize) but
             // _textSizeMul is only authoritative from here onward.
             // Guard: only update when the multiplier actually changed.
-            if (_textSizeMul !== _textSizeMulApplied) {
-                _textSizeMulApplied = _textSizeMul;
+            const _inlayMul = _textSizeMul * _labelScaleMul;
+            if (_inlayMul !== _textSizeMulApplied) {
+                _textSizeMulApplied = _inlayMul;
                 for (let i = 0; i < _inlayLabels.length; i++) {
                     const f = INLAY_LABEL_FRETS[i];
-                    const s = 5.5 * _textSizeMul * K * fretLabelScaleForFret(f);
+                    const s = 5.5 * _inlayMul * K * fretLabelScaleForFret(f);
                     _inlayLabels[i].scale.set(s, s, 1);
                 }
             }
@@ -13034,7 +13047,7 @@
                                 _setLabelMap(lbl, mat);
                                 lbl.position.set(xFretMid(f), yMinF, z);
                                 lbl.renderOrder = renderOrderForLayerAtZ(z, 'CHORD_FRET_LABEL');
-                                const _flS = 7.0 * K * (1 + 0.4 * chDt / AHEAD) * _textSizeMul * fretLabelScaleForFret(f);
+                                const _flS = 7.0 * K * (1 + 0.4 * chDt / AHEAD) * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(f);
                                 lbl.scale.set(_flS, _flS, 1);
                                 lbl.material.opacity = _chFretLblAlpha;
                             }
@@ -13603,7 +13616,7 @@
                         false, 'fretRow');
                     lb.position.set(xFretMid(f), yBottom - S_GAP * 1.4, 0.5 * K);
                     lb.material.opacity = isInAnchor ? 1.0 : 0.55;
-                    const scale = 5.95 * _textSizeMul * fretLabelScaleForFret(f);
+                    const scale = 5.95 * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(f);
                     lb.scale.set(scale * K, scale * K, 1);
                     lb.renderOrder = 1000;
                 }
@@ -13766,7 +13779,7 @@
                         // Scale grows linearly from 2× at max lookahead to 1× at hit line,
                         // combined with natural perspective attenuation the label starts
                         // visibly larger and converges to the row-label size at z=0.
-                        const sz = 7.0 * K * (1 + 0.4 * dt / AHEAD) * _textSizeMul * fretLabelScaleForFret(f);
+                        const sz = 7.0 * K * (1 + 0.4 * dt / AHEAD) * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(f);
                         sp.scale.set(sz, sz, 1);
                     }
 
@@ -14241,7 +14254,7 @@
             lb.material = instMat;
             lb.renderOrder = 1000;
             const ghostOuterL = Math.max(NW * 1.1, NH * 1.1);
-            const ghostLblS = 0.7 * ghostOuterL * _textSizeMul * fretLabelScaleForFret(fretForScale);
+            const ghostLblS = 0.7 * ghostOuterL * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(fretForScale);
             const ghostLblScaled = ghostLblS * growScale;
             lb.scale.set(ghostLblScaled, ghostLblScaled, 1);
             // Z=0 matches the projection frame plane exactly — avoids parallax
@@ -15132,7 +15145,7 @@
                         );
                         // Same scale ramp as fret column markers: 2× base at max lookahead,
                         // converging to 1× at hit line.  Final size matches row labels.
-                        const flS = 7.0 * K * (1 + 0.4 * Math.max(0, dt) / AHEAD) * _textSizeMul * fretLabelScaleForFret(n.f);
+                        const flS = 7.0 * K * (1 + 0.4 * Math.max(0, dt) / AHEAD) * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(n.f);
                         fretLabel.scale.set(flS, flS, 1);
                         fretLabel.material.opacity = alpha;
                     }
@@ -15156,10 +15169,10 @@
                             spr.material.opacity = alpha;
                         };
                         if (_showFingerHints) {
-                            _drawTeachMark(teachingFingerLabel(n.fg), '#7fd1ff', NW * 0.95, 'teachFg');
+                            _drawTeachMark(teachingFingerLabel(n.fg), '#7fd1ff', NW * 0.95 * _labelScaleMul, 'teachFg');
                         }
                         if (_drawTeachingMarks) {
-                            _drawTeachMark(teachingDegreeLabel(n.sd), '#ffcc66', -NW * 0.95, 'teachSd');
+                            _drawTeachMark(teachingDegreeLabel(n.sd), '#ffcc66', -NW * 0.95 * _labelScaleMul, 'teachSd');
                         }
                     }
                 }
@@ -15189,7 +15202,7 @@
                             ? 'ARP_NOTE_FRET_LABEL'
                             : 'NOTE_FRET_LABEL'
                     );
-                    const _flS2 = 7.0 * K * (1 + 0.4 * dt / AHEAD) * _textSizeMul * fretLabelScaleForFret(n.f);
+                    const _flS2 = 7.0 * K * (1 + 0.4 * dt / AHEAD) * _textSizeMul * _labelScaleMul * fretLabelScaleForFret(n.f);
                     fl2.scale.set(_flS2, _flS2, 1);
                     fl2.material.opacity = _alpha2;
                 }
@@ -16672,6 +16685,7 @@
     window.feedBackViz_highway_3d.contextType = 'webgl2';
     window.feedBackViz_highway_3d.__test = {
         getAnalyserForBridgeTest: _bgGetAnalyser,
+        resolveLabelScale,
         readBandsForBridgeTest: _bgReadBands,
         resetAnalyserBridgeForTest() { _bgBridgeKeys.clear(); _bgAudio = null; _bgAudioCore = null; _bgAudioFailedAt = 0; },
     };

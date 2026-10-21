@@ -627,6 +627,9 @@ function createHighway() {
         b.inverted = hwState._inverted;
         b.lefty = hwState._lefty;
         b.renderScale = _effectiveRenderScale();
+        // Fret-number / note-label multiplier (setLabelScale, 0.75–2.5) for
+        // renderers that draw their own labels (3D highway). Per instance.
+        b.labelScale = hwState._labelScale;
         b.lyricsVisible = hwState.showLyrics;
         // Teaching marks sd/ch overlay pref (§6.2.2) so custom renderers
         // (e.g. the 3D highway) can mirror the 2D opt-in toggle. The fg

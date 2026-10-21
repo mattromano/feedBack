@@ -150,6 +150,7 @@ Every per-frame renderer call receives a `bundle` from feedBack core. Fields use
 - `inverted` — display flag honored via `sY(s)` (low-string-on-top vs the default low-string-on-bottom)
 - `lyricsVisible` — gate for lyrics overlay
 - `renderScale` — pixel-ratio multiplier from the user's quality setting
+- `labelScale` — fret-number glyph multiplier (0.75–2.5) from `highway.setLabelScale`, per highway instance. Read each frame into `_labelScaleMul` via `resolveLabelScale()` and multiplied into the fret-number sprite scales only (fret row, inlays, column markers, note/chord fret labels, board-ghost digit). Textures are not re-rasterised, so the `txtMat()` cache is unaffected. Absent on older cores → 1.
 - `songInfo.arrangement` — only field of `songInfo` this plugin reads, used as the bass-name fallback in `resolveStringCount()`
 - `stringCount` — feedBack#93; always prefer this over deriving from tuning/arrangement
 - `lefty` — display flag consumed by this renderer from `bundle.lefty`. Captured into `_leftyCached` before each frame so `xFret()`, `xFretMid()`, `boardSpanX()`, board geometry, note placement, and the camera shoulder offset mirror the fret axis for left-handed mode. A runtime lefty flip rebuilds board state and mirrors `curX`/`tgtX` plus the lookahead camera X cache so the camera does not drift across the neck.

@@ -152,3 +152,41 @@ test('setLabelScale { persist: false } applies without writing storage', (t) => 
     hw.setLabelScale(1.75);
     assert.equal(store.get('highwayLabelScale'), '1.75', 'default still persists');
 });
+
+// Custom renderers (3D highway) draw their own labels, so the scale has to
+// reach them through the per-instance draw bundle — not a global — so each
+// splitscreen / band lane honours its own highway's setting.
+function swappableCanvas() {
+    const c = fakeCanvas();
+    c.cloneNode = () => swappableCanvas();
+    c.replaceWith = () => {};
+    return c;
+}
+
+function captureBundle(hw) {
+    let seen = null;
+    hw.setRenderer({ contextType: '2d', init(_c, b) { seen = { labelScale: b.labelScale }; }, draw() {} });
+    return seen;
+}
+
+test('draw bundle carries the highway instance label scale', (t) => {
+    const hw = makeHighway();
+    if (!hw) return t.skip('highway.js not importable under node: ' + (hwMod.error && hwMod.error.message));
+    hw.init(swappableCanvas());
+    hw.setLabelScale(1, { persist: false });
+    assert.equal(captureBundle(hw).labelScale, 1);
+    hw.setLabelScale(2.25, { persist: false });
+    assert.equal(captureBundle(hw).labelScale, 2.25);
+});
+
+test('two highways expose independent bundle label scales', (t) => {
+    const a = makeHighway();
+    const b = makeHighway();
+    if (!a || !b) return t.skip('highway.js not importable under node');
+    a.init(swappableCanvas());
+    b.init(swappableCanvas());
+    a.setLabelScale(2.5, { persist: false });
+    b.setLabelScale(0.75, { persist: false });
+    assert.equal(captureBundle(a).labelScale, 2.5);
+    assert.equal(captureBundle(b).labelScale, 0.75);
+});
