@@ -137,17 +137,23 @@ class ChartEntry:
 SNG_CACHE = Path.home() / ".cache" / "slopsmith-drums" / "sng"
 
 
+def sng_cache_dir(path: Path) -> Path:
+    """Where a .sng package is (or would be) unpacked: keyed by path, size and mtime. Extracts nothing."""
+    import hashlib
+    path = Path(path)
+    st = path.stat()
+    key = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
+    return SNG_CACHE / key
+
+
 def chart_folder(path: Path) -> Path:
     """A song folder for a chart source: folders as-is, .sng packages unpacked (cached)."""
     path = Path(path)
     if path.is_dir():
         return path
     if path.suffix.lower() == ".sng":
-        import hashlib
         import sngfile
-        st = path.stat()
-        key = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
-        out = SNG_CACHE / key
+        out = sng_cache_dir(path)
         if not (out / "song.ini").exists():
             sngfile.extract_sng(path, out)
         return out
