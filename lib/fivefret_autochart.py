@@ -35,7 +35,7 @@ Lower levels (`reduce_level`, `limit_lanes`, `auto_levels`), where they differ f
   would let a note sit next to a kept note at beat 0). It and the other beat-length tests
   (grace gap, fast-jump reach, one-beat sustain floor) allow the same 1/128 beat, so
   steady notes at ms-rounded times are not dropped at non-round tempos.
-- Easy padding is 1.5 beats instead of 2 (tuned on the benchmark's tune split; see
+- Easy padding is 1.25 beats instead of 2 (tuned on the benchmark's tune split; see
   `_REDUCE`).
 - A fast-jump shift is clamped to the highway (Onyx's `pred` / `succ` would fail there).
 - `auto_levels(only_missing=True)` keeps any level the chart has with notes, as Plan 1's
@@ -58,7 +58,7 @@ from drumchart import TempoMap
 from fivefretchart import FiveFretChart, FretNote
 
 GENERATOR = "feedback-fivefret-autochart"
-GENERATOR_VERSION = "2"
+GENERATOR_VERSION = "3"
 
 _MERGE_WINDOW = 0.001        # notes this close (seconds) form one event
 
@@ -457,14 +457,15 @@ TICKS_PER_BEAT = 1920        # beat positions are compared as integer ticks (192
 _ALIGN_TOL = TICKS_PER_BEAT // 128   # 1/128 beat: absorbs millisecond-rounded note times
 # level -> (grid unit, padding, jump time in ticks; jump limit in frets), Onyx's `divn`,
 # `padding`, `jumpTime` and `jumpDiff` (Reductions.hs l.240-285).
-# Easy padding is 1.5 beats, not Onyx's 2 (generator v2, Plan 5 Task 9 tune round 1, tune
-# split only). Tune medians of Easy auto/real density over 624 hand-charted Easy parts:
-# padding 2 (Onyx) 0.717, padding 1.5 0.795, padding 1 1.382 (grid unit 1 or 2 alike; at
-# padding 1 Easy keeps nearly all of Medium). Pass band 0.80-1.20: none landed in it, 1.5
-# is the closest. Hard / Medium unchanged; grid unit and jump time stay 2 beats.
+# Easy padding is 1.25 beats, not Onyx's 2 (Plan 5 Task 9 tune rounds 1-2, tune split
+# only). Tune medians of Easy auto/real density over 624 hand-charted Easy parts:
+# padding 2 (Onyx, v1) 0.717, 1.5 (v2) 0.795, 1.25 (v3) 0.810, 1.125 0.810, 1 1.382 (grid
+# unit 1 or 2 alike; at padding 1 Easy keeps nearly all of Medium). Pass band 0.80-1.20;
+# 1.25 and 1.125 tie, the larger padding wins. Hard / Medium unchanged; grid unit and
+# jump time stay 2 beats.
 _REDUCE = {"hard": (TICKS_PER_BEAT // 2, TICKS_PER_BEAT // 2, TICKS_PER_BEAT // 2, 3),
            "medium": (TICKS_PER_BEAT, TICKS_PER_BEAT, TICKS_PER_BEAT, 2),
-           "easy": (2 * TICKS_PER_BEAT, 3 * TICKS_PER_BEAT // 2, 2 * TICKS_PER_BEAT, 2)}
+           "easy": (2 * TICKS_PER_BEAT, 5 * TICKS_PER_BEAT // 4, 2 * TICKS_PER_BEAT, 2)}
 _SHT_STRENGTH = {"strum": 0, "hopo": 1, "tap": 2}
 
 
