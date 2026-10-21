@@ -64,6 +64,10 @@ Deferred follow-up slices: a `contributor` role so plugins ship their own challe
 
 The chart-transform slice (#952) is an active provider-coordinator domain. It owns provider lifecycle, persisted selection, refresh, failure attribution, and redaction-safe diagnostics. Its synchronous highway hook applies isolated provider output after difficulty filtering to built-in, custom-renderer, and getter consumers across primary and splitscreen highways. No compatibility shim is needed; per-panel independent selection remains a follow-up.
 
+## Gamepad-Input Control Plane Slice
+
+The gamepad-input slice (spec 014) is an active, core-owned provider-coordinator: a plugin claims a controller and receives its raw button/axis changes through the in-page `window.feedBack.gamepadInput` handle, while `inspect` and `list-sources` give the Capability Inspector read-only snapshots. `claimCount()` is the hook core's menu gamepad support uses to stand down while a controller is played. The first consumer is the five-fret plugin, which names the inputs through its own controller profiles.
+
 ## Recommended Next Slices
 
 The plugin inventory suggests this migration order after the audio graph/session and playback slices:
