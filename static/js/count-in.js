@@ -134,15 +134,20 @@ const _CREDITS_HOLD_MS = 3000;
 const _CREDITS_MAX_MS = 12000;
 // A user seek or play/pause during a count-in (including the rewind sweep)
 // cancels it, which returns display time to the audio clock. transport.js emits
-// 'transport:interrupt'; the count-in's own loop-wrap seek is never announced.
+// 'transport:interrupt' only for user seek reasons (USER_SEEK_REASONS) and for
+// togglePlay; programmatic seeks are never announced.
 // Registered lazily (the bus does not exist at module-load time), once per bus.
 let _interruptBus = null;
+// True while the count-in dispatches its own loop:restart. Subscribers react to
+// it synchronously (note_detect's drill conductor calls setLoop), and nothing
+// they do in response may cancel the count-in that is announcing the restart.
+let _dispatchingLoopRestart = false;
 function _listenForTransportInterrupt() {
     const bus = window.feedBack;
     if (!bus || typeof bus.on !== 'function' || bus === _interruptBus) return;
     _interruptBus = bus;
     bus.on('transport:interrupt', (e) => {
-        if (!_countingIn) return;
+        if (!_countingIn || _dispatchingLoopRestart) return;
         _cancelCountIn();
         // A seek leaves the transport paused mid-count-in with isPlaying still
         // set; sync it like the sweep abort does. A pause press is followed by
@@ -294,7 +299,12 @@ export async function startCountIn(opts = {}) {
         S.lastAudioTime = loopA;
         window.highway.setTime(loopA);
         if (window.feedBack) {
-            window.feedBack.emit('loop:restart', { loopA, loopB, time: loopA });
+            _dispatchingLoopRestart = true;
+            try {
+                window.feedBack.emit('loop:restart', { loopA, loopB, time: loopA });
+            } finally {
+                _dispatchingLoopRestart = false;
+            }
         }
         beginCount();
         return;
@@ -320,7 +330,11 @@ export async function startCountIn(opts = {}) {
             _countInRaf = requestAnimationFrame(rewindStep);
         } else {
             _countInRaf = 0;
-            clearSweepTime();
+            // Keep the display clock pinned at A until the seek lands: until
+            // then the audio clock still reads near loop B, and releasing the
+            // sweep now would flash the chart back there for a frame or two.
+            // Both branches of the .then below release it.
+            setSweepTime(loopA);
             // Rewind done — set final position and start count.
             // Await the JUCE seek so the engine has repositioned before
             // we start the click track (HTML5 path is synchronous).
@@ -363,7 +377,13 @@ export async function startCountIn(opts = {}) {
                 // audio position.
                 S.lastAudioTime = r.to;
                 window.highway.setTime(r.to);
-                window.feedBack.emit('loop:restart', { loopA, loopB, time: loopA });
+                clearSweepTime();
+                _dispatchingLoopRestart = true;
+                try {
+                    window.feedBack.emit('loop:restart', { loopA, loopB, time: loopA });
+                } finally {
+                    _dispatchingLoopRestart = false;
+                }
                 beginCount();
             });
         }
@@ -454,6 +474,10 @@ export async function startSongCountIn() {
         count++;
         if (count > clicks) {
             hideCountOverlay();
+            // _countingIn MUST be cleared before togglePlay(): togglePlay emits
+            // 'transport:interrupt' (it is the user play/pause path), and the
+            // listener would otherwise treat this handoff as a user pressing
+            // pause mid-count-in and cancel it — playback would never start.
             _countingIn = false;
             // Hand off to the normal play path — togglePlay() flips isPlaying,
             // updates the button, and emits song:play/resume for plugins.

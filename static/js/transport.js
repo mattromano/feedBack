@@ -263,6 +263,12 @@ function _juceSeekWithTimeout(s) {
 // session. Callers that need the actual landed position (because JUCE may
 // clamp or HTML5 may snap to the seekable range) should read `to` rather
 // than re-using the requested `s`.
+// The `_audioSeek` reasons a person causes directly. Everything else is
+// programmatic and leaves a running count-in alone.
+//   'seek-by'      — the ±5 s buttons and the ArrowLeft/ArrowRight shortcuts (seekBy)
+//   'song-restart' — the restart button / shortcut (app.js restartCurrentSong)
+export const USER_SEEK_REASONS = new Set(['seek-by', 'song-restart']);
+
 export async function _audioSeek(s, reason) {
     // Single funnel for every audio repositioning. Emits song:seek so
     // plugins (notedetect detection-suppression during seek transients,
@@ -270,9 +276,11 @@ export async function _audioSeek(s, reason) {
     // jump regardless of which UI path triggered it. `reason` is a
     // free-form short string ('seek-by', 'loop-wrap', 'loop-set',
     // 'arrangement-restore', 'jump-fix') so subscribers can filter.
-    // A user-initiated seek interrupts a running count-in (count-in.js listens).
-    // The count-in's own loop-wrap seek must not cancel itself.
-    if (reason !== 'loop-wrap') window.feedBack.emit('transport:interrupt', { kind: 'seek', reason: reason || null });
+    // Only a USER seek interrupts a running count-in (count-in.js listens).
+    // Programmatic seeks (a plugin re-arming the loop from loop:restart, a
+    // session resume, an arrangement restore, the count-in's own loop-wrap)
+    // must not, or the count-in is cancelled and playback stops dead.
+    if (USER_SEEK_REASONS.has(reason)) window.feedBack.emit('transport:interrupt', { kind: 'seek', reason });
     const gen = _audioSeekGen;
     _audioSeekChain = _audioSeekChain.then(async () => {
         if (gen !== _audioSeekGen) return { completed: false, from: NaN, to: NaN };

@@ -85,6 +85,9 @@ function loadFunctions(sandbox, src) {
         // helper + constant. Tests can override jucePlayer.seek to vary
         // behavior; the timeout (2 s) is well above any test setTimeout.
         const _JUCE_SEEK_TIMEOUT_MS = 2000;
+        // _audioSeek consults the user-seek allowlist before announcing a
+        // count-in interrupt; pull the real declaration in.
+        ${src.match(/const USER_SEEK_REASONS = [^;]+;/)[0]}
         ${extractFunction(src, 'function _juceSeekWithTimeout(')}
         ${extractFunction(src, 'function _audioTime()')}
         ${extractFunction(src, 'function _audioDuration()')}
