@@ -35,6 +35,8 @@ Lower levels (`reduce_level`, `limit_lanes`, `auto_levels`), where they differ f
   would let a note sit next to a kept note at beat 0). It and the other beat-length tests
   (grace gap, fast-jump reach, one-beat sustain floor) allow the same 1/128 beat, so
   steady notes at ms-rounded times are not dropped at non-round tempos.
+- Easy padding is 1.5 beats instead of 2 (tuned on the benchmark's tune split; see
+  `_REDUCE`).
 - A fast-jump shift is clamped to the highway (Onyx's `pred` / `succ` would fail there).
 - `auto_levels(only_missing=True)` keeps any level the chart has with notes, as Plan 1's
   `ensure_levels` does (Onyx's `orIfNull` regenerates a level with 5 or fewer notes).
@@ -56,7 +58,7 @@ from drumchart import TempoMap
 from fivefretchart import FiveFretChart, FretNote
 
 GENERATOR = "feedback-fivefret-autochart"
-GENERATOR_VERSION = "1"
+GENERATOR_VERSION = "2"
 
 _MERGE_WINDOW = 0.001        # notes this close (seconds) form one event
 
@@ -453,10 +455,16 @@ def autochart(arr, grid: BeatGrid, part: str) -> FiveFretChart:
 
 TICKS_PER_BEAT = 1920        # beat positions are compared as integer ticks (1920 = 480 * 4)
 _ALIGN_TOL = TICKS_PER_BEAT // 128   # 1/128 beat: absorbs millisecond-rounded note times
-# level -> (grid unit / padding / jump time in ticks, jump limit in frets)
-_REDUCE = {"hard": (TICKS_PER_BEAT // 2, 3),
-           "medium": (TICKS_PER_BEAT, 2),
-           "easy": (2 * TICKS_PER_BEAT, 2)}
+# level -> (grid unit, padding, jump time in ticks; jump limit in frets), Onyx's `divn`,
+# `padding`, `jumpTime` and `jumpDiff` (Reductions.hs l.240-285).
+# Easy padding is 1.5 beats, not Onyx's 2 (generator v2, Plan 5 Task 9 tune round 1, tune
+# split only). Tune medians of Easy auto/real density over 624 hand-charted Easy parts:
+# padding 2 (Onyx) 0.717, padding 1.5 0.795, padding 1 1.382 (grid unit 1 or 2 alike; at
+# padding 1 Easy keeps nearly all of Medium). Pass band 0.80-1.20: none landed in it, 1.5
+# is the closest. Hard / Medium unchanged; grid unit and jump time stay 2 beats.
+_REDUCE = {"hard": (TICKS_PER_BEAT // 2, TICKS_PER_BEAT // 2, TICKS_PER_BEAT // 2, 3),
+           "medium": (TICKS_PER_BEAT, TICKS_PER_BEAT, TICKS_PER_BEAT, 2),
+           "easy": (2 * TICKS_PER_BEAT, 3 * TICKS_PER_BEAT // 2, 2 * TICKS_PER_BEAT, 2)}
 _SHT_STRENGTH = {"strum": 0, "hopo": 1, "tap": 2}
 
 
@@ -547,7 +555,7 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
     same top fret, and (Medium / Easy) sustains pulled back a beat from the next note."""
     if level not in _REDUCE:
         raise ValueError(f"unknown level {level!r}")
-    unit, jump = _REDUCE[level]
+    unit, padding, jump_time, jump = _REDUCE[level]
     meter = _Meter(grid)
     is_od = _overdrive_test(star_power)
 
@@ -593,8 +601,8 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
     keep = [False] * len(graced)
     for k in order:
         t = graced[k].tick
-        j = bisect.bisect_right(kept_ticks, t - unit + _ALIGN_TOL)
-        if j < len(kept_ticks) and kept_ticks[j] < t + unit - _ALIGN_TOL:
+        j = bisect.bisect_right(kept_ticks, t - padding + _ALIGN_TOL)
+        if j < len(kept_ticks) and kept_ticks[j] < t + padding - _ALIGN_TOL:
             continue
         bisect.insort(kept_ticks, t)
         keep[k] = True
@@ -615,7 +623,7 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
     for a, b in zip(out, out[1:]):
         if not a.lanes or not b.lanes:
             continue
-        reach = unit + _ALIGN_TOL
+        reach = jump_time + _ALIGN_TOL
         near = b.tick - a.tick <= reach or (a.length > 0 and b.tick - end_tick(a) <= reach)
         if not near:
             continue

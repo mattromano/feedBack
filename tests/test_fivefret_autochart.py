@@ -466,6 +466,18 @@ def test_steady_eighths_survive_on_hard():
     assert [n.time for n in hard] == [n.time for n in expert]
 
 
+def test_easy_spacing_one_and_a_half_beats():
+    # Generator v2: Easy padding is 1.5 beats (grid unit stays 2). Steady quarters at
+    # 120 bpm keep one note in two; dotted quarters (1.5 beats apart) all survive,
+    # where v1's 2-beat padding kept only 5 of these 9.
+    quarters = [_fn(i, G) for i in range(16)]
+    easy = ac.reduce_level(quarters, "easy", _grid())
+    assert [n.time for n in easy] == [i * 0.5 for i in range(0, 16, 2)]
+    dotted = [_fn(i * 1.5, G) for i in range(9)]
+    easy = ac.reduce_level(dotted, "easy", _grid())
+    assert [n.time for n in easy] == [n.time for n in dotted]
+
+
 def test_measure_line_notes_preferred():
     hard = ac.reduce_level([_fn(3.75, G), _fn(4.0, R)], "hard", _grid())
     assert _tf_beats(hard) == [(4.0, R)]
