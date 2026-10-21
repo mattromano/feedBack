@@ -42,7 +42,6 @@ import sys
 import time
 import zipfile
 from pathlib import Path, PureWindowsPath
-from statistics import median
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT / "lib") not in sys.path:
@@ -58,6 +57,10 @@ from fivefretchart import FretNote  # noqa: E402
 from song import arrangement_is_bass  # noqa: E402
 
 CACHE = Path.home() / ".cache" / "slopsmith-drums"
+DLC_ROOT = Path.home() / "Desktop" / "rocksmith" / "dlc"
+CH_SONGS = Path.home() / "Desktop" / "clone_hero_songs"
+STAGE_MARKER = ".five_fret_benchmark_stage"     # a staged dir this script made (safe to replace)
+NOT_FRETTED = ("drums", "drum", "piano", "keys")
 LOWER = ("hard", "medium", "easy")
 SVG_SECONDS = 30.0
 LANE_COLORS = ("#2ecc40", "#ff4136", "#ffdc00", "#0074d9", "#ff851b")
@@ -285,8 +288,11 @@ def stage_pack(src: Path, stage: Path) -> Path:
             wanted.add(sloppak._zip_member_key(manifest[key]))
     dest = stage / src.name
     if dest.exists():
+        if not (dest / STAGE_MARKER).is_file():
+            raise SkipPack("stage_dir_not_ours")       # never delete what we didn't make
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
+    (dest / STAGE_MARKER).write_text("staged by scripts/five_fret_benchmark.py\n", encoding="utf-8")
     for name in _member_names(src):
         key = sloppak._zip_member_key(name)
         if key is None:
@@ -317,8 +323,10 @@ def _load_staged(staged: Path):
 
 # ── scoring ─────────────────────────────────────────────────────────────────
 
-def _is_drums(arr) -> bool:
-    return (arr.type or "").lower() in ("drums", "drum") or is_drums_arrangement(arr.name or "")
+def _is_fretted(arr) -> bool:
+    """Not drums / piano / keys (by type), nor a drums arrangement by name."""
+    return (arr.type or "").strip().lower() not in NOT_FRETTED \
+        and not is_drums_arrangement(arr.name or "")
 
 
 def _baseline_absolute(arr, auto_notes) -> list[FretNote]:
@@ -347,7 +355,7 @@ def _bench(staged: Path, name: str, keep_notes: bool = False) -> tuple[list[dict
     parts, info = _real_parts_info(staged)
     loaded = _load_staged(staged)
     grid = ac.BeatGrid.from_beats(loaded.song.beats)
-    arrs = [a for a in loaded.song.arrangements if not _is_drums(a) and (a.notes or a.chords)]
+    arrs = [a for a in loaded.song.arrangements if _is_fretted(a) and (a.notes or a.chords)]
     autos: dict[int, object] = {}
 
     def auto_of(i):
@@ -434,9 +442,7 @@ def _metric(entry, key):
     return _abs_log_density(entry) if key == "abs_log_density" else entry.get(key)
 
 
-def _med(values):
-    vals = [v for v in values if v is not None]
-    return median(vals) if vals else None
+_med = fb._med
 
 
 def reducer_decision(rows: list[dict]) -> dict:
@@ -687,6 +693,15 @@ def _inside(p: Path, root: Path) -> bool:
     return p == root or root in p.parents
 
 
+def _unsafe_target(p: Path, library: Path) -> Path | None:
+    """The read-only root `p` overlaps (inside it, or an ancestor of it), or None.
+    Read-only: LIBRARY, the whole Rocksmith dlc root, and the Clone Hero caches."""
+    for root in (library, DLC_ROOT, CACHE, CH_SONGS):
+        if _inside(p, root) or _inside(root, p):
+            return root
+    return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("library", type=Path)
@@ -700,9 +715,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     stage = a.stage or a.out / "stage"
     for label, p in (("--out", a.out), ("--stage", stage)):
-        if _inside(p, a.library):
-            print(f"refusing: {label} {p} is inside the library {a.library} (read-only)",
-                  file=sys.stderr)
+        root = _unsafe_target(p, a.library)
+        if root is not None:
+            print(f"refusing: {label} {p} overlaps the read-only {root} (inside it or "
+                  "containing it)", file=sys.stderr)
             return 2
     logging.getLogger("sloppak").setLevel(logging.ERROR)
     logging.getLogger("fivefretchart").setLevel(logging.ERROR)

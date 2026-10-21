@@ -54,7 +54,8 @@ def _pack(lib: Path, name: str, arrs: dict, drum_source=None, extra=None) -> Pat
     arrangements/drums.json `drums.source`; `extra` (manifest entry, rel, payload)."""
     lib.mkdir(parents=True, exist_ok=True)
     entries = [{"id": aid, "name": w["name"], "file": f"arrangements/{aid}.json",
-                "tuning": [0] * 6, "capo": 0} for aid, w in arrs.items()]
+                "tuning": [0] * 6, "capo": 0, **({"type": w["type"]} if "type" in w else {})}
+               for aid, w in arrs.items()]
     files = {f"arrangements/{aid}.json": w for aid, w in arrs.items()}
     if drum_source is not None:
         entries.append({"id": "drums", "name": "Drums", "file": "arrangements/drums.json"})
@@ -197,6 +198,54 @@ def test_skip_reasons_counted(tmp_path, monkeypatch):
     assert not (out / "stage" / "nodrums.sloppak").exists()            # skipped before staging
 
 
+def test_refuses_out_or_stage_containing_library(tmp_path, capsys):
+    lib = tmp_path / "dlc" / "sloppak"
+    _pack(lib, "A.sloppak", {"lead": _wire("Lead")})
+    before = _snapshot(tmp_path / "dlc")
+    assert _run(lib, tmp_path / "dlc") == 2                          # out is an ancestor
+    assert _run(lib, tmp_path / "out", "--stage", str(tmp_path)) == 2  # stage is an ancestor
+    assert "refusing" in capsys.readouterr().err
+    assert _snapshot(tmp_path / "dlc") == before
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("root_attr", ["DLC_ROOT", "CACHE", "CH_SONGS"])
+def test_refuses_read_only_roots(tmp_path, monkeypatch, root_attr):
+    lib = tmp_path / "lib"
+    _pack(lib, "A.sloppak", {"lead": _wire("Lead")})
+    ro = tmp_path / "ro" / "inner"
+    ro.mkdir(parents=True)
+    monkeypatch.setattr(ffb, root_attr, ro)
+    assert _run(lib, ro / "out") == 2                                # inside
+    assert _run(lib, tmp_path / "ro") == 2                           # ancestor
+    assert list(ro.iterdir()) == []
+
+
+def test_stage_never_replaces_foreign_dir(tmp_path):
+    lib = tmp_path / "lib"
+    _pack(lib, "A.sloppak", {"lead": _wire("Lead")})
+    foreign = tmp_path / "stage" / "A.sloppak"
+    foreign.mkdir(parents=True)
+    (foreign / "keep.txt").write_text("mine")
+    with pytest.raises(ffb.SkipPack):
+        ffb.stage_pack(lib / "A.sloppak", tmp_path / "stage")
+    assert (foreign / "keep.txt").read_text() == "mine"
+    ours = ffb.stage_pack(lib / "A.sloppak", tmp_path / "stage2")
+    assert ffb.stage_pack(lib / "A.sloppak", tmp_path / "stage2") == ours   # ours: replaced
+
+
+def test_non_fretted_arrangements_never_candidates(tmp_path):
+    folder = _chart_folder(tmp_path / "ch" / "song")
+    lib = tmp_path / "lib"
+    keys = dict(_wire("Keys"), type="keys")
+    piano = dict(_wire("Piano"), type="piano")
+    _pack(lib, "K.sloppak", {"lead": _wire("Lead", t0=1.25), "keys": keys, "piano": piano},
+          {"source": "chart", "folder": str(folder), "warp": {"offset": 1.0}})
+    r = ffb.bench_pack(ffb.stage_pack(lib / "K.sloppak", tmp_path / "stage"), "K.sloppak")[0]
+    assert set(r["candidates"]) == {"Lead"} and r["arrangement"] == "Lead"
+    assert not r["paired"]
+
+
 def test_refuses_out_inside_library(tmp_path, capsys):
     lib = tmp_path / "lib"
     _pack(lib, "A.sloppak", {"lead": _wire("Lead")})
@@ -222,8 +271,8 @@ def test_library_untouched(tmp_path):
     assert sorted(p.name for p in stage.iterdir()) == ["A.sloppak"]   # only the SVG pick kept
     staged = ffb.stage_pack(lib / "A.sloppak", tmp_path / "stage2")
     assert sorted(p.relative_to(staged).as_posix() for p in staged.rglob("*") if p.is_file()) == [
-        "arrangements/drums.json", "arrangements/lead.json", "arrangements/rhythm.json",
-        "manifest.yaml"]                                                # no stems
+        ffb.STAGE_MARKER, "arrangements/drums.json", "arrangements/lead.json",
+        "arrangements/rhythm.json", "manifest.yaml"]                                                # no stems
 
 
 def test_report_files_written(tmp_path):
