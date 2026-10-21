@@ -140,11 +140,14 @@ def test_failed_validation_disables_part(tmp_path, caplog):
     assert any("failed validation" in r.getMessage() for r in caplog.records)
 
 
-def test_traversal_rejected(tmp_path):
+def test_traversal_rejected(tmp_path, caplog):
     (tmp_path / "x.json").write_text(json.dumps(_chart()))
     pak = _write_pak(tmp_path / "f", {"arrangements": [LEAD, _ff_entry(path="../x.json")]},
                      _lead_files())
-    assert _load(pak, tmp_path).five_fret_parts is None
+    with caplog.at_level(logging.WARNING):
+        loaded = _load(pak, tmp_path)
+    assert loaded.five_fret_parts is None
+    assert any("escapes" in r.getMessage() for r in caplog.records)
 
 
 def test_bad_instrument_dropped_with_warning(tmp_path, caplog):

@@ -785,46 +785,38 @@ class LoadedSloppak:
     five_fret_parts: list[dict] | None = None
 
 
-def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
-    """Load + schema-validate one drum-tab JSON named by a manifest-relative
-    path. Shared by the song-level `drum_tab:` key and the per-arrangement
-    drum-part pointers (feedpak 1.17.0), so every tab gets the same posture:
-    permissive — a missing file disables that part silently; a traversal,
-    parse, or validation failure disables it with a warning, never aborting
-    the load."""
-    dt_path = _resolve_pack_path(source_dir, rel, label)
-    if dt_path is None or not dt_path.exists():
+def _load_side_json(source_dir: Path, rel: str, label: str, validator) -> dict | None:
+    """Load + validate one side-file JSON named by a manifest-relative path.
+
+    Shared posture for every validated side file (drum tabs, five-fret
+    charts): permissive — a missing file disables that part silently; a
+    traversal, parse, or validation failure disables it with a warning, never
+    aborting the load. `validator(raw) -> (ok, reason)`."""
+    path = _resolve_pack_path(source_dir, rel, label)
+    if path is None or not path.exists():
         return None
     try:
-        raw = load_json(dt_path)
+        raw = load_json(path)
     except Exception as e:
         log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
         return None
-    ok, reason = drums_mod.validate_drum_tab(raw)
+    ok, reason = validator(raw)
     if not ok:
         log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
         return None
     return raw
+
+
+def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
+    """Load + schema-validate one drum-tab JSON. Shared by the song-level
+    `drum_tab:` key and the per-arrangement drum-part pointers (feedpak
+    1.17.0), so every tab gets the same `_load_side_json` posture."""
+    return _load_side_json(source_dir, rel, label, drums_mod.validate_drum_tab)
 
 
 def _load_five_fret_file(source_dir: Path, rel: str, label: str) -> dict | None:
-    """Load + schema-validate one five-fret JSON named by a manifest-relative
-    path. Same permissive posture as `_load_drum_tab_file`: a missing file
-    disables that part silently; a traversal, parse, or validation failure
-    disables it with a warning, never aborting the load."""
-    ff_path = _resolve_pack_path(source_dir, rel, label)
-    if ff_path is None or not ff_path.exists():
-        return None
-    try:
-        raw = load_json(ff_path)
-    except Exception as e:
-        log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
-        return None
-    ok, reason = fivefret_mod.validate_five_fret(raw)
-    if not ok:
-        log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
-        return None
-    return raw
+    """Load + schema-validate one five-fret chart JSON (`_load_side_json`)."""
+    return _load_side_json(source_dir, rel, label, fivefret_mod.validate_five_fret)
 
 
 def _load_rigs_file(source_dir: Path, rel: str) -> dict | None:
