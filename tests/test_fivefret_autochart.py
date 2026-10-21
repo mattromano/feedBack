@@ -559,3 +559,14 @@ def test_generated_marked():
 def test_reduce_level_unknown_level():
     with pytest.raises(ValueError):
         ac.reduce_level([], "expert", _grid())
+
+
+def test_ms_rounded_eighths_at_130_bpm():
+    spb = 60 / 130
+    grid = ac.BeatGrid.from_beats(
+        [Beat(time=round(i * spb, 3), measure=i // 4 if i % 4 == 0 else -1) for i in range(170)])
+    expert = [FretNote(time=round(i * spb / 2, 3), frets=[G, R, Y][i % 3]) for i in range(300)]
+    hard = ac.reduce_level(expert, "hard", grid)
+    assert len(hard) == 300
+    medium = ac.reduce_level(hard, "medium", grid)
+    assert [n.time for n in medium] == [n.time for n in expert[::2]]

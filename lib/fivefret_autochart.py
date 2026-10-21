@@ -32,7 +32,9 @@ Lower levels (`reduce_level`, `limit_lanes`, `auto_levels`), where they differ f
 - Beat positions are integer ticks (1920 a beat); "on a measure line" and "on the grid
   unit" allow 1/128 beat for millisecond-rounded Rocksmith times.
 - The padding test is a plain strict +-padding window (Onyx's saturating `posn -| padding`
-  would let a note sit next to a kept note at beat 0).
+  would let a note sit next to a kept note at beat 0). It and the other beat-length tests
+  (grace gap, fast-jump reach, one-beat sustain floor) allow the same 1/128 beat, so
+  steady notes at ms-rounded times are not dropped at non-round tempos.
 - A fast-jump shift is clamped to the highway (Onyx's `pred` / `succ` would fail there).
 - `auto_levels(only_missing=True)` keeps any level the chart has with notes, as Plan 1's
   `ensure_levels` does (Onyx's `orIfNull` regenerates a level with 5 or fewer notes).
@@ -567,7 +569,7 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
         if i + 1 < len(gs):
             b = gs[i + 1]
             if a.sht == "strum" and a.length <= 0 and b.sht == "hopo" and b.length > 0 \
-                    and b.tick - a.tick <= TICKS_PER_BEAT // 4 \
+                    and b.tick - a.tick <= TICKS_PER_BEAT // 4 + _ALIGN_TOL \
                     and meter.aligned(a.tick, TICKS_PER_BEAT // 2) \
                     and not (not is_od(a.time) and is_od(b.time)):
                 graced.append(_GNote(a.time, a.tick, b.lanes, "strum",
@@ -582,7 +584,7 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
         g.lanes = _chord_rule(g.lanes, level)
 
     # Kept notes: lowest priority first (ties by time); a note is kept unless a kept note
-    # lies strictly within +- the padding.
+    # lies strictly within +- the padding (narrowed by _ALIGN_TOL for ms-rounded times).
     def priority(g: _GNote) -> int:
         return (0 if is_od(g.time) else 8) + (0 if g.length > 0 else 4) \
             + (0 if meter.on_measure(g.tick) else 2) + (0 if meter.aligned(g.tick, unit) else 1)
@@ -591,8 +593,8 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
     keep = [False] * len(graced)
     for k in order:
         t = graced[k].tick
-        j = bisect.bisect_right(kept_ticks, t - unit)
-        if j < len(kept_ticks) and kept_ticks[j] < t + unit:
+        j = bisect.bisect_right(kept_ticks, t - unit + _ALIGN_TOL)
+        if j < len(kept_ticks) and kept_ticks[j] < t + unit - _ALIGN_TOL:
             continue
         bisect.insort(kept_ticks, t)
         keep[k] = True
@@ -613,7 +615,8 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
     for a, b in zip(out, out[1:]):
         if not a.lanes or not b.lanes:
             continue
-        near = b.tick - a.tick <= unit or (a.length > 0 and b.tick - end_tick(a) <= unit)
+        reach = unit + _ALIGN_TOL
+        near = b.tick - a.tick <= reach or (a.length > 0 and b.tick - end_tick(a) <= reach)
         if not near:
             continue
         if max(b.lanes) - min(a.lanes) > jump:
@@ -632,7 +635,7 @@ def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
             if a.length <= 0:
                 continue
             cap = b.tick - a.tick - TICKS_PER_BEAT
-            if min(end_tick(a) - a.tick, cap) < TICKS_PER_BEAT:
+            if min(end_tick(a) - a.tick, cap) < TICKS_PER_BEAT - _ALIGN_TOL:
                 a.length = 0.0
             elif cap < end_tick(a) - a.tick:
                 a.length = grid.time_at((a.tick + cap) / TICKS_PER_BEAT) - a.time
