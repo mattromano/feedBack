@@ -25,6 +25,20 @@ Port the algorithm, not the bugs:
 
 Left out: Onyx splits a tremolo into 1/4-beat notes; here a tremolo stays a sustain.
 
+Lower levels (`reduce_level`, `limit_lanes`, `auto_levels`), where they differ from Onyx:
+- Onyx removes open notes before reducing (`noOpenNotes`); here an open note stays open
+  through `reduce_level` (it never takes part in a fast-jump shift) and only gets a lane
+  when `limit_lanes` re-charts a level (open counts as Green there, as in `limitFrets`).
+- Beat positions are integer ticks (1920 a beat); "on a measure line" and "on the grid
+  unit" allow 1/128 beat for millisecond-rounded Rocksmith times.
+- The padding test is a plain strict +-padding window (Onyx's saturating `posn -| padding`
+  would let a note sit next to a kept note at beat 0).
+- A fast-jump shift is clamped to the highway (Onyx's `pred` / `succ` would fail there).
+- `auto_levels(only_missing=True)` keeps any level the chart has with notes, as Plan 1's
+  `ensure_levels` does (Onyx's `orIfNull` regenerates a level with 5 or fewer notes).
+- `limitFretsDifficulty` re-runs `noExtendedSustains'` before limiting; after
+  `gryboReduce`'s one-beat sustain pull-back that changes nothing, so it is left out.
+
 Additions that are not in Onyx: a power chord (a 2-pitch chord with at most 2 distinct
 pitch classes and an outer interval of a perfect 4th, 5th or octave) is flagged on its
 `PitchEvent` so later stages can keep it to adjacent frets, as the five-fret spec asks.
@@ -431,3 +445,249 @@ def autochart(arr, grid: BeatGrid, part: str) -> FiveFretChart:
     apply_hst(notes)
     return FiveFretChart(part=part, notes=notes, tempo=TempoMap(resolution=480),
                          source_format="auto")
+
+
+# --- Lower levels: Onyx `gryboReduce`, `limitFrets`, `gryboComplete` -------------------
+
+TICKS_PER_BEAT = 1920        # beat positions are compared as integer ticks (1920 = 480 * 4)
+_ALIGN_TOL = TICKS_PER_BEAT // 128   # 1/128 beat: absorbs millisecond-rounded note times
+# level -> (grid unit / padding / jump time in ticks, jump limit in frets)
+_REDUCE = {"hard": (TICKS_PER_BEAT // 2, 3),
+           "medium": (TICKS_PER_BEAT, 2),
+           "easy": (2 * TICKS_PER_BEAT, 2)}
+_SHT_STRENGTH = {"strum": 0, "hopo": 1, "tap": 2}
+
+
+def _lanes_of(frets: int) -> tuple[int, ...]:
+    return tuple(i for i in range(5) if frets >> i & 1)
+
+
+def _frets_of(lanes) -> int:
+    return sum(1 << lane for lane in set(lanes))
+
+
+class _Meter:
+    """Tick positions on a beat grid, plus measure-line and alignment tests."""
+
+    def __init__(self, grid: BeatGrid):
+        self.grid = grid
+        if grid._gridded():
+            downs = [i for i, d in enumerate(grid.downbeats) if d] or [0]
+            self.measure_ticks = [i * TICKS_PER_BEAT for i in downs]
+        else:
+            self.measure_ticks = None             # 120 bpm fallback: 4/4 from beat 0
+
+    def tick(self, t: float) -> int:
+        return round(self.grid.beat_at(t) * TICKS_PER_BEAT)
+
+    def measure_pos(self, tick: int) -> int:
+        probe = tick + _ALIGN_TOL                 # a note just before a bar line is on it
+        if self.measure_ticks is None:
+            bar = 4 * TICKS_PER_BEAT
+            return tick - (probe // bar) * bar
+        i = max(bisect.bisect_right(self.measure_ticks, probe) - 1, 0)
+        return tick - self.measure_ticks[i]
+
+    def aligned(self, tick: int, unit: int) -> bool:
+        r = self.measure_pos(tick) % unit
+        return min(r, unit - r) <= _ALIGN_TOL
+
+    def on_measure(self, tick: int) -> bool:
+        return abs(self.measure_pos(tick)) <= _ALIGN_TOL
+
+
+def _overdrive_test(star_power):
+    """Onyx `isOD`: true inside a (merged) phrase, from its start up to but not its end."""
+    spans: list[list[float]] = []
+    for a, b in sorted(star_power):
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            spans.append([a, b])
+    starts = [a for a, _ in spans]
+
+    def is_od(t: float) -> bool:
+        i = bisect.bisect_right(starts, t + _EPS) - 1
+        return i >= 0 and t < spans[i][1] - _EPS
+    return is_od
+
+
+@dataclass
+class _GNote:
+    time: float
+    tick: int
+    lanes: tuple[int, ...]     # () = open
+    sht: str
+    length: float              # seconds; 0 = no sustain
+    src_tick: int = 0
+
+
+def _chord_rule(lanes: tuple[int, ...], level: str) -> tuple[int, ...]:
+    if len(lanes) < 2:
+        return lanes
+    lo, hi = lanes[0], lanes[-1]
+    if level == "hard":
+        return (0, 3) if (lo, hi) == (0, 4) else (lo, hi)
+    if level == "medium":
+        if lo == 0:
+            return (0, min(hi, 2))
+        if lo == 1:
+            return (1, min(hi, 3))
+        return (lo, hi)
+    return (lo,)
+
+
+def reduce_level(notes: list[FretNote], level: str, grid: BeatGrid,
+                 star_power=()) -> list[FretNote]:
+    """Onyx `gryboReduce`: one level (`"hard"`, `"medium"` or `"easy"`) from the level
+    above it. Steps, in Onyx's order: sustain clean-up, grace notes, chord shapes, kept
+    notes by priority and padding, HOPOs, chord -> HOPO chord, fast jumps, HOPOs on the
+    same top fret, and (Medium / Easy) sustains pulled back a beat from the next note."""
+    if level not in _REDUCE:
+        raise ValueError(f"unknown level {level!r}")
+    unit, jump = _REDUCE[level]
+    meter = _Meter(grid)
+    is_od = _overdrive_test(star_power)
+
+    # readGuitarNotes -> guitarify': noExtendedSustains' on the source level.
+    src = [FretNote(time=n.time, frets=n.frets, length=n.length, hopo=n.hopo, tap=n.tap,
+                    tick=n.tick) for n in sorted(notes, key=lambda n: n.time)]
+    apply_sustains(src, grid, [False] * len(src))
+    gs = [_GNote(n.time, meter.tick(n.time), _lanes_of(n.frets), _sht(n), n.length, n.tick)
+          for n in src]
+
+    def end_tick(g: _GNote) -> int:
+        return meter.tick(g.time + g.length)
+
+    # Grace notes: an unsustained strum, then within 1/4 beat a sustained HOPO.
+    graced: list[_GNote] = []
+    i = 0
+    while i < len(gs):
+        a = gs[i]
+        if i + 1 < len(gs):
+            b = gs[i + 1]
+            if a.sht == "strum" and a.length <= 0 and b.sht == "hopo" and b.length > 0 \
+                    and b.tick - a.tick <= TICKS_PER_BEAT // 4 \
+                    and meter.aligned(a.tick, TICKS_PER_BEAT // 2) \
+                    and not (not is_od(a.time) and is_od(b.time)):
+                graced.append(_GNote(a.time, a.tick, b.lanes, "strum",
+                                     b.time + b.length - a.time, a.src_tick))
+                i += 2
+                continue
+        graced.append(a)
+        i += 1
+
+    # Chord shapes.
+    for g in graced:
+        g.lanes = _chord_rule(g.lanes, level)
+
+    # Kept notes: lowest priority first (ties by time); a note is kept unless a kept note
+    # lies strictly within +- the padding.
+    def priority(g: _GNote) -> int:
+        return (0 if is_od(g.time) else 8) + (0 if g.length > 0 else 4) \
+            + (0 if meter.on_measure(g.tick) else 2) + (0 if meter.aligned(g.tick, unit) else 1)
+    order = sorted(range(len(graced)), key=lambda k: (priority(graced[k]), graced[k].tick, k))
+    kept_ticks: list[int] = []
+    keep = [False] * len(graced)
+    for k in order:
+        t = graced[k].tick
+        j = bisect.bisect_right(kept_ticks, t - unit)
+        if j < len(kept_ticks) and kept_ticks[j] < t + unit:
+            continue
+        bisect.insort(kept_ticks, t)
+        keep[k] = True
+    out = [g for g, kp in zip(graced, keep) if kp]
+
+    # HOPOs: Hard strums only unsustained single-note HOPOs; Medium / Easy strum all.
+    for g in out:
+        if level != "hard" or (g.sht == "hopo" and len(g.lanes) <= 1 and g.length <= 0):
+            g.sht = "strum"
+
+    # A chord followed by a HOPO chord becomes its lowest note.
+    for a, b in zip(out, out[1:]):
+        if len(a.lanes) >= 2 and len(b.lanes) >= 2 and b.sht == "hopo":
+            a.lanes = (a.lanes[0],)
+
+    # Fast jumps (both directions; the gap also counts from the previous sustain's end):
+    # the next note moves one fret toward this one, clamped to the highway.
+    for a, b in zip(out, out[1:]):
+        if not a.lanes or not b.lanes:
+            continue
+        near = b.tick - a.tick <= unit or (a.length > 0 and b.tick - end_tick(a) <= unit)
+        if not near:
+            continue
+        if max(b.lanes) - min(a.lanes) > jump:
+            b.lanes = tuple(sorted({max(lane - 1, 0) for lane in b.lanes}))
+        elif max(a.lanes) - min(b.lanes) > jump:
+            b.lanes = tuple(sorted({min(lane + 1, 4) for lane in b.lanes}))
+
+    # A HOPO with the same top fret as the note before it becomes a strum.
+    for a, b in zip(out, out[1:]):
+        if b.sht == "hopo" and max(a.lanes, default=-1) == max(b.lanes, default=-1):
+            b.sht = "strum"
+
+    # Medium / Easy: a sustain ends at least a beat before the next note, else goes.
+    if level != "hard":
+        for a, b in zip(out, out[1:]):
+            if a.length <= 0:
+                continue
+            cap = b.tick - a.tick - TICKS_PER_BEAT
+            if min(end_tick(a) - a.tick, cap) < TICKS_PER_BEAT:
+                a.length = 0.0
+            elif cap < end_tick(a) - a.tick:
+                a.length = grid.time_at((a.tick + cap) / TICKS_PER_BEAT) - a.time
+
+    return [FretNote(time=g.time, frets=_frets_of(g.lanes), length=max(g.length, 0.0),
+                     hopo=g.sht == "hopo", tap=g.sht == "tap", tick=g.src_tick) for g in out]
+
+
+def limit_lanes(notes: list[FretNote], lanes: int,
+                grid: BeatGrid | None = None) -> list[FretNote]:
+    """Onyx `limitFrets`: when a note uses a lane at or past `lanes`, re-chart the level
+    with midi-ch (`assign_lanes` then `distinguish_lanes`) on the lane numbers as pitches
+    (an open note counts as Green, and comes out on a lane). Notes at one time merge,
+    keeping the strongest of tap > hopo > strum and the shortest sustain. A level that
+    already fits is returned as is (copied)."""
+    copies = [FretNote(time=n.time, frets=n.frets, length=n.length, hopo=n.hopo, tap=n.tap,
+                       tick=n.tick) for n in sorted(notes, key=lambda n: n.time)]
+    if max((max(_lanes_of(n.frets), default=0) for n in copies), default=0) < lanes:
+        return copies
+    positions: list[list[FretNote]] = []
+    for n in copies:
+        if positions and n.time == positions[-1][0].time:
+            positions[-1].append(n)
+        else:
+            positions.append([n])
+    groups = [tuple(sorted({lane for n in pos for lane in (_lanes_of(n.frets) or (0,))}))
+              for pos in positions]
+    times = [pos[0].time for pos in positions]
+    out = distinguish_lanes(groups, assign_lanes(groups, times, lanes, grid=grid), lanes)
+    result = []
+    for pos, lane_set in zip(positions, out):
+        sht = max((_sht(n) for n in pos), key=_SHT_STRENGTH.__getitem__)
+        result.append(FretNote(time=pos[0].time, frets=_frets_of(lane_set),
+                               length=min(n.length for n in pos),
+                               hopo=sht == "hopo", tap=sht == "tap", tick=pos[0].tick))
+    return result
+
+
+_LEVEL_CHAIN = (("hard", None), ("medium", 4), ("easy", 3))
+
+
+def auto_levels(chart: FiveFretChart, grid: BeatGrid, only_missing: bool = True) -> None:
+    """Onyx `gryboComplete`: Hard from Expert, Medium (limited to 4 lanes) from Hard, Easy
+    (limited to 3 lanes) from Medium. With `only_missing`, a level the chart already has is
+    kept and the next level is reduced from it; each generated level is recorded in
+    `levels_generated`."""
+    above = chart.notes
+    for level, max_lanes in _LEVEL_CHAIN:
+        if only_missing and chart.levels.get(level):
+            above = chart.levels[level]
+            continue
+        notes = reduce_level(above, level, grid, chart.star_power)
+        if max_lanes is not None:
+            notes = limit_lanes(notes, max_lanes, grid)
+        chart.levels[level] = notes
+        if level not in chart.levels_generated:
+            chart.levels_generated.append(level)
+        above = notes

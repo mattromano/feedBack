@@ -406,8 +406,26 @@ def _reduce(notes: list[FretNote], level: str) -> list[FretNote]:
     return out
 
 
-def ensure_levels(chart: FiveFretChart) -> None:
-    """Fill missing Easy/Medium/Hard by reducing Expert; mark them in ``levels_generated``."""
+DEFAULT_REDUCER = "simple"
+REDUCERS = ("simple", "onyx")
+
+
+def ensure_levels(chart: FiveFretChart, reducer: str | None = None) -> None:
+    """Fill missing Easy/Medium/Hard; mark them in ``levels_generated``.
+
+    ``reducer`` (``None`` = ``DEFAULT_REDUCER``): ``"simple"`` reduces each level from
+    Expert by minimum gaps; ``"onyx"`` chains Onyx's ``gryboReduce`` (Hard <- Expert,
+    Medium <- Hard, Easy <- Medium, Medium <= 4 lanes, Easy <= 3) on the chart's tempo map."""
+    reducer = DEFAULT_REDUCER if reducer is None else reducer
+    if reducer not in REDUCERS:
+        raise ValueError(f"unknown reducer {reducer!r}; expected one of {REDUCERS}")
+    if reducer == "onyx":
+        import fivefret_autochart                       # lazy: it imports this module
+        every = list(chart.notes) + [n for notes in chart.levels.values() for n in notes]
+        last_time = max((n.time + n.length for n in every), default=0.0)
+        grid = fivefret_autochart.BeatGrid.from_tempo(chart.tempo, last_time, chart.offset)
+        fivefret_autochart.auto_levels(chart, grid)
+        return
     for lv in LOWER_LEVELS:
         if chart.levels.get(lv):
             continue

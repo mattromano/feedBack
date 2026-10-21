@@ -392,3 +392,170 @@ def test_autochart_json_validates():
                               "generator_version": ac.GENERATOR_VERSION,
                               "from_arrangement": "lead"}, name="Guitar (auto)")
     assert fivefret.validate_five_fret(data) == (True, "")
+
+
+# --- Task 4: lower levels (gryboReduce port) and lane limits ---------------------------
+
+G, R, Y, B, O = 0b00001, 0b00010, 0b00100, 0b01000, 0b10000
+
+
+def _fn(beat, frets, length=0.0, hopo=False, tap=False):
+    """A FretNote at `beat` on the 120 bpm test grid (0.5 s a beat); `length` in beats."""
+    return FretNote(time=beat * 0.5, frets=frets, length=length * 0.5, hopo=hopo, tap=tap)
+
+
+def _ff(notes, **kw):
+    return ac.FiveFretChart(part="guitar", notes=notes, tempo=TempoMap(480), **kw)
+
+
+def _tf_beats(notes):
+    return [(round(n.time / 0.5, 3), n.frets) for n in notes]
+
+
+def _dense_expert(measures=16):
+    """8th notes over every lane, with a G+Y+O chord on each measure line."""
+    pattern = [G, R, Y, B, O, B, Y, R]
+    notes = []
+    for i in range(measures * 8):
+        frets = G | Y | O if i % 8 == 0 else pattern[i % 8]
+        notes.append(_fn(i * 0.5, frets))
+    return notes
+
+
+def test_easy_three_lanes_medium_four():
+    c = _ff(_dense_expert())
+    ac.auto_levels(c, _grid(80))
+    assert c.levels["medium"] and c.levels["easy"]
+    assert all(n.frets & ~0b01111 == 0 for n in c.levels["medium"])
+    assert all(n.frets & ~0b00111 == 0 for n in c.levels["easy"])
+    assert {n.frets for n in c.levels["hard"]} & {O, R | O, Y | O}   # Hard keeps orange
+
+
+def test_easy_single_notes_only():
+    c = _ff([_fn(b, G | Y | O if b % 4 == 0 else R | B) for b in range(0, 32, 2)])
+    ac.auto_levels(c, _grid(40))
+    assert c.levels["easy"]
+    assert all(bin(n.frets).count("1") == 1 for n in c.levels["easy"])
+
+
+def test_hard_chord_pairs_green_orange_to_blue():
+    notes = [_fn(0, G | Y | O), _fn(2, R | Y | B), _fn(4, G | O), _fn(6, R | O), _fn(8, Y)]
+    hard = ac.reduce_level(notes, "hard", _grid())
+    assert [n.frets for n in hard] == [G | B, R | B, G | B, R | O, Y]
+
+
+def test_medium_chord_rules():
+    notes = [_fn(0, G | B), _fn(4, R | O), _fn(8, Y | O), _fn(12, G | R), _fn(16, O),
+             _fn(20, R | Y)]
+    medium = ac.reduce_level(notes, "medium", _grid())
+    assert [n.frets for n in medium] == [G | Y, R | B, Y | O, G | R, O, R | Y]
+
+
+def test_density_falls_by_level():
+    pattern = [G, R, Y, R]
+    expert = [_fn(i * 0.25, pattern[i % 4]) for i in range(16 * 16)]
+    c = _ff(expert)
+    ac.auto_levels(c, _grid(80))
+    counts = [len(c.notes)] + [len(c.levels[lv]) for lv in ("hard", "medium", "easy")]
+    assert counts[0] > counts[1] > counts[2] > counts[3] > 0
+
+
+def test_steady_eighths_survive_on_hard():
+    expert = [_fn(i * 0.5, [G, R, Y][i % 3]) for i in range(32)]
+    hard = ac.reduce_level(expert, "hard", _grid())
+    assert [n.time for n in hard] == [n.time for n in expert]
+
+
+def test_measure_line_notes_preferred():
+    hard = ac.reduce_level([_fn(3.75, G), _fn(4.0, R)], "hard", _grid())
+    assert _tf_beats(hard) == [(4.0, R)]
+    # without the measure line the earlier note wins (ties go by time)
+    hard = ac.reduce_level([_fn(4.75, G), _fn(4.875, R)], "hard", _grid())
+    assert _tf_beats(hard) == [(4.75, G)]
+
+
+def test_overdrive_and_sustain_notes_preferred():
+    od = ac.reduce_level([_fn(3.75, G), _fn(4.0, R)], "hard", _grid(),
+                         star_power=[(3.75 * 0.5, 3.9 * 0.5)])
+    assert _tf_beats(od) == [(3.75, G)]
+    sus = ac.reduce_level([_fn(4.0, R), _fn(4.25, G, length=2)], "hard", _grid())
+    assert _tf_beats(sus) == [(4.25, G)]
+
+
+def test_hopos_only_on_hard():
+    expert = [_fn(0, G), _fn(2, Y, length=1, hopo=True), _fn(4, R, hopo=True),
+              _fn(6, G | Y, hopo=True), _fn(8, B, tap=True)]
+    hard = ac.reduce_level(expert, "hard", _grid())
+    assert [(n.hopo, n.tap) for n in hard] == [
+        (False, False), (True, False), (False, False), (True, False), (False, True)]
+    medium = ac.reduce_level(hard, "medium", _grid())
+    assert len(medium) == 5 and not any(n.hopo or n.tap for n in medium)
+
+
+def test_chord_then_hopo_chord_and_same_top_hopo():
+    hard = ac.reduce_level([_fn(0, R | B), _fn(1, G | Y, hopo=True)], "hard", _grid())
+    assert [n.frets for n in hard] == [R, G | Y] and hard[1].hopo
+    same_top = ac.reduce_level([_fn(0, Y), _fn(1, R | Y, hopo=True)], "hard", _grid())
+    assert [n.frets for n in same_top] == [Y, R | Y] and not same_top[1].hopo
+    other_top = ac.reduce_level([_fn(0, R), _fn(1, R | Y, hopo=True)], "hard", _grid())
+    assert other_top[1].hopo
+
+
+def test_grace_note_merges():
+    hard = ac.reduce_level([_fn(1.0, G), _fn(1.25, R, length=1, hopo=True)], "hard", _grid())
+    assert len(hard) == 1
+    assert hard[0].frets == R and not hard[0].hopo
+    assert hard[0].time == 0.5 and hard[0].length == pytest.approx(1.25 * 0.5)
+    # first note off the 8th-note grid: no merge (the sustained HOPO is kept instead)
+    off_beat = ac.reduce_level([_fn(1.25, G), _fn(1.5, R, length=1, hopo=True)], "hard", _grid())
+    assert _tf_beats(off_beat) == [(1.5, R)] and off_beat[0].hopo
+
+
+def test_medium_sustain_gap():
+    hard = [_fn(0, G, length=3), _fn(3, R, length=1.5), _fn(5, Y, length=0.75), _fn(8, B)]
+    medium = ac.reduce_level(hard, "medium", _grid())
+    assert [round(n.length / 0.5, 3) for n in medium] == [2.0, 1.0, 0.0, 0.0]
+    assert ac.reduce_level(hard, "hard", _grid())[1].length == pytest.approx(1.5 * 0.5)
+
+
+def test_jump_limited():
+    up = ac.reduce_level([_fn(0, G), _fn(0.5, O)], "hard", _grid())
+    assert [n.frets for n in up] == [G, B]
+    down = ac.reduce_level([_fn(0, O), _fn(0.5, G)], "hard", _grid())
+    assert [n.frets for n in down] == [O, R]
+    far = ac.reduce_level([_fn(0, G), _fn(2, O)], "hard", _grid())
+    assert [n.frets for n in far] == [G, O]
+    # the gap counts from the end of the previous sustain too
+    held = ac.reduce_level([_fn(0, G, length=1.5), _fn(2, O)], "hard", _grid())
+    assert [n.frets for n in held] == [G, B]
+    medium = ac.reduce_level([_fn(0, G), _fn(1, B)], "medium", _grid())
+    assert [n.frets for n in medium] == [G, Y]
+
+
+def test_limit_lanes():
+    fits = [_fn(0, G), _fn(1, B), _fn(2, 0)]
+    assert [n.frets for n in ac.limit_lanes(fits, 4)] == [G, B, 0]
+    line = [_fn(i, f) for i, f in enumerate([G, R, Y, B, O, 0])]
+    limited = ac.limit_lanes(line, 3)
+    assert all(n.frets and n.frets & ~0b00111 == 0 for n in limited)    # open -> a lane
+    assert [n.time for n in limited] == [n.time for n in line]
+    merged = ac.limit_lanes([_fn(0, G, length=2, hopo=True), _fn(0, O, tap=True), _fn(1, R)], 3)
+    assert len(merged) == 2 and merged[0].tap and not merged[0].hopo
+    assert merged[0].length == 0.0 and bin(merged[0].frets).count("1") == 2
+
+
+def test_generated_marked():
+    hard = [_fn(0, G), _fn(2, R)]
+    c = _ff(_dense_expert(4), levels={"hard": hard})
+    ac.auto_levels(c, _grid())
+    assert c.levels["hard"] is hard
+    assert sorted(c.levels_generated) == ["easy", "medium"]
+    assert len(c.levels["medium"]) <= len(hard)                       # Medium comes from the real Hard
+    ac.auto_levels(c, _grid(), only_missing=False)
+    assert sorted(c.levels_generated) == ["easy", "hard", "medium"]
+    assert c.levels["hard"] is not hard
+
+
+def test_reduce_level_unknown_level():
+    with pytest.raises(ValueError):
+        ac.reduce_level([], "expert", _grid())
