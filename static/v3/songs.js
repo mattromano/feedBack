@@ -1804,6 +1804,15 @@
         if (key !== state.pickKey || state.view !== prevView) {
             state.pickKey = key;
             if (songsActive()) reload(); else _libraryDirty = true;
+        } else if (songsActive() && state.view === 'tree') {
+            // The tree has no window renderer: rebuild only the rows whose
+            // Selected marker moved, then wire the fresh nodes.
+            const tree = document.getElementById('v3-songs-tree');
+            document.querySelectorAll('#v3-songs-tree [data-fn]').forEach((el) => {
+                const s = state.songsById[el.getAttribute('data-fn')];
+                if (s && !!el.querySelector('[data-pick-badge]') !== pickIsSelected(s)) el.outerHTML = treeSongRowHtml(s);
+            });
+            if (tree) wireCards(tree);
         } else if (songsActive()) {
             // renderWindow skips an unchanged range; clear it so _cardSig
             // re-checks every card (only the two whose marker moved rebuild).
@@ -2703,6 +2712,8 @@
     // behaviour from one markup source.
     function treeSongRowHtml(s) {
         const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
+        // Library pick: the selected row gets the grid card's ring + Selected badge.
+        const pickSel = pickIsSelected(s);
         // Display-only checkbox (pointer-events-none); the row's
         // capture-phase select handler (render()) owns the toggle.
         const checkbox = state.selectMode
@@ -2711,8 +2722,9 @@
         return (
         '<div class="relative flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
         checkbox +
-        '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
+        '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + ((sel || pickSel) ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
         '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
+        (pickSel ? '<span data-pick-badge class="shrink-0 bg-fb-primary text-white text-xs font-bold px-2 py-0.5 rounded-full pointer-events-none">Selected</span>' : '') +
         (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
         (fl ? '<span class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
         accuracyBadge(k, 'tree') +

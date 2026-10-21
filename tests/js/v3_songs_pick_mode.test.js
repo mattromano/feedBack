@@ -301,6 +301,22 @@ test('_cardSig: moving the selection changes only the two cards involved', () =>
     assert.deepEqual(changed, [1, 4]);
 });
 
+// ── Tree view shows the selection (Selected badge + ring) ────────────────────
+
+test('treeSongRowHtml marks the pick selection with a ring and a Selected badge', () => {
+    const body = fnBody('treeSongRowHtml');
+    assert.match(body, /pickIsSelected\(s\)/);
+    assert.match(body, /data-pick-badge[^>]*>Selected<\/span>/);
+});
+
+test('onPickChanged repaints the tree rows when the view is tree', () => {
+    const body = fnBody('onPickChanged');
+    assert.match(body, /state\.view === 'tree'/);
+    assert.match(body, /#v3-songs-tree \[data-fn\]/);
+    assert.match(body, /treeSongRowHtml\(/);
+    assert.match(body, /wireCards\(/);
+});
+
 // ── First-visit prefs fix pins (Task 2 M8 / M9) ──────────────────────────────
 
 test('render restores the saved view state before loading providers', () => {
