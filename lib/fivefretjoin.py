@@ -320,6 +320,8 @@ def align_part(folder, sp: drumjoin.SloppakFiles, chart: fivefretchart.FiveFretC
     part_env = drumalign.onset_env(ref_y)
     ref_env = part_env if ours_y is ref_y else drumalign.onset_env(ours_y)
     note_times = np.array([n.time for n in chart.notes])
+    if not len(note_times):
+        raise ValueError(f"{part}: the chart part has no notes")
     if src_y is not None:
         src_env = drumalign.onset_env(src_y)
     else:
@@ -333,8 +335,11 @@ def align_part(folder, sp: drumjoin.SloppakFiles, chart: fivefretchart.FiveFretC
     weak = al.confidence < min_conf or al.peak_ratio < min_ratio
     drifting = al.drift > max_drift
     method = force_method or ("warp" if (weak or drifting) else "offset")
+    # global_offset marks a vote override (an edit / cut section: the whole-song peak lost to the
+    # 12 s window votes) with confidence 0 and peak ratio 1; keep that lag, don't rescan it away
+    voted = al.confidence == 0.0 and al.peak_ratio == 1.0
     if method == "warp":
-        lag = _rate_scan_lag(ref_env, src_env, al.confidence)
+        lag = None if voted else _rate_scan_lag(ref_env, src_env)
         if lag is not None:
             log(f"  {part}: a tempo-ratio scan puts the song middle at lag {lag:+.3f}s")
             al.offset = lag
@@ -356,13 +361,15 @@ def align_part(folder, sp: drumjoin.SloppakFiles, chart: fivefretchart.FiveFretC
 RATE_SCAN = np.round(np.arange(0.97, 1.0301, 0.0025), 4)
 
 
-def _rate_scan_lag(ref_env, src_env, conf_at_1: float, min_gain: float = 1.5):
+def _rate_scan_lag(ref_env, src_env, min_gain: float = 1.5):
     """Lag at the middle of the chart when the chart envelope re-timed by a constant tempo ratio
-    correlates clearly better than as it is (else None). Guitar parts sit on a dense note grid:
+    correlates clearly better (``min_gain`` x the xcorr confidence at ratio 1.0) than as it is
+    (else None). Guitar parts sit on a dense note grid:
     a 1-2 % tempo difference smears both the whole-song correlation and the 12 s window votes
     (0.24 s per window at 2 %, about an eighth note), so ``global_offset`` can land seconds off and
     the beat-level warp then tracks around the wrong lag. Re-timing the envelope first restores a
     sharp peak; the warp then refines the ratio itself."""
+    conf_at_1 = drumalign.xcorr(ref_env, src_env, 60.0)[1]
     best = None
     for r in RATE_SCAN:
         if r == 1.0:
@@ -428,10 +435,15 @@ def _reuse_part(folder, chart, spec, onsets, beat, th, log):
             if not vi.ok:
                 log(f"  reused warp: the {len(intro)} notes before the first drum hit fail: {'; '.join(vi.reasons)}")
                 ok = False
+    # the Alignment.summary() shape fresh alignments record: offset = median lag over the notes,
+    # rate = the warp's overall slope; no correlation ran, so confidence / peak ratio are 0
     lags = [float(w(n.time)) - n.time for n in chart.notes]
-    det = {"chart_audio": None, "warp": spec, "clamped": clamped,
-           "alignment": {"method": "warp" if isinstance(spec, list) else "offset",
-                         "offset": round(float(np.median(lags)) if lags else 0.0, 4)}}
+    rate = 1.0
+    if isinstance(spec, list) and len(spec) >= 2 and spec[-1][0] != spec[0][0]:
+        rate = (spec[-1][1] - spec[0][1]) / (spec[-1][0] - spec[0][0])
+    al = drumalign.Alignment("warp" if isinstance(spec, list) else "offset",
+                             float(np.median(lags)) if lags else 0.0, 0.0, 0.0, rate=float(rate))
+    det = {"chart_audio": None, "warp": spec, "clamped": clamped, "alignment": al.summary()}
     return placed, det, v, ok
 
 

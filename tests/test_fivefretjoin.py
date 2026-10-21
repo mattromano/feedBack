@@ -212,6 +212,9 @@ def test_reused_warp_used_and_recorded(tmp_path, monkeypatch):
     info = json.loads(zipfile.ZipFile(pack).read(fivefretjoin.JOIN_INFO))
     assert info["guitar"]["reused_drums"] is True
     assert info["guitar"]["detail"]["warp"] == {"offset": 1.5}
+    al = info["guitar"]["detail"]["alignment"]
+    assert set(al) == set(drumalign.Alignment("offset", 0.0, 0.0, 0.0).summary()), "one shape with fresh joins"
+    assert al["method"] == "offset" and al["offset"] == pytest.approx(1.5)
 
 
 def test_onsets_detected_once_per_stem_role(tmp_path, monkeypatch):
@@ -252,6 +255,71 @@ def test_reused_warp_clamped_before_first_drum_hit(tmp_path):
     assert got[:len(intro)] == pytest.approx(want[:len(intro)], abs=0.002)
     info = json.loads(zipfile.ZipFile(pack).read(fivefretjoin.JOIN_INFO))
     assert info["guitar"]["detail"]["clamped"] is True
+
+
+def test_reused_warp_intro_failing_forces_fresh(tmp_path):
+    """BCR1 'either fails': the whole part passes on the reused warp but the notes before the first
+    drum hit don't (our intro is synced differently) -> fresh alignment."""
+    first = 4 * 1920
+    folder, charts = _chart(tmp_path, drums_from=first)
+    hits = drumchart.load_song_folder(folder, levels=False)[0].hits
+    h0, h1 = hits[0].time, hits[-1].time
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, lambda t: t + (1.62 if t < h0 else 1.5)))
+    pairs = [[0.0, 1.5], [h0, h0 + 1.5], [h1, h1 + 1.5]]
+    logs = []
+    r = _join(pack, folder, reuse={"folder": str(folder), "warp": pairs}, log=logs.append)["parts"]["guitar"]
+    assert any("before the first drum hit fail" in m for m in logs), logs
+    assert not r["reused_drums"] and r["ok"], r
+    assert r["offset"] == pytest.approx(1.5, abs=0.02)
+
+
+# ── fresh alignment: the tempo-ratio scan ───────────────────────────────────
+
+def test_rate_scan_only_for_a_real_tempo_ratio(tmp_path):
+    folder, charts = _chart(tmp_path, audio=())
+    notes = charts["guitar"].notes
+    src = drumalign.onset_env(guitar_audio(_tf(notes), DUR, seed=11))
+
+    def ref(w):
+        return drumalign.onset_env(guitar_audio(_tf(notes, w), DUR + 6, seed=5, noise=0.005))
+    assert fivefretjoin._rate_scan_lag(ref(lambda t: t + 1.5), src) is None
+    cut = lambda t: t + 1.5 if t < 20 else t + 4.0  # noqa: E731   an edit at ratio 1.0
+    assert fivefretjoin._rate_scan_lag(ref(cut), src) is None
+    mid = src.shape[-1] / drumalign.FR / 2
+    lag = fivefretjoin._rate_scan_lag(ref(lambda t: 0.7 + 1.02 * t), src)
+    assert lag == pytest.approx(0.7 + 0.02 * mid, abs=0.05)
+
+
+def test_vote_override_keeps_its_lag(tmp_path, monkeypatch):
+    """global_offset overruling the whole-song peak with its window votes (confidence 0, ratio 1)
+    is an edit, not a tempo ratio: no rate scan, the warp tracks around the voted lag."""
+    folder, charts = _chart(tmp_path)
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, lambda t: t + 1.5))
+    monkeypatch.setattr(drumalign, "global_offset",
+                        lambda ref, src, *a, **k: drumalign.Alignment("offset", 1.5, 0.0, 1.0, [], 0.0))
+
+    def no_scan(*a, **k):
+        raise AssertionError("rate scan after a vote override")
+    monkeypatch.setattr(fivefretjoin, "_rate_scan_lag", no_scan)
+    seen, real = [], drumalign.warp_pairs
+    monkeypatch.setattr(drumalign, "warp_pairs", lambda r, s, b, h, base, **k: seen.append(base) or real(r, s, b, h, base, **k))
+    r = _join(pack, folder)["parts"]["guitar"]
+    assert seen == [1.5], r
+    assert r["method"] == "warp" and r["ok"], r
+
+
+def test_align_part_without_notes_is_a_clear_error(tmp_path):
+    folder, charts = _chart(tmp_path, audio=())
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, lambda t: t + 1.5))
+    sp = drumjoin.SloppakFiles(pack)
+    try:
+        y, kind = fivefretjoin.our_part_audio(sp, "guitar")
+        empty = fivefretchart.FiveFretChart("guitar", [], charts["guitar"].tempo)
+        with pytest.raises(ValueError, match="no notes"):
+            fivefretjoin.align_part(folder, sp, empty, "guitar", ref_y=y, ref_kind=kind, onsets=None,
+                                    chart_parts={"guitar", "bass"}, log=lambda *a: None)
+    finally:
+        sp.close()
 
 
 # ── validation ──────────────────────────────────────────────────────────────
