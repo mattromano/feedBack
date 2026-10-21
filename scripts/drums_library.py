@@ -93,9 +93,8 @@ LOWER = ("easy", "medium", "hard")
 
 def chart_levels(r: dict) -> int:
     """Hand-charted lower drum levels (Easy/Medium/Hard with notes) in a Chorus search result."""
-    counts = (r.get("notesData") or {}).get("noteCounts") or []
-    have = {c.get("difficulty") for c in counts if c.get("instrument") == "drums" and (c.get("count") or 0) > 0}
-    return sum(lv in have for lv in LOWER)
+    import chorus
+    return chorus.part_levels(r, "drums")
 
 
 def has_drums(man: dict) -> bool:
