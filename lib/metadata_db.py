@@ -564,6 +564,10 @@ class MetadataDB:
             # the Karaoke-ready filter. NULL marks a pre-migration row the
             # scanner re-extracts, like the tuning-perspective markers.
             "ALTER TABLE songs ADD COLUMN has_vocal_pitch INTEGER",
+            # Whether the pack carries a drum chart (song-level `drum_tab` or a
+            # drums arrangement with a `drum_tab` pointer). Same NULL-marker
+            # contract as has_vocal_pitch.
+            "ALTER TABLE songs ADD COLUMN has_drum_tab INTEGER",
         ):
             try:
                 self.conn.execute(ddl)
@@ -573,6 +577,9 @@ class MetadataDB:
         # rather than re-extracting the whole non-sloppak library to learn "no".
         self.conn.execute("UPDATE songs SET has_vocal_pitch = 0 "
                           "WHERE has_vocal_pitch IS NULL AND format != 'sloppak'")
+        # Likewise only sloppaks can carry a drum chart.
+        self.conn.execute("UPDATE songs SET has_drum_tab = 0 "
+                          "WHERE has_drum_tab IS NULL AND format != 'sloppak'")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title COLLATE NOCASE)")
         # Composite (sort col, filename) indexes cover the grid's ORDER BY +
@@ -3150,7 +3157,7 @@ class MetadataDB:
     # when extracted-but-absent, NULL only when the column predates the row.
     _EXTRACTION_MARKER_COLS = tuple(
         p.column(suffix) for p in ROLE_PERSPECTIVES for suffix in ("name", "key")
-    ) + ("has_vocal_pitch",)
+    ) + ("has_vocal_pitch", "has_drum_tab")
 
     def get(self, filename: str, mtime: float, size: int) -> dict | None:
         cache_key = str(filename)
@@ -3159,7 +3166,7 @@ class MetadataDB:
             row = self.conn.execute(
                 "SELECT mtime, size, title, artist, album, year, duration, tuning, arrangements, has_lyrics, "
                 "format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, "
-                f"has_vocal_pitch, {pcols} "
+                f"has_vocal_pitch, has_drum_tab, {pcols} "
                 "FROM songs WHERE filename = ?", (cache_key,)
             ).fetchone()
         if row and row[0] == mtime and row[1] == size and row[2]:
@@ -3176,8 +3183,9 @@ class MetadataDB:
                 "tuning_offsets": row[15] or "",
                 # NULL preserved — a pre-migration row the scanner re-extracts.
                 "has_vocal_pitch": None if row[16] is None else bool(row[16]),
+                "has_drum_tab": None if row[17] is None else bool(row[17]),
             }
-            for i, col in enumerate(self._PERSPECTIVE_COLS, start=17):
+            for i, col in enumerate(self._PERSPECTIVE_COLS, start=18):
                 val = row[i]
                 if col in self._EXTRACTION_MARKER_COLS:
                     out[col] = val          # NULL preserved — drives re-extraction
@@ -3194,8 +3202,8 @@ class MetadataDB:
                 "INSERT OR REPLACE INTO songs "
                 "(filename, mtime, size, title, artist, album, year, duration, tuning, arrangements, "
                 "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre, track_number, disc, "
-                "has_vocal_pitch, " + ", ".join(self._PERSPECTIVE_COLS) + ") "
-                "VALUES (" + ", ".join(["?"] * (21 + len(self._PERSPECTIVE_COLS))) + ")",
+                "has_vocal_pitch, has_drum_tab, " + ", ".join(self._PERSPECTIVE_COLS) + ") "
+                "VALUES (" + ", ".join(["?"] * (22 + len(self._PERSPECTIVE_COLS))) + ")",
                 (filename, mtime, size, meta.get("title", ""), meta.get("artist", ""),
                  meta.get("album", ""), meta.get("year", ""), meta.get("duration", 0),
                  meta.get("tuning", ""), json.dumps(meta.get("arrangements", [])),
@@ -3210,6 +3218,7 @@ class MetadataDB:
                  meta.get("track_number"),
                  meta.get("disc"),
                  1 if meta.get("has_vocal_pitch") else 0,
+                 1 if meta.get("has_drum_tab") else 0,
                  # A put() row is by definition freshly extracted, so the
                  # marker columns must never be written NULL — that state is
                  # reserved for rows predating the column, which re-extract.

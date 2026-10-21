@@ -1567,6 +1567,14 @@ def extract_meta(path: Path) -> dict:
         a["index"] = i
 
     has_lyrics = bool(manifest.get("lyrics"))
+    # Mirrors what load_song() keeps: a drums-typed entry without a `drum_tab`
+    # pointer is dropped there, so it is not a drum chart here either.
+    has_drum_tab = bool(manifest.get("drum_tab")) or any(
+        isinstance(e, dict)
+        and str(e.get("type") or "").strip().lower() in ("drums", "drum")
+        and isinstance(e.get("drum_tab"), str)
+        for e in arr_list
+    )
     tuning_offsets = _tuning_for_meta(arr_list)
     # Per-role tunings alongside the song-level one, so the library can answer
     # for whichever arrangement the player actually plays.
@@ -1617,6 +1625,7 @@ def extract_meta(path: Path) -> dict:
         # Per-syllable vocal pitch (spec §7.2): what the lyrics plugin's singing
         # mode scores against, so the library's Karaoke-ready filter keys on it.
         "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
+        "has_drum_tab": has_drum_tab,
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,
