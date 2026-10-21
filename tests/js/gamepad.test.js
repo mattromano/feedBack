@@ -189,15 +189,35 @@ function padWithButtons(index, pressedIdx) {
 }
 
 test('no menu keys while any pad is claimed', () => {
-  const g = load({ feedBack: { gamepadInput: { claimCount: () => 1 } } });
-  const a = padWithButtons(0, [0, 13]);     // fret press (A) + d-pad down
-  const b = padWithButtons(1, [0]);         // Steam Input mirrored slot
-  g.setPads([a, b]);
+  let claims = 0;
+  const g = load({ feedBack: { gamepadInput: { claimCount: () => claims } } });
+  const a = padWithButtons(0, [13]);        // d-pad down held BEFORE the claim
+  g.setPads([a]);
   g.connect(a);
-  g.setClock(0);   g.tick();
-  g.setClock(500); g.tick();                // past the repeat delay too
-  g.setPads([b, a]); g.tick();
-  assert.deepEqual(g.fired, [], 'a claimed controller must not drive menus');
+  g.setClock(0); g.tick();                  // unclaimed: fires ArrowDown, arms repeat
+  assert.deepEqual(g.fired, ['ArrowDown']);
+  claims = 1;
+  a.buttons[0].pressed = true;              // fret press (A)
+  const b = padWithButtons(1, [0]);         // Steam Input mirrored slot
+  g.setClock(500); g.tick();                // past the repeat delay
+  g.setPads([b, a]); g.setClock(900); g.tick();
+  assert.deepEqual(g.fired, ['ArrowDown'], 'nothing fires once claimed (no repeat, no Space)');
+});
+
+test('a d-pad direction held across claim release does not fire a new press', () => {
+  let claims = 1;
+  const g = load({ feedBack: { gamepadInput: { claimCount: () => claims } } });
+  const p = padWithButtons(0, [13]);
+  g.setPads([p]);
+  g.connect(p);
+  g.setClock(0); g.tick();
+  claims = 0;
+  g.setClock(10); g.tick();
+  g.setClock(1000); g.tick();               // would be a repeat if a timer survived
+  assert.deepEqual(g.fired, []);
+  p.buttons[13].pressed = false; g.setClock(1100); g.tick();
+  p.buttons[13].pressed = true;  g.setClock(1200); g.tick();
+  assert.deepEqual(g.fired, ['ArrowDown']);
 });
 
 test('menus work again when claims drop to 0', () => {

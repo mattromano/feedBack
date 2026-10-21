@@ -156,20 +156,24 @@
         return false;
     }
 
-    // While claimed, keep edge/repeat state in step with what is physically held
-    // (without firing) so a button held when the claim ends isn't read as a new
-    // press, and no stale repeat timer survives the claim.
+    // While claimed, keep edge state in step with what is physically held
+    // (without firing) so a button/direction held when the claim ends isn't read
+    // as a new press, and no repeat timer survives the claim. Allocation-free:
+    // runs every frame of a claim, so it updates the existing maps in place.
     function syncHeldState(gp) {
-        buttonWasDown = {};
-        dirWasDown = {};
-        dirRepeatAt = {};
-        if (!gp) return;
+        var k;
+        for (k in dirRepeatAt) delete dirRepeatAt[k];
+        if (!gp) {
+            for (k in buttonWasDown) buttonWasDown[k] = false;
+            for (k in dirWasDown) dirWasDown[k] = false;
+            return;
+        }
         for (var i = 0; i < gp.buttons.length; i++) buttonWasDown[i] = !!gp.buttons[i].pressed;
-        var stick = stickDirections(gp);
-        Object.keys(DPAD_BUTTONS).forEach(function (idx) {
-            var name = DPAD_BUTTONS[idx].key.replace('Arrow', '').toLowerCase();
-            dirWasDown[name] = !!((gp.buttons[idx] && gp.buttons[idx].pressed) || stick[name]);
-        });
+        var x = gp.axes[0] || 0, y = gp.axes[1] || 0;
+        dirWasDown.up = !!(gp.buttons[12] && gp.buttons[12].pressed) || y < -STICK_DEADZONE;
+        dirWasDown.down = !!(gp.buttons[13] && gp.buttons[13].pressed) || y > STICK_DEADZONE;
+        dirWasDown.left = !!(gp.buttons[14] && gp.buttons[14].pressed) || x < -STICK_DEADZONE;
+        dirWasDown.right = !!(gp.buttons[15] && gp.buttons[15].pressed) || x > STICK_DEADZONE;
     }
 
     function tick() {
