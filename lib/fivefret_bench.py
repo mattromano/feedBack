@@ -12,6 +12,10 @@ Conventions:
   `has_real: False`; its `fret_limit_ok` is still computed from the auto chart.
 - `verdict` reports, per lower level, how many paired holdout rows were left out of the
   density median for lack of a hand-charted real level (`excluded` in that check).
+- `verdict`'s medians use paired holdout rows only, but its Medium / Easy fret-limit checks
+  count violations over every row passed in (any split, paired or not): the lane limit is
+  a rule for every chart, not a median.
+- `score_levels` sorts both sides by time before matching (`match_notes` needs that).
 """
 from __future__ import annotations
 
@@ -138,17 +142,21 @@ def fret_limit_ok(notes, level: str) -> bool:
     return all(n.frets & ~mask == 0 for n in notes)
 
 
+def _time(n) -> float:
+    return n.time
+
+
 def score_levels(real, auto):
     """Per-level metrics; only levels that are keys of `real` get scored (see module doc)."""
     out = {}
     for lv in LEVELS:
-        a = auto.get(lv) or []
+        a = sorted(auto.get(lv) or [], key=_time)
         entry = {"has_real": lv in real, "matched": None, "onset_f1": None,
                  "direction": None, "lane_closeness": None, "chord_size": None,
                  "hopo": None, "density_ratio": None,
                  "fret_limit_ok": fret_limit_ok(a, lv)}
         if lv in real:
-            r = real[lv]
+            r = sorted(real[lv], key=_time)
             pairs = match_notes(r, a)
             entry.update(matched=len(pairs), onset_f1=onset_f1(r, a),
                          direction=direction_agreement(pairs),
@@ -170,7 +178,8 @@ def _med(values):
 
 
 def verdict(rows):
-    """Pass/fail on the paired holdout rows; see PASS_LINE. `n` counts those rows."""
+    """Pass/fail on the paired holdout rows; see PASS_LINE. `n` counts those rows.
+    The fret-limit checks count violations over all `rows` (see module doc)."""
     used = [r for r in rows if r.get("paired") and r.get("split") == "holdout"]
     n = len(used)
     checks = [{"name": "enough_songs", "level": None, "value": n,
@@ -197,8 +206,8 @@ def verdict(rows):
                        "ok": ok, "excluded": len(entries) - len(have)})
 
     for lv in ("medium", "easy"):
-        bad = sum(not r["levels"][lv]["fret_limit_ok"] for r in used)
+        bad = sum(not r["levels"][lv]["fret_limit_ok"] for r in rows)
         checks.append({"name": "fret_limit", "level": lv, "value": bad, "line": 0,
-                       "ok": bad == 0})
+                       "ok": bad == 0, "rows": len(rows)})
 
     return {"pass": all(c["ok"] for c in checks), "n": n, "checks": checks}

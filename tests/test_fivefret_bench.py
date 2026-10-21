@@ -157,3 +157,21 @@ def test_unpaired_rows_ignored():
     rows += [dict(r, split="tune", levels=_lv(direction=0.0)) for r in _rows(10)]
     v = fb.verdict(rows)
     assert v["pass"] and v["n"] == 20
+
+
+def test_fret_limit_counts_every_row():
+    rows = _rows(20)
+    rows.append({"pack": "t", "part": "guitar", "split": "tune", "paired": False,
+                 "levels": _lv(ok=False)})
+    v = fb.verdict(rows)
+    assert v["n"] == 20
+    assert _failed(v) == [("fret_limit", "easy"), ("fret_limit", "medium")]
+    fl = [c for c in v["checks"] if c["name"] == "fret_limit"]
+    assert [c["value"] for c in fl] == [1, 1] and fl[0]["rows"] == 21
+
+
+def test_score_levels_sorts_by_time():
+    real = seq([1, 2, 4, 8, 16] * 6)
+    auto = list(reversed(real))
+    s = fb.score_levels({"expert": list(reversed(real))}, {"expert": auto})
+    assert s["expert"]["matched"] == 30 and s["expert"]["direction"] == 1.0
