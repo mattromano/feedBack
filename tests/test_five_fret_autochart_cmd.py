@@ -258,3 +258,25 @@ def test_pack_without_beats_still_charts(tmp_path, scratch_tmp):
     assert r["action"] == "write" and r["notes"]["expert"] == len(PITCH_FRETS)
     assert fivefret.validate_five_fret(r["data"]) == (True, "")
     assert set(r["data"]["levels"]) == {"hard", "medium", "easy"}
+
+
+def test_write_error_counts_for_that_pack_and_summary_is_written(tmp_path, scratch_tmp, monkeypatch):
+    lib = tmp_path / "lib"
+    _band(lib, "A.sloppak")
+    _band(lib, "B.sloppak")
+    real = ffa.write_pack
+
+    def flaky(out, pack, rows):
+        if pack.name == "A.sloppak":
+            raise OSError("disk full")
+        return real(out, pack, rows)
+
+    monkeypatch.setattr(ffa, "write_pack", flaky)
+    out = tmp_path / "out"
+    assert ffa.main(["--library", str(lib), "--out", str(out)]) == 1   # errors -> exit 1
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["errors"] == 1
+    by_pack = {p["pack"]: p for p in summary["packs"]}
+    assert by_pack["A.sloppak"]["error"].startswith("OSError")
+    assert by_pack["A.sloppak"]["parts"] == []
+    assert by_pack["B.sloppak"]["parts"] and (out / "B" / "five_fret_guitar.json").exists()

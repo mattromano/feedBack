@@ -246,6 +246,8 @@ def main(argv=None) -> int:
         for pack in packs:
             try:
                 rows = run_pack(pack, parts, Path(tmp))
+                if a.out is not None:
+                    write_pack(a.out, pack, rows)
             except ffb.SkipPack as e:
                 rows, errors = [], errors + 1
                 summary.append({"pack": pack.name, "error": e.reason, "parts": []})
@@ -257,8 +259,6 @@ def main(argv=None) -> int:
                                 "parts": []})
                 print(f"{pack.name}  error  {type(e).__name__}: {e}")
                 continue
-            if a.out is not None:
-                write_pack(a.out, pack, rows)
             summary.append({"pack": pack.name, "parts": [_public(r) for r in rows]})
             for r in rows:
                 print(_line(pack.name, r))

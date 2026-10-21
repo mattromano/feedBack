@@ -110,8 +110,6 @@ def test_grid_from_beats_and_extrapolates():
     assert g.beat_at(-0.5) == pytest.approx(-1.0)      # before the first
     assert g.time_at(12.0) == pytest.approx(6.0)
     assert g.beat_len(1.3) == pytest.approx(0.5)
-    assert g.beats_since_measure(1.25) == pytest.approx(2.5)
-    assert g.beats_since_measure(2.25) == pytest.approx(0.5)
 
 
 def test_grid_without_beats_is_120bpm():
@@ -119,7 +117,6 @@ def test_grid_without_beats_is_120bpm():
     assert g.beat_at(1.0) == 2.0
     assert g.time_at(2.0) == 1.0
     assert g.beat_len(3.0) == 0.5
-    assert g.beats_since_measure(2.25) == pytest.approx(0.5)
     one = ac.BeatGrid.from_beats([Beat(time=3.0, measure=0)])
     assert one.beat_at(1.0) == 2.0
 
@@ -127,7 +124,6 @@ def test_grid_without_beats_is_120bpm():
 def test_grid_from_tempo():
     g = ac.BeatGrid.from_tempo(TempoMap(480), end_time=6.0, offset=0.25)
     assert g.time_at(4) == pytest.approx(2.25)
-    assert g.beats_since_measure(2.25) == pytest.approx(0)
     assert g.downbeats[:5] == [True, False, False, False, True]
 
 
@@ -358,15 +354,34 @@ def test_sustain_trimmed_before_next():
 
 
 def test_bend_and_slide_keep_sustain():
-    c = _chart([Note(time=1.0, string=0, fret=0, sustain=0.15, bend=1.0),
-                Note(time=3.0, string=0, fret=2, sustain=0.15, slide_to=5),
-                Note(time=5.0, string=0, fret=3, sustain=0.15)])
-    assert c.notes[0].length == pytest.approx(0.15)
-    assert c.notes[1].length == pytest.approx(0.15)
-    assert c.notes[2].length == 0.0
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=0.25, bend=1.0),
+                Note(time=3.0, string=0, fret=2, sustain=0.25, slide_to=5),
+                Note(time=5.0, string=0, fret=3, sustain=0.25)])
+    assert c.notes[0].length == pytest.approx(0.25)
+    assert c.notes[1].length == pytest.approx(0.25)
+    assert c.notes[2].length == pytest.approx(0.25)       # a plain note over 3/8 beat is kept too
     trimmed = _chart([Note(time=1.0, string=0, fret=0, sustain=2.0, bend=1.0),
                       Note(time=1.5, string=0, fret=2)])
     assert trimmed.notes[0].length == pytest.approx(0.4375)
+
+
+def test_short_bend_or_slide_is_a_blip():
+    # 3/8 beat = 0.1875 s at 120 bpm; an untrimmed length below it is dropped like any blip.
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=0.15, bend=1.0),
+                Note(time=3.0, string=0, fret=2, sustain=0.15, slide_to=5)])
+    assert [n.length for n in c.notes] == [0.0, 0.0]
+
+
+def test_bend_trimmed_below_blip_length_keeps_trimmed_sustain():
+    # Untrimmed 1.0 s qualifies; trimming against the next note (0.3125 s left) is only a trim.
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=1.0, bend=1.0),
+                Note(time=1.375, string=0, fret=2)])
+    assert c.notes[0].length == pytest.approx(0.375 - 0.0625)
+
+
+def test_open_note_keeps_sustain():
+    c = _chart([Note(time=1.0, string=0, fret=3), Note(time=2.0, string=1, fret=2, mute=True, sustain=1.0)])
+    assert c.notes[1].frets == 0 and c.notes[1].length == pytest.approx(1.0)
 
 
 def test_open_from_muted():
@@ -583,3 +598,33 @@ def test_ms_rounded_eighths_at_130_bpm():
     assert len(hard) == 300
     medium = ac.reduce_level(hard, "medium", grid)
     assert [n.time for n in medium] == [n.time for n in expert[::2]]
+
+
+# --- HST float tolerance and carry-over chains ------------------------------------------
+
+def _run(times, frets, **kw):
+    notes = [FretNote(time=t, frets=f, **kw) for t, f in zip(times, frets)]
+    ac.apply_hst(notes)
+    return notes
+
+
+@pytest.mark.parametrize("t0", [10.0, 1.0, 2.3])
+def test_hst_fast_alternating_run_is_float_noise_proof(t0):
+    times = [round(t0 + i * 0.1, 3) for i in range(12)]
+    notes = _run(times, [G if i % 2 == 0 else R for i in range(12)])
+    assert [n.hopo for n in notes] == [False] + [True] * 11
+
+
+def test_hst_half_second_gap_from_rounded_times_triggers_clause_2():
+    notes = [FretNote(time=1.8, frets=G, hopo=True), FretNote(time=2.3, frets=R, hopo=True),
+             FretNote(time=3.0, frets=Y, tap=True)]
+    assert 2.3 - 1.8 < 0.5                               # the float difference is 0.4999999999999998
+    ac.apply_hst(notes)
+    assert notes[1].tap and not notes[1].hopo
+
+
+def test_hst_tap_carries_through_a_run_of_hopos():
+    notes = [FretNote(time=1.0, frets=G, tap=True)] + [
+        FretNote(time=1.0 + 0.3 * i, frets=R if i % 2 else G, hopo=True) for i in range(1, 5)]
+    ac.apply_hst(notes)
+    assert all(n.tap and not n.hopo for n in notes)

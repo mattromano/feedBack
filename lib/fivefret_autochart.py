@@ -5,13 +5,27 @@ GPL-3.0), whose autochart is a port of Edward Haas's midi-ch (EFHIII/midi-ch, GP
 Licensed GPL-3.0-or-later as a separate file; core feedBack is AGPL-3.0, which GPL-3.0 §13
 allows combining with. Nothing else in core copies Onyx code.
 
-Onyx files and functions this module ports (the later pieces arrive task by task):
-- Mode.hs: the Rocksmith -> five-fret conversion (pitch events, fret-hand-mute notes
-  left out unless they slide, `simplifyChord`, hammer-on / tap / strum selection).
-- AutoChart.hs: `autoChart`, `distinguishLanes`, the lane limit for the lower levels.
-- midi-ch.cpp (via Onyx's port): grouping, padding and lane assignment.
-- Guitar.hs / Reductions.hs: `gryboReduce`, the reduction used for Hard / Medium / Easy.
-- adjustRocksmithHST: HOPO and tap carry-over.
+SPDX-License-Identifier: GPL-3.0-or-later
+Licence text: https://www.gnu.org/licenses/gpl-3.0.html
+
+Onyx source ported (mtolly/onyx at commit be402a777cb668fb9133471030c055c5e6956e3e, GPL-3.0):
+- haskell/packages/onyx-autochart/cbits/midi-ch.cpp: `midich_compute` (l.42-174),
+  `midich_findInGroups`, `midich_mergable`. This is Onyx's C++ port of Edward Haas's midi-ch
+  autocharter (EFHIII/midi-ch, GPL-3.0).
+- haskell/packages/onyx-autochart/src/Onyx/AutoChart.hs: `autoChart` (l.109-117),
+  `distinguishFrets` (l.34-107).
+- haskell/packages/onyx-lib/src/Onyx/Mode.hs: `simplifyChord` (l.394), `adjustRocksmithHST`
+  (l.407), `proGuitarToFiveFret` (l.467-536).
+- haskell/packages/onyx-lib/src/Onyx/Guitar.hs: `guitarify'` (l.229) / `noExtendedSustains'`,
+  `standardBlipThreshold` = 3/8 beat, `standardSustainGap` = 1/8 beat.
+- haskell/packages/onyx-lib/src/Onyx/Reductions.hs: `gryboComplete` (l.138-153),
+  `gryboReduce` (l.175-315), `limitFrets*` (l.83-135).
+
+Version history (`GENERATOR_VERSION`; the first three were tuning rounds of the Plan 5
+benchmark's tune split):
+- 1: first port.  2, 3: Easy padding tuned (see `_REDUCE`).
+- 4: `apply_hst` tolerates millisecond-rounded float times; a slide or bend sustain is kept
+  only when its untrimmed length is at least 3/8 beat.
 
 Port the algorithm, not the bugs:
 - midi-ch.cpp l.149 dereferences `distinct[g].end()`; it is ported as `rbegin()` (the
@@ -22,6 +36,16 @@ Port the algorithm, not the bugs:
   time-sorted first, so the borrowed notes are the nearest in time.
 - `std::sort` on the gaps is unstable; here gaps (quantised to 1/32 beat when a beat grid
   is given) are visited in (gap, index) order.
+
+Choices that are not Onyx's:
+- Notes closer than 1 ms form one event (merge window).
+- HOPO and tap flags are resolved by `adjustRocksmithHST` and stored (`h` / `tap`); no
+  natural-HOPO pass is added on top.
+- The lane limit for Medium (4) and Easy (3) is always on; Onyx makes it optional.
+- A slide or bend sustain is only trimmed, never dropped as a blip, but only when its
+  untrimmed length is at least 3/8 beat; shorter ones become 0 like any blip.
+- `adjustRocksmithHST` compares times with a 1e-6 s tolerance (`_HST_EPS`), because the
+  Rocksmith times are millisecond-rounded floats (1.1 - 1.0 is 0.10000000000000009).
 
 Left out: Onyx splits a tremolo into 1/4-beat notes; here a tremolo stays a sustain.
 
@@ -58,7 +82,7 @@ from drumchart import TempoMap
 from fivefretchart import FiveFretChart, FretNote
 
 GENERATOR = "feedback-fivefret-autochart"
-GENERATOR_VERSION = "3"
+GENERATOR_VERSION = "4"
 
 _MERGE_WINDOW = 0.001        # notes this close (seconds) form one event
 
@@ -110,15 +134,6 @@ class BeatGrid:
         if not self._gridded():
             return 0.5
         return self._edge_len(bisect.bisect_right(self.times, t) - 1)
-
-    def beats_since_measure(self, t: float) -> float:
-        b = self.beat_at(t)
-        if not self._gridded():
-            return b % 4.0
-        i = min(max(int(b // 1), 0), len(self.times) - 1)
-        while i > 0 and not self.downbeats[i]:
-            i -= 1
-        return b - i
 
 
 @dataclass
@@ -376,13 +391,14 @@ BLIP_BEATS = 3 / 8          # Guitar.hs standardBlipThreshold
 SUSTAIN_GAP_BEATS = 1 / 8   # Guitar.hs standardSustainGap
 _HST_LONG = 0.5             # Mode.hs adjustRocksmithHST timeLong (seconds)
 _HST_SHORT = 0.1            # ... timeShort
+_HST_EPS = 1e-6             # ms-scale slack: times are ms-rounded, 1.1 - 1.0 > 0.1 in floats
 _EPS = 1e-9
 
 
 def apply_sustains(notes: list[FretNote], grid: BeatGrid, keep: list[bool]) -> None:
     """Onyx `noExtendedSustains'`: end each sustain at least 1/8 beat before the next note;
-    one then shorter than 3/8 beat becomes 0, unless `keep[i]` (a slide or bend), which is
-    only trimmed."""
+    one then shorter than 3/8 beat becomes 0, unless `keep[i]` (a slide or bend) whose
+    untrimmed length is at least 3/8 beat: that one is only trimmed."""
     if len(keep) != len(notes):
         raise ValueError("notes and keep differ in length")
     for i, n in enumerate(notes):
@@ -390,11 +406,12 @@ def apply_sustains(notes: list[FretNote], grid: BeatGrid, keep: list[bool]) -> N
             n.length = 0.0
             continue
         start = grid.beat_at(n.time)
-        length = grid.beat_at(n.time + n.length) - start
+        length = untrimmed = grid.beat_at(n.time + n.length) - start
         if i + 1 < len(notes):
             gap = grid.beat_at(notes[i + 1].time) - start
             length = min(length, max(gap - SUSTAIN_GAP_BEATS, 0.0))
-        if length <= _EPS or (length < BLIP_BEATS - _EPS and not keep[i]):
+        if length <= _EPS or (untrimmed < BLIP_BEATS - _EPS and keep[i]) \
+                or (length < BLIP_BEATS - _EPS and not keep[i]):
             n.length = 0.0
         else:
             n.length = grid.time_at(start + length) - n.time
@@ -422,11 +439,11 @@ def apply_hst(notes: list[FretNote]) -> None:
         prev_t = notes[i - 1].time if i > 0 else 0.0
         if _sht(cur) == "tap" and _sht(nxt) == "hopo":
             _set_sht(nxt, "tap")
-        elif _sht(cur) == "hopo" and cur.time - prev_t >= _HST_LONG \
+        elif _sht(cur) == "hopo" and cur.time - prev_t >= _HST_LONG - _HST_EPS \
                 and _sht(nxt) == "tap":
             _set_sht(cur, "tap")
         elif _is_single(cur) and _is_single(nxt) \
-                and _sht(nxt) == "strum" and nxt.time - cur.time <= _HST_SHORT \
+                and _sht(nxt) == "strum" and nxt.time - cur.time <= _HST_SHORT + _HST_EPS \
                 and cur.frets != nxt.frets and _sht(cur) != "tap" and nxt.frets != 0:
             _set_sht(nxt, "hopo")
 
