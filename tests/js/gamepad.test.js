@@ -25,7 +25,7 @@ function pad(index, opts = {}) {
 }
 
 // Load a fresh gamepad.js instance with a controllable environment.
-function load() {
+function load(opts = {}) {
   let pads = [];
   const listeners = {};
   const rafQueue = [];
@@ -48,6 +48,7 @@ function load() {
     window: {
       addEventListener: (t, fn) => { (listeners[t] || (listeners[t] = [])).push(fn); },
       fbNotify: { show: (o) => toasts.push(o) },
+      ...(opts.feedBack ? { feedBack: opts.feedBack } : {}),
     },
   };
   vm.runInNewContext(SRC, sandbox);
@@ -179,4 +180,58 @@ test('polling acts only on the live standard pad, skipping stale/non-standard sl
   g.connect(live);
   g.tick();
   assert.deepEqual(g.fired, ['Space'], 'input read from the live standard pad only');
+});
+
+function padWithButtons(index, pressedIdx) {
+  const p = pad(index);
+  p.buttons = Array.from({ length: 16 }, (_, i) => ({ pressed: pressedIdx.includes(i) }));
+  return p;
+}
+
+test('no menu keys while any pad is claimed', () => {
+  const g = load({ feedBack: { gamepadInput: { claimCount: () => 1 } } });
+  const a = padWithButtons(0, [0, 13]);     // fret press (A) + d-pad down
+  const b = padWithButtons(1, [0]);         // Steam Input mirrored slot
+  g.setPads([a, b]);
+  g.connect(a);
+  g.setClock(0);   g.tick();
+  g.setClock(500); g.tick();                // past the repeat delay too
+  g.setPads([b, a]); g.tick();
+  assert.deepEqual(g.fired, [], 'a claimed controller must not drive menus');
+});
+
+test('menus work again when claims drop to 0', () => {
+  let claims = 1;
+  const g = load({ feedBack: { gamepadInput: { claimCount: () => claims } } });
+  const p = pad(0, { buttons: [false] });
+  g.setPads([p]);
+  g.connect(p);
+  g.tick();
+  claims = 0;
+  p.buttons[0].pressed = true; g.tick();
+  assert.deepEqual(g.fired, ['Space']);
+});
+
+test('a button held across claim release does not fire a stale press', () => {
+  let claims = 1;
+  const g = load({ feedBack: { gamepadInput: { claimCount: () => claims } } });
+  const p = padWithButtons(0, [0]);
+  g.setPads([p]);
+  g.connect(p);
+  g.tick();                                 // held while claimed
+  claims = 0;
+  g.tick();                                 // still held; not a new press
+  assert.deepEqual(g.fired, []);
+  p.buttons[0].pressed = false; g.tick();
+  p.buttons[0].pressed = true;  g.tick();
+  assert.deepEqual(g.fired, ['Space']);
+});
+
+test('no gamepadInput present: unchanged behaviour', () => {
+  const g = load({ feedBack: {} });
+  const p = pad(0, { buttons: [true] });
+  g.setPads([p]);
+  g.connect(p);
+  g.tick();
+  assert.deepEqual(g.fired, ['Space']);
 });

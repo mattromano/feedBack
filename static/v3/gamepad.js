@@ -121,6 +121,19 @@
     // forever, which both swallows the disconnect notice and (if the real
     // reconnected pad lands at a different index) reads dead input forever.
     function firstLiveStandardPad() {
+        // While any plugin has a controller claimed (plastic guitar/drums), menus
+        // stand down for every pad — a fret press must never become Space/Enter,
+        // and Steam Input mirrors the same presses onto extra slots.
+        if (claimActive()) return null;
+        return rawFirstLiveStandardPad();
+    }
+
+    function claimActive() {
+        var gi = window.feedBack && window.feedBack.gamepadInput;
+        return !!(gi && typeof gi.claimCount === 'function' && gi.claimCount() > 0);
+    }
+
+    function rawFirstLiveStandardPad() {
         var pads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (var i = 0; i < pads.length; i++) {
             var p = pads[i];
@@ -143,11 +156,29 @@
         return false;
     }
 
+    // While claimed, keep edge/repeat state in step with what is physically held
+    // (without firing) so a button held when the claim ends isn't read as a new
+    // press, and no stale repeat timer survives the claim.
+    function syncHeldState(gp) {
+        buttonWasDown = {};
+        dirWasDown = {};
+        dirRepeatAt = {};
+        if (!gp) return;
+        for (var i = 0; i < gp.buttons.length; i++) buttonWasDown[i] = !!gp.buttons[i].pressed;
+        var stick = stickDirections(gp);
+        Object.keys(DPAD_BUTTONS).forEach(function (idx) {
+            var name = DPAD_BUTTONS[idx].key.replace('Arrow', '').toLowerCase();
+            dirWasDown[name] = !!((gp.buttons[idx] && gp.buttons[idx].pressed) || stick[name]);
+        });
+    }
+
     function tick() {
         var gp = firstLiveStandardPad();
         if (gp) {
             pollButtons(gp);
             pollDpad(gp, performance.now());
+        } else if (claimActive()) {
+            syncHeldState(rawFirstLiveStandardPad());
         }
         if (polling) requestAnimationFrame(tick);
     }
