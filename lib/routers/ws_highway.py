@@ -219,9 +219,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
     so a stale or mistyped selection degrades to today's behavior instead of
     silencing drums.
 
-    `five_fret_part` opts in to streaming ONE five-fret part (a part id from
-    song_info's `five_fret_parts`). Absent or unknown ids stream nothing
-    extra — unlike drums, a five-fret chart is never sent unasked."""
+    `five_fret_part` restricts the five-fret stream to ONE part (a part id
+    from song_info's `five_fret_parts`); an unknown id streams nothing.
+    Absent, every five-fret part streams in manifest order."""
     await websocket.accept()
     structlog.contextvars.bind_contextvars(ws_conn_id=uuid.uuid4().hex[:8])
 
@@ -659,7 +659,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 for p in (loaded_slop.drum_parts or [])
             ] if is_slop and loaded_slop is not None else [],
             # The song's FIVE-FRET PARTS, manifest order — metadata only; the
-            # part named by `?five_fret_part=` streams as `five_fret*` frames.
+            # parts stream as `five_fret*` frames (all, or the `?five_fret_part=` one).
             # Always a list (empty when none).
             "five_fret_parts": [
                 {k: p[k] for k in ("id", "name", "instrument", "source_kind")}
@@ -755,15 +755,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             except WebSocketDisconnect:
                 return
 
-        # Stream the requested five-fret part (opt-in via `?five_fret_part=`):
-        # a `five_fret` header, `five_fret_notes` chunks, then each level's
-        # notes as `five_fret_level_notes` chunks — 500 per frame, like drums.
-        if five_fret_part and is_slop and loaded_slop is not None:
-            _ff_part = next(
-                (p for p in (loaded_slop.five_fret_parts or []) if p["id"] == five_fret_part),
-                None,
-            )
-            if _ff_part is not None:
+        # Stream the five-fret parts: every part in manifest order, or only
+        # the one named by `?five_fret_part=` (unknown id -> nothing). Per
+        # part: a `five_fret` header, `five_fret_notes` chunks, then each
+        # level's notes as `five_fret_level_notes` chunks — 500 per frame,
+        # like drums. Every frame carries `part_id` so the client can route.
+        if is_slop and loaded_slop is not None:
+            for _ff_part in (loaded_slop.five_fret_parts or []):
+                if five_fret_part and _ff_part["id"] != five_fret_part:
+                    continue
                 ff = _ff_part["five_fret"]
                 ff_notes = fivefret_mod.notes_to_wire(ff.get("notes") or [])
                 ff_levels = fivefret_mod.levels_to_wire(ff.get("levels"))
@@ -786,6 +786,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     for i in range(0, len(ff_notes), 500):
                         await websocket.send_json({
                             "type": "five_fret_notes",
+                            "part_id": _ff_part["id"],
                             "notes": ff_notes[i:i + 500],
                         })
                     for lid in ff_levels:
@@ -793,6 +794,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                         for i in range(0, len(_lv_notes), 500):
                             await websocket.send_json({
                                 "type": "five_fret_level_notes",
+                                "part_id": _ff_part["id"],
                                 "level": lid,
                                 "notes": _lv_notes[i:i + 500],
                             })

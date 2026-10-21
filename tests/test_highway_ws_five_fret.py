@@ -1,9 +1,10 @@
 """Five-fret parts on the highway WebSocket.
 
-`song_info.five_fret_parts` always lists the pack's parts; a part streams only
-when asked for with `?five_fret_part=<id>` (opt-in, unlike drums): a
-`five_fret` header frame, `five_fret_notes` chunks (<=500), then per-level
-`five_fret_level_notes` chunks.
+`song_info.five_fret_parts` lists the pack's parts. With no `five_fret_part`
+param every part streams, in manifest order; `?five_fret_part=<id>` restricts
+the stream to that part. Per part: a `five_fret` header frame, `five_fret_notes`
+chunks (<=500), then per-level `five_fret_level_notes` chunks. Every frame
+carries `part_id`.
 """
 
 from __future__ import annotations
@@ -130,8 +131,8 @@ def test_song_info_lists_parts(make_client):
     assert info["five_fret_parts"] == [
         {"id": "lead5", "name": "Lead 5", "instrument": "guitar", "source_kind": "chart"}
     ]
-    # listing alone never streams a part
-    assert not [f for f in frames if f["type"].startswith("five_fret")]
+    # no param -> every part streams (see test_default_streams_all_parts)
+    assert [f["part_id"] for f in _by_type(frames, "five_fret")] == ["lead5"]
 
 
 def test_song_info_empty_list_without_parts(make_client):
@@ -192,6 +193,30 @@ def test_levels_stream(make_client):
     # level notes follow the top-level notes
     assert max(i for i, t in enumerate(types) if t == "five_fret_notes") < min(
         i for i, t in enumerate(types) if t == "five_fret_level_notes")
+
+
+def test_default_streams_all_parts(make_client):
+    server = make_client()
+    levels = {"hard": {"notes": [{"t": 0.5, "f": 1}, {"t": 0.75, "f": 2}]}}
+    _write_pack(server._get_dlc_dir(), {
+        "lead5": _chart(3, levels=levels),
+        "bass5": _chart(2, name="Bass 5", instrument="bass"),
+    })
+    with TestClient(server.app) as client:
+        frames = _frames(client, "/ws/highway/fftest.sloppak?arrangement=0")
+        only = _frames(client, "/ws/highway/fftest.sloppak?arrangement=0&five_fret_part=bass5")
+    ff = [f for f in frames if f["type"].startswith("five_fret")]
+    assert all(f["part_id"] in ("lead5", "bass5") for f in ff)
+    # per-part order: header, notes chunks, level chunks; then the next part
+    assert [(f["type"], f["part_id"]) for f in ff] == [
+        ("five_fret", "lead5"), ("five_fret_notes", "lead5"),
+        ("five_fret_level_notes", "lead5"),
+        ("five_fret", "bass5"), ("five_fret_notes", "bass5"),
+    ]
+    heads = _by_type(frames, "five_fret")
+    assert [h["total"] for h in heads] == [3, 2]
+    # the param restricts the stream to one part
+    assert {f["part_id"] for f in only if f["type"].startswith("five_fret")} == {"bass5"}
 
 
 def test_unknown_part_sends_nothing(make_client):

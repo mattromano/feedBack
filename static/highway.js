@@ -262,6 +262,10 @@ function createHighway() {
     // `levels` as {easy|medium|hard: {hits: [...], generated}} (each level's
     // hits stream as `drum_level_hits` chunks). Absent keys mean the tab
     // carries no such data — the fields are never synthesized.
+    // Five-fret parts keyed by part_id: { partId, name, instrument, sourceKind,
+    // total, notes, levels: {easy|medium|hard: {notes, generated}}, starPower, solos }.
+    // Exposed as bundle.fiveFretParts / getFiveFretParts().
+    hwState.fiveFretParts = {};
     hwState.drumTab = null;  // { version, name, kit: [...], hits: [...], star_power?, fills?, solos?, levels? }
     hwState.ready = false;
     // Master-difficulty (feedBack#48). _phrases stays null as a
@@ -608,6 +612,9 @@ function createHighway() {
         // standard `notes` stream when present; absence is the
         // signal to fall back to legacy MIDI-encoded drums.
         b.drumTab = hwState.drumTab;
+        // Five-fret parts keyed by part_id ({} when none). Live reference,
+        // read-only — see the hwState.fiveFretParts comment.
+        b.fiveFretParts = hwState.fiveFretParts;
 
         // Master-difficulty (feedBack#48)
         b.mastery = hwState._mastery;
@@ -1868,7 +1875,7 @@ function createHighway() {
             hwState._resizeHandler = () => this.resize();
             window.addEventListener('resize', hwState._resizeHandler);
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null;
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = {};
             hwState.stringCount = 6;  // default until song_info arrives
             // Reset phrase ladder + filter (feedBack#48). _mastery
             // persists across arrangement switches — the slider's
@@ -2666,6 +2673,46 @@ function createHighway() {
                             }
                             break;
                         }
+                        case 'five_fret':
+                            // Header for one five-fret part; its notes and
+                            // level notes follow as chunks routed by part_id.
+                            // Re-sending a part resets it (replay-safe).
+                            if (typeof msg.part_id === 'string' && msg.part_id) {
+                                const part = {
+                                    partId: msg.part_id,
+                                    name: typeof msg.name === 'string' ? msg.name : msg.part_id,
+                                    instrument: typeof msg.instrument === 'string' ? msg.instrument : '',
+                                    sourceKind: typeof msg.source_kind === 'string' ? msg.source_kind : '',
+                                    total: Number.isInteger(msg.total) ? msg.total : 0,
+                                    notes: [],
+                                    levels: {},
+                                    starPower: Array.isArray(msg.star_power) ? msg.star_power : [],
+                                    solos: Array.isArray(msg.solos) ? msg.solos : [],
+                                };
+                                if (msg.levels && typeof msg.levels === 'object' && !Array.isArray(msg.levels)) {
+                                    for (const id of ['easy', 'medium', 'hard']) {
+                                        const lv = msg.levels[id];
+                                        if (lv && typeof lv === 'object') part.levels[id] = { notes: [], generated: lv.generated === true };
+                                    }
+                                }
+                                hwState.fiveFretParts[msg.part_id] = part;
+                            }
+                            break;
+                        case 'five_fret_notes': {
+                            const part = Object.prototype.hasOwnProperty.call(hwState.fiveFretParts, msg.part_id)
+                                ? hwState.fiveFretParts[msg.part_id] : null;
+                            if (part && Array.isArray(msg.notes)) Array.prototype.push.apply(part.notes, msg.notes);
+                            break;
+                        }
+                        case 'five_fret_level_notes': {
+                            const part = Object.prototype.hasOwnProperty.call(hwState.fiveFretParts, msg.part_id)
+                                ? hwState.fiveFretParts[msg.part_id] : null;
+                            const lv = part && typeof msg.level === 'string'
+                                && Object.prototype.hasOwnProperty.call(part.levels, msg.level)
+                                ? part.levels[msg.level] : null;
+                            if (lv && Array.isArray(msg.notes)) Array.prototype.push.apply(lv.notes, msg.notes);
+                            break;
+                        }
                         case 'phrases':
                             // Accumulate chunks but DON'T rebuild the filter
                             // until `ready` — rebuilding per chunk would
@@ -2968,6 +3015,7 @@ function createHighway() {
             }));
         },
         getSongInfo() { return hwState.songInfo; },
+        getFiveFretParts() { return hwState.fiveFretParts; },
         // Number of strings on the active arrangement
         // (feedBack-plugin-3dhighway#7). 4 for bass, 6 for guitar,
         // 7+ for extended-range GP imports. Plugins should size
@@ -3102,7 +3150,7 @@ function createHighway() {
             // Close old WS but keep audio + animation running
             if (hwState.ws) { hwState.ws.close(); hwState.ws = null; }
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null;
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = {};
             hwState.stringCount = 6;  // default until song_info arrives
             // Drop any per-song offset from the previous load so setTime
             // calls that fire before the next song_info arrives don't
