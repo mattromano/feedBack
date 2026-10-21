@@ -63,6 +63,7 @@ import {
     _exitConfirmEnabled,
     _resetPlaybackSpeedForNewSong,
     _showUpNextEnabled,
+    _wantSongCountIn,
     _wireSpeedPresetsOnce,
     applySpeedPreset,
     setMastery,
@@ -1599,6 +1600,33 @@ function requestExitSong() {
 }
 window.requestExitSong = requestExitSong;
 if (window.feedBack) window.feedBack.requestExitSong = requestExitSong;
+
+// Pause the song under a plugin overlay and resume it afterwards. Build-a-Band's
+// Settings overlay uses these. They mirror the exit-confirm's pause and Stay
+// (_openExitConfirm below): pause cancels any count-in and pauses a playing
+// song; resume plays only what was playing, only on the same song
+// (audioSeekGen) and only on the player, through the song count-in when the
+// song wants one.
+function pauseForOverlay() {
+    const wasPlaying = S.isPlaying || isCountingIn();
+    _cancelCountIn();
+    if (S.isPlaying) Promise.resolve(togglePlay()).catch(() => {});
+    return { wasPlaying, gen: audioSeekGen() };
+}
+
+function resumeAfterOverlay(token) {
+    if (!(token && token.wasPlaying)) return false;
+    if (S.isPlaying || isCountingIn()) return false;
+    if (audioSeekGen() !== token.gen) return false;
+    if (document.querySelector('.screen.active')?.id !== 'player') return false;
+    if (_wantSongCountIn()) Promise.resolve(startSongCountIn()).catch(() => {});
+    else Promise.resolve(togglePlay()).catch(() => {});
+    return true;
+}
+if (window.feedBack) {
+    window.feedBack.pauseForOverlay = pauseForOverlay;
+    window.feedBack.resumeAfterOverlay = resumeAfterOverlay;
+}
 
 // A *true* modal (role="dialog" aria-modal="true" + .feedBack-modal) so the
 // Escape/Space carve-outs classify it as a focus trap — they won't fire
