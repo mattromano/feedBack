@@ -29,10 +29,14 @@ function makeDispatcher() {
         'five_fret', 'five_fret_notes', 'five_fret_level_notes'];
     const body = labels.map(l => getCaseBlock(SRC, l)).join('\n');
     const ctx = {
-        hwState: { drumTab: null, fiveFretParts: {} },
+        hwState: { drumTab: null, fiveFretParts: null },
         document: { getElementById: () => null },
     };
     vm.createContext(ctx);
+    // fiveFretParts starts as highway.js's own init expression
+    const init = SRC.match(/hwState\.fiveFretParts = ([^;]+);/);
+    assert.ok(init, 'fiveFretParts init not found in highway.js');
+    ctx.hwState.fiveFretParts = vm.runInContext(`(${init[1]})`, ctx);
     vm.runInContext(`function feed(msg) { switch (msg.type) {\n${body}\n} }`, ctx);
     return ctx;
 }
@@ -83,14 +87,32 @@ test('five_fret frames fold into bundle.fiveFretParts', () => {
 test('fiveFretParts is empty before any frame and after a new song', () => {
     const ctx = makeDispatcher();
     assert.deepEqual(plain(ctx.hwState.fiveFretParts), {});
-    // every hwState reset site that clears drumTab also clears fiveFretParts
-    assert.match(SRC, /hwState\.fiveFretParts = \{\};\s*\n\s*hwState\.drumTab = null;/);
+    // a null-prototype object at init and at every hwState reset site that clears drumTab
+    assert.equal(SRC.split('hwState.fiveFretParts = Object.create(null);').length - 1, 3);
+    assert.doesNotMatch(SRC, /hwState\.fiveFretParts = \{\}/);
     const resets = SRC.split('\n').filter(l => l.includes('hwState.toneBase = ""; hwState.drumTab = null;'));
     assert.equal(resets.length, 2, 'expected the two reset sites');
-    for (const l of resets) assert.ok(l.includes('hwState.fiveFretParts = {}'), l.trim());
+    for (const l of resets) assert.ok(l.includes('hwState.fiveFretParts = Object.create(null)'), l.trim());
+    // drumTab's doc comment sits directly above its init line
+    assert.match(SRC, /the fields are never synthesized\.\n\s*hwState\.drumTab = null;/);
     // the bundle exposes the live reference, defaulting to {}
     assert.match(SRC, /b\.fiveFretParts\s*=\s*hwState\.fiveFretParts\s*;/);
     assert.match(SRC, /getFiveFretParts\(\)\s*\{\s*return hwState\.fiveFretParts;\s*\}/);
+});
+
+test("a '__proto__' part id is stored as a plain key, never as the prototype", () => {
+    const ctx = makeDispatcher();
+    ctx.feed({ type: 'five_fret', part_id: '__proto__', name: 'Odd', instrument: 'guitar', total: 1 });
+    ctx.feed({ type: 'five_fret_notes', part_id: '__proto__', notes: [{ t: 0.5, f: 1 }] });
+    ctx.feed({ type: 'five_fret_notes', part_id: 'constructor', notes: [{ t: 0.5, f: 1 }] });
+    ctx.feed({ type: 'five_fret_notes', part_id: 'toString', notes: [{ t: 0.5, f: 1 }] });
+    const parts = ctx.hwState.fiveFretParts;
+    assert.equal(Object.getPrototypeOf(parts), null);
+    assert.deepEqual(Object.keys(parts), ['__proto__']);
+    assert.ok(Object.prototype.hasOwnProperty.call(parts, '__proto__'));
+    assert.equal(parts.__proto__.name, 'Odd');
+    assert.equal(parts.__proto__.notes.length, 1);
+    assert.equal(({}).name, undefined);   // Object.prototype untouched
 });
 
 test('drumTab still folds unchanged', () => {

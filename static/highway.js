@@ -249,6 +249,11 @@ function createHighway() {
     hwState.lyricsSource = "";
     hwState.toneChanges = [];
     hwState.toneBase = "";
+    // Five-fret parts keyed by part_id: { partId, name, instrument, sourceKind,
+    // total, notes, levels: {easy|medium|hard: {notes, generated}}, starPower, solos }.
+    // Exposed as bundle.fiveFretParts / getFiveFretParts(). A null-prototype
+    // object, so any part id (even '__proto__') is just a key.
+    hwState.fiveFretParts = Object.create(null);
     // Drum-tab payload (sloppak-spec §5.3). When the active sloppak's
     // manifest carries a `drum_tab:` key, the server streams a `drum_tab`
     // metadata message followed by chunked `drum_hits`. `drumTab.hits` is
@@ -262,10 +267,6 @@ function createHighway() {
     // `levels` as {easy|medium|hard: {hits: [...], generated}} (each level's
     // hits stream as `drum_level_hits` chunks). Absent keys mean the tab
     // carries no such data — the fields are never synthesized.
-    // Five-fret parts keyed by part_id: { partId, name, instrument, sourceKind,
-    // total, notes, levels: {easy|medium|hard: {notes, generated}}, starPower, solos }.
-    // Exposed as bundle.fiveFretParts / getFiveFretParts().
-    hwState.fiveFretParts = {};
     hwState.drumTab = null;  // { version, name, kit: [...], hits: [...], star_power?, fills?, solos?, levels? }
     hwState.ready = false;
     // Master-difficulty (feedBack#48). _phrases stays null as a
@@ -1875,7 +1876,7 @@ function createHighway() {
             hwState._resizeHandler = () => this.resize();
             window.addEventListener('resize', hwState._resizeHandler);
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = {};
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = Object.create(null);
             hwState.stringCount = 6;  // default until song_info arrives
             // Reset phrase ladder + filter (feedBack#48). _mastery
             // persists across arrangement switches — the slider's
@@ -3150,7 +3151,7 @@ function createHighway() {
             // Close old WS but keep audio + animation running
             if (hwState.ws) { hwState.ws.close(); hwState.ws = null; }
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = {};
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null; hwState.fiveFretParts = Object.create(null);
             hwState.stringCount = 6;  // default until song_info arrives
             // Drop any per-song offset from the previous load so setTime
             // calls that fire before the next song_info arrives don't
