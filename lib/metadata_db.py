@@ -30,6 +30,10 @@ from tunings import perspective as _perspective
 
 log = logging.getLogger("feedBack.server")
 
+# `has_lyrics` filter value for "lyrics with per-syllable vocal pitch" (the
+# Karaoke-ready facet), beside 1 = has lyrics and 0 = no lyrics.
+LYRICS_WITH_PITCH = 2
+
 
 # Canonical Tuning-filter grouping key (feedBack#867). tuning_name collapses
 # every non-standard tuning to "Custom Tuning"; for those rows we key on the
@@ -556,11 +560,19 @@ class MetadataDB:
             "ALTER TABLE songs ADD COLUMN rhythm_tuning_offsets TEXT",
             "ALTER TABLE songs ADD COLUMN rhythm_tuning_key TEXT",
             "ALTER TABLE songs ADD COLUMN rhythm_tuning_low_pitch INTEGER",
+            # Whether the pack declares per-syllable vocal pitch (spec §7.2) —
+            # the Karaoke-ready filter. NULL marks a pre-migration row the
+            # scanner re-extracts, like the tuning-perspective markers.
+            "ALTER TABLE songs ADD COLUMN has_vocal_pitch INTEGER",
         ):
             try:
                 self.conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+        # Only sloppaks can carry vocal pitch, so settle every other format now
+        # rather than re-extracting the whole non-sloppak library to learn "no".
+        self.conn.execute("UPDATE songs SET has_vocal_pitch = 0 "
+                          "WHERE has_vocal_pitch IS NULL AND format != 'sloppak'")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title COLLATE NOCASE)")
         # Composite (sort col, filename) indexes cover the grid's ORDER BY +
@@ -3138,7 +3150,7 @@ class MetadataDB:
     # when extracted-but-absent, NULL only when the column predates the row.
     _EXTRACTION_MARKER_COLS = tuple(
         p.column(suffix) for p in ROLE_PERSPECTIVES for suffix in ("name", "key")
-    )
+    ) + ("has_vocal_pitch",)
 
     def get(self, filename: str, mtime: float, size: int) -> dict | None:
         cache_key = str(filename)
@@ -3147,7 +3159,7 @@ class MetadataDB:
             row = self.conn.execute(
                 "SELECT mtime, size, title, artist, album, year, duration, tuning, arrangements, has_lyrics, "
                 "format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, "
-                f"{pcols} "
+                f"has_vocal_pitch, {pcols} "
                 "FROM songs WHERE filename = ?", (cache_key,)
             ).fetchone()
         if row and row[0] == mtime and row[1] == size and row[2]:
@@ -3162,8 +3174,10 @@ class MetadataDB:
                 "tuning_name": row[13] or "",
                 "tuning_sort_key": int(row[14] or 0),
                 "tuning_offsets": row[15] or "",
+                # NULL preserved — a pre-migration row the scanner re-extracts.
+                "has_vocal_pitch": None if row[16] is None else bool(row[16]),
             }
-            for i, col in enumerate(self._PERSPECTIVE_COLS, start=16):
+            for i, col in enumerate(self._PERSPECTIVE_COLS, start=17):
                 val = row[i]
                 if col in self._EXTRACTION_MARKER_COLS:
                     out[col] = val          # NULL preserved — drives re-extraction
@@ -3180,8 +3194,8 @@ class MetadataDB:
                 "INSERT OR REPLACE INTO songs "
                 "(filename, mtime, size, title, artist, album, year, duration, tuning, arrangements, "
                 "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre, track_number, disc, "
-                + ", ".join(self._PERSPECTIVE_COLS) + ") "
-                "VALUES (" + ", ".join(["?"] * (20 + len(self._PERSPECTIVE_COLS))) + ")",
+                "has_vocal_pitch, " + ", ".join(self._PERSPECTIVE_COLS) + ") "
+                "VALUES (" + ", ".join(["?"] * (21 + len(self._PERSPECTIVE_COLS))) + ")",
                 (filename, mtime, size, meta.get("title", ""), meta.get("artist", ""),
                  meta.get("album", ""), meta.get("year", ""), meta.get("duration", 0),
                  meta.get("tuning", ""), json.dumps(meta.get("arrangements", [])),
@@ -3195,6 +3209,7 @@ class MetadataDB:
                  meta.get("genre", "") or "",
                  meta.get("track_number"),
                  meta.get("disc"),
+                 1 if meta.get("has_vocal_pitch") else 0,
                  # A put() row is by definition freshly extracted, so the
                  # marker columns must never be written NULL — that state is
                  # reserved for rows predating the column, which re-extract.
@@ -3938,6 +3953,9 @@ class MetadataDB:
         if has_lyrics in (0, 1):
             where += f" AND {alias}.has_lyrics = ?"
             params.append(has_lyrics)
+        elif has_lyrics == LYRICS_WITH_PITCH:
+            # Karaoke-ready: lyrics the singing mode can score (spec §7.2 pitch).
+            where += f" AND {alias}.has_lyrics = 1 AND {alias}.has_vocal_pitch = 1"
         if tunings:
             # Keep the input cap conservative (32) so a hostile caller
             # can't blow out the parameter list. Real tuning sets in the

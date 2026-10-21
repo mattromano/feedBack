@@ -47,7 +47,8 @@
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     // No 'Vocals': the scanner never stores a vocals arrangement and the server
-    // ignores it — karaoke songs are found via the Karaoke facet (lyrics + vocals stem).
+    // ignores it — karaoke songs are found via the Karaoke facet (lyrics with vocal
+    // pitch + vocals stem).
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo'];
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'piano', 'other'];
     const PAGE_SIZE = 24;
@@ -3042,13 +3043,14 @@
                         + (on ? '✕ ' : '') + 'Not split</button>';
                 })()) +
             section('Lyrics', ['', '1', '0'].map((v) => '<button data-lyrics="' + v + '" class="px-2 py-1 rounded-md text-xs border ' + (f.lyrics === v ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + (v === '' ? 'Any' : v === '1' ? 'Has lyrics' : 'No lyrics') + '</button>').join('')) +
-            // Karaoke needs synced lyrics AND a separated vocals stem; one click
-            // sets both facets (toggles off if both are already on).
+            // Karaoke-ready = what the lyrics plugin's singing mode runs on: lyrics
+            // with per-syllable vocal pitch (has_lyrics=pitch) AND a separated
+            // vocals stem. One click sets both (toggles off if both are on).
             section('Karaoke', (() => {
-                const on = f.lyrics === '1' && f.stem_has.includes('vocals');
+                const on = f.lyrics === 'pitch' && f.stem_has.includes('vocals');
                 return '<button data-karaoke class="px-2 py-1 rounded-md text-xs border '
                     + (on ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700')
-                    + '" title="Songs with synced lyrics and a separated vocals track">'
+                    + '" title="Songs you can sing: synced lyrics with vocal pitch and a separated vocals track">'
                     + (on ? '✕ ' : '') + 'Karaoke-ready</button>';
             })()) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
@@ -3150,11 +3152,11 @@
         });
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
         d.querySelectorAll('[data-karaoke]').forEach((b) => b.addEventListener('click', () => {
-            if (f.lyrics === '1' && f.stem_has.includes('vocals')) {
+            if (f.lyrics === 'pitch' && f.stem_has.includes('vocals')) {
                 f.lyrics = '';
                 f.stem_has = f.stem_has.filter((s) => s !== 'vocals');
             } else {
-                f.lyrics = '1';
+                f.lyrics = 'pitch';
                 if (!f.stem_has.includes('vocals')) f.stem_has.push('vocals');
                 f.stem_lacks = f.stem_lacks.filter((s) => s !== 'vocals');
             }

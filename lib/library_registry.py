@@ -18,7 +18,7 @@ from typing import ClassVar
 
 import appstate
 from metadata_db import (
-    MetadataDB, _effective_tuning_cols_sql, _perspective_is_inferred_sql,
+    LYRICS_WITH_PITCH, MetadataDB, _effective_tuning_cols_sql, _perspective_is_inferred_sql,
     _tuning_group_key_sql,
 )
 import tunings as tunings_mod
@@ -404,8 +404,11 @@ def _split_csv(raw: str) -> list[str]:
 
 
 def _parse_has_lyrics(raw: str) -> int | None:
-    """Tri-state parse for has_lyrics. `1` → require, `0` → exclude,
-    anything else (including empty) → no filter."""
+    """Parse for has_lyrics. `1` → require, `0` → exclude, `pitch` → require
+    lyrics with vocal pitch (Karaoke-ready), anything else (including empty)
+    → no filter."""
+    if raw == "pitch":
+        return LYRICS_WITH_PITCH
     if raw == "1":
         return 1
     if raw == "0":
