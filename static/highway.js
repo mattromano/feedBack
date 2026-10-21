@@ -1826,10 +1826,20 @@ function createHighway() {
         }
     }
 
+    function _disconnectContainerObserver() {
+        if (hwState._containerObserver) {
+            hwState._containerObserver.disconnect();
+            hwState._containerObserver = null;
+        }
+    }
+
     // ── Public API ───────────────────────────────────────────────────────
     const api = {
         init(canvasEl, container) {
             hwState.canvas = canvasEl;
+            // A container observer from a previous mount would keep resizing
+            // this highway against the old slot (and leak); drop it.
+            _disconnectContainerObserver();
             hwState._resizeContainer = container || null;
             hwState._domVisSampledFrame = NaN; // new mount → fresh DOM sample
             // Size the canvas BEFORE installing the renderer so
@@ -1929,11 +1939,15 @@ function createHighway() {
         getRenderScale() { return hwState._renderScale; },
 
         // Fret-number / note-label scale, 0.75–2.5. Drawn next frame; no resize needed.
-        setLabelScale(f) {
+        // `{ persist: false }` applies the scale for this session only, leaving the
+        // saved solo-play preference alone (Build-a-Band keeps its own per-lane value).
+        setLabelScale(f, opts) {
             const v = Number(f);
             if (!Number.isFinite(v)) return;
             hwState._labelScale = Math.max(0.75, Math.min(2.5, v));
-            localStorage.setItem('highwayLabelScale', hwState._labelScale);
+            if (!(opts && opts.persist === false)) {
+                localStorage.setItem('highwayLabelScale', hwState._labelScale);
+            }
         },
 
         getLabelScale() { return hwState._labelScale; },
@@ -1943,10 +1957,7 @@ function createHighway() {
         // window resize listener from init() is the only trigger. null restores
         // viewport sizing.
         setContainer(el) {
-            if (hwState._containerObserver) {
-                hwState._containerObserver.disconnect();
-                hwState._containerObserver = null;
-            }
+            _disconnectContainerObserver();
             hwState._resizeContainer = el || null;
             if (el && typeof ResizeObserver !== 'undefined') {
                 hwState._containerObserver = new ResizeObserver(() => this.resize());
@@ -2056,8 +2067,14 @@ function createHighway() {
             }));
         },
 
+        // opts.secondary: this highway is an extra lane (Build-a-Band's drum
+        // lane), not the main player. It still parses and draws its stream, but
+        // must not rebroadcast global song state — window.feedBack.currentSong,
+        // song:loaded, beats:loaded, song:ready all belong to the main player,
+        // and plugins re-initialise on them (note_detect drills, Auto viz).
         connect(wsUrl, opts = {}) {
             hwState._connectOpts = opts;
+            const secondary = !!(opts && opts.secondary);
             // Bump generation so async handlers from the previous connection
             // can detect they are stale and skip state mutations.
             hwState._wsGen += 1;
@@ -2521,7 +2538,7 @@ function createHighway() {
                                 }
                             }
                             // Plugin context API — broadcast current song state
-                            if (window.feedBack) {
+                            if (window.feedBack && !secondary) {
                                 const wsPath = hwState.ws.url.split('/ws/highway/')[1] || '';
                                 const filename = decodeURIComponent(wsPath.split('?')[0]);
                                 window.feedBack.currentSong = {
@@ -2566,7 +2583,7 @@ function createHighway() {
                             // streaming the beats array. Verify .emit is
                             // callable too — the namespace can be partially
                             // attached during early boot.
-                            if (window.feedBack && typeof window.feedBack.emit === 'function') {
+                            if (!secondary && window.feedBack && typeof window.feedBack.emit === 'function') {
                                 window.feedBack.emit('beats:loaded', { count: hwState.beats.length });
                             }
                             break;
@@ -2674,7 +2691,7 @@ function createHighway() {
                             // app.js). Fires on every `ready`, including
                             // arrangement switches — unlike `_onReady`,
                             // which is a single-use callback slot.
-                            if (window.feedBack) {
+                            if (window.feedBack && !secondary) {
                                 // Reuse api.hasPhraseData so the emit and
                                 // the public getter agree on the sentinel.
                                 window.feedBack.emit('song:ready', {
@@ -3153,6 +3170,7 @@ function createHighway() {
                 window.removeEventListener('resize', hwState._resizeHandler);
                 hwState._resizeHandler = null;
             }
+            _disconnectContainerObserver();
             // No song:* listeners to tear down — the monotonic clock
             // detects pause via setTime call patterns, not events.
             // Reset the anchor state so a fresh init/connect cycle

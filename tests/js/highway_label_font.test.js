@@ -97,3 +97,58 @@ test('setContainer is safe without ResizeObserver', (t) => {
     assert.equal(canvas.style.width, '320px');
     assert.doesNotThrow(() => hw.setContainer(null));
 });
+
+function stubResizeObserver() {
+    const observers = [];
+    global.ResizeObserver = class {
+        constructor(cb) { this.cb = cb; this.observed = []; this.disconnected = false; observers.push(this); }
+        observe(el) { this.observed.push(el); }
+        disconnect() { this.disconnected = true; }
+    };
+    return observers;
+}
+
+test('stop() disconnects the container observer', (t) => {
+    const hw = makeHighway();
+    if (!hw) return t.skip('highway.js not importable under node: ' + (hwMod.error && hwMod.error.message));
+    const observers = stubResizeObserver();
+    try {
+        hw.init(fakeCanvas());
+        hw.setContainer({ getBoundingClientRect: () => ({ width: 400, height: 300 }) });
+        assert.equal(observers.length, 1);
+        hw.stop();
+        assert.equal(observers[0].disconnected, true);
+        // A later setContainer(null) must not try to disconnect it again via a stale ref.
+        observers[0].disconnected = false;
+        hw.setContainer(null);
+        assert.equal(observers[0].disconnected, false, 'observer reference was dropped');
+    } finally { delete global.ResizeObserver; }
+});
+
+test('init() disconnects an existing container observer', (t) => {
+    const hw = makeHighway();
+    if (!hw) return t.skip('highway.js not importable under node: ' + (hwMod.error && hwMod.error.message));
+    const observers = stubResizeObserver();
+    try {
+        hw.init(fakeCanvas());
+        hw.setContainer({ getBoundingClientRect: () => ({ width: 400, height: 300 }) });
+        hw.init(fakeCanvas());
+        assert.equal(observers[0].disconnected, true);
+        observers[0].disconnected = false;
+        hw.setContainer(null);
+        assert.equal(observers[0].disconnected, false, 'observer reference was dropped');
+    } finally { delete global.ResizeObserver; }
+});
+
+test('setLabelScale { persist: false } applies without writing storage', (t) => {
+    const hw = makeHighway();
+    if (!hw) return t.skip('highway.js not importable under node: ' + (hwMod.error && hwMod.error.message));
+    store.set('highwayLabelScale', '1.25');
+    hw.setLabelScale(2, { persist: false });
+    assert.equal(hw.getLabelScale(), 2);
+    assert.equal(store.get('highwayLabelScale'), '1.25', 'storage untouched');
+    hw.setLabelScale(9, { persist: false });
+    assert.equal(hw.getLabelScale(), 2.5, 'still clamped');
+    hw.setLabelScale(1.75);
+    assert.equal(store.get('highwayLabelScale'), '1.75', 'default still persists');
+});
