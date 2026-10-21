@@ -32,6 +32,7 @@ function fakeDoc({ byId = {}, bySelector = {} } = {}) {
     return {
         getElementById: (id) => (id in byId ? byId[id] : null),
         querySelector: (sel) => (sel in bySelector ? bySelector[sel] : null),
+        querySelectorAll: (sel) => (sel in bySelector ? [].concat(bySelector[sel]) : []),
     };
 }
 
@@ -174,8 +175,13 @@ test('isPickBackKey: only a plain Escape on v3-songs', () => {
     assert.strictEqual(isPickBackKey(key({ target: { tagName: 'INPUT' } }), doc, 'v3-songs'), false);
     const openOverlay = fakeDoc({ byId: { 'v3-songs-overlay': hiddenOverlay(false) } });
     assert.strictEqual(isPickBackKey(key(), openOverlay, 'v3-songs'), false);
-    const modal = fakeDoc({ bySelector: { '[role="dialog"][aria-modal="true"], .feedBack-modal': {} } });
+    const shown = { hidden: false, getClientRects: () => [1], closest: () => null };
+    const modal = fakeDoc({ bySelector: { '[role="dialog"][aria-modal="true"], .feedBack-modal': shown } });
     assert.strictEqual(isPickBackKey(key(), modal, 'v3-songs'), false);
+    // Plugins keep hidden dialogs mounted (minigames, editor, ...): they must not block Back.
+    const parked = [{ hidden: false, getClientRects: () => [], closest: () => null }, { hidden: true, getClientRects: () => [1], closest: () => null }];
+    const hiddenModals = fakeDoc({ bySelector: { '[role="dialog"][aria-modal="true"], .feedBack-modal': parked } });
+    assert.strictEqual(isPickBackKey(key(), hiddenModals, 'v3-songs'), true);
     assert.strictEqual(isPickBackKey(key(), doc, 'v3-home'), false);
 });
 

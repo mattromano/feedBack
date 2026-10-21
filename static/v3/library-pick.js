@@ -48,7 +48,15 @@
         if (!doc) return true;
         const overlay = doc.getElementById('v3-songs-overlay');
         if (overlay && !(overlay.classList && overlay.classList.contains('hidden'))) return false;
-        if (doc.querySelector('[role="dialog"][aria-modal="true"], .feedBack-modal') !== null) return false;
+        // Only a dialog that is actually showing owns Escape: plugins keep hidden
+        // ones mounted (minigames, editor, results modals).
+        const modals = typeof doc.querySelectorAll === 'function'
+            ? Array.from(doc.querySelectorAll('[role="dialog"][aria-modal="true"], .feedBack-modal'))
+            : [doc.querySelector('[role="dialog"][aria-modal="true"], .feedBack-modal')].filter(Boolean);
+        const shown = (m) => !m.hidden
+            && !(typeof m.closest === 'function' && m.closest('[hidden]'))
+            && !(typeof m.getClientRects === 'function' && m.getClientRects().length === 0);
+        if (modals.some(shown)) return false;
         return true;
     }
 
