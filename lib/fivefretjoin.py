@@ -205,11 +205,11 @@ def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dic
 
 # ── audio side: placement, alignment, validation ────────────────────────────
 
-# Per-part validation thresholds (rhythm uses guitar's). Start at the drum values; Task 4 of
-# Plan 4 sets them from a trial on real charts.
+# Per-part validation thresholds (rhythm uses guitar's). From a trial on 21 real songs (Plan 4 Task 4):
+# the lowest cuts that pass no one-beat-shifted or wrong-chart placement; median / drift kept (they don't separate).
 THRESHOLDS = {
-    "guitar": {"min_within_30ms": 0.5, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.0},
-    "bass": {"min_within_30ms": 0.5, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.0},
+    "guitar": {"min_within_30ms": 0.35, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.05},
+    "bass": {"min_within_30ms": 0.45, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.05},
 }
 MIN_INTRO_NOTES = 8     # notes before the first drum hit that get validated on their own (reuse)
 
