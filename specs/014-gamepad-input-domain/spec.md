@@ -48,8 +48,9 @@ would depend on that plugin. The domain is `core.gamepad-input`, as
 - `list()` → `[{ index, id, mapping, vendor, product, connected, claimedBy }]`.
   `vendor`/`product` are parsed from `id` (`Vendor: 045e Product: 02ea`, bare or
   in parentheses), lower-case hex, else `null`.
-- `claim(index, ownerId)` → handle, or `null` when there is no connected
-  controller at `index` or another owner holds it. Claiming again with the same
+- `claim(index, ownerId)` → handle, or `null` when `index` is not a
+  non-negative integer, there is no connected controller at `index`, or another
+  owner holds it. Claiming again with the same
   owner returns the same handle.
 - handle: `{ index, id, controllerKey, addListener(fn), removeListener(fn), release() }`.
   `fn(ev)` gets `{ type: 'button'|'axis', index, value, pressed (buttons only),
@@ -68,7 +69,10 @@ the claim.
 ### Polling
 
 Polling runs on `requestAnimationFrame` only while at least one claim exists;
-releasing the last claim lets the loop lapse. A claim's baseline is the
+releasing the last claim lets the loop lapse. The steady state allocates
+nothing: values are compared in place, the reconcile pass runs only when a
+claim is not connected in its own slot, and listener lists are copy-on-write so
+dispatch never copies them. A claim's baseline is the
 controller's state at claim time, so held inputs do not fire on claim.
 
 ### Disconnect and reconnect
@@ -81,6 +85,19 @@ follows the controller. Changes are diffed against the last reported state, so a
 button held when the controller unplugged reports its release on reconnect.
 A different controller arriving in the vacated slot is not routed to the claim
 and is free to be claimed.
+
+### Change events
+
+`change` fires once per transition. When a poll tick sees an unplug or replug
+before the browser's `gamepadconnected`/`gamepaddisconnected` event arrives, the
+later browser event for the same slot and type is not announced again.
+
+### Trust
+
+Owner ids are not authenticated. Any in-page script that knows an owner id can
+call `claim(index, ownerId)` and receive (or `release()`) that owner's handle.
+This is the same in-page trust model as `midi-input`; the owner check only
+keeps cooperating plugins from claiming the same controller.
 
 ### Redaction
 

@@ -240,6 +240,112 @@ test('unplugging one of two identical controllers leaves the other claim live', 
     assert.equal(g.api.claim(2, 'p3').controllerKey, `${pad(0).id}#3`);
 });
 
+test('claim rejects a non-integer or negative index', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    assert.equal(g.api.claim('0', 'five_fret'), null);
+    assert.equal(g.api.claim(-1, 'five_fret'), null);
+    assert.equal(g.api.claim(0.5, 'five_fret'), null);
+    assert.equal(g.api.claimCount(), 0);
+});
+
+test('change fires on connect and disconnect with no claims', () => {
+    const g = load();
+    const changes = [];
+    g.api.on('change', (ev) => changes.push({ ...ev }));
+    g.setPads([pad(0)]);
+    g.connect(pad(0));
+    g.setPads([null]);
+    g.disconnect(pad(0, { connected: false }));
+    assert.deepEqual(changes, [{ type: 'connect', index: 0 }, { type: 'disconnect', index: 0 }]);
+    assert.equal(g.polling(), false, 'connection events alone do not start polling');
+});
+
+test('one unplug is announced once even when a poll sees it first', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    g.api.claim(0, 'five_fret');
+    const changes = [];
+    g.api.on('change', (ev) => changes.push({ ...ev }));
+    g.setPads([null]);
+    g.tick();                                          // poll notices the unplug
+    g.disconnect(pad(0, { connected: false }));        // the browser event arrives later
+    assert.deepEqual(changes, [{ type: 'disconnect', index: 0 }]);
+});
+
+test('a browser event for another slot still announces a claim reconnecting', () => {
+    const g = load();
+    const id = 'Guitar Hero Guitar (Vendor: 1430 Product: 4748)';
+    g.setPads([pad(0, { id })]);
+    g.api.claim(0, 'five_fret');
+    g.setPads([null]);
+    g.disconnect(pad(0, { id, connected: false }));
+    const changes = [];
+    g.api.on('change', (ev) => changes.push({ ...ev }));
+    // The guitar returns in slot 1 while the browser event is for slot 3.
+    g.setPads([null, pad(1, { id }), null, pad(3, { id: 'Other Pad' })]);
+    g.connect(pad(3, { id: 'Other Pad' }));
+    assert.deepEqual(changes, [{ type: 'connect', index: 3 }, { type: 'connect', index: 1 }]);
+});
+
+test('a throwing listener is isolated', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    g.api.on('change', () => { throw new Error('boom'); });
+    const changes = [];
+    g.api.on('change', (ev) => changes.push(ev.type));
+    const h = g.api.claim(0, 'five_fret');
+    assert.deepEqual(changes, ['claim']);
+    const got = [];
+    h.addListener(() => { throw new Error('boom'); });
+    h.addListener((ev) => got.push(ev.index));
+    g.setPads([pad(0, { buttons: [0, 1, 0, 0] })]);
+    assert.doesNotThrow(() => g.tick());
+    assert.deepEqual(got, [1]);
+    assert.equal(g.polling(), true, 'polling survives a throwing listener');
+});
+
+test('a listener removed during dispatch does not disturb that dispatch', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    const h = g.api.claim(0, 'five_fret');
+    const got = [];
+    const second = (ev) => got.push(`second:${ev.index}`);
+    h.addListener((ev) => { got.push(`first:${ev.index}`); h.removeListener(second); });
+    h.addListener(second);
+    g.setPads([pad(0, { buttons: [1, 1, 0, 0] })]);
+    g.tick();
+    assert.deepEqual(got, ['first:0', 'second:0', 'first:1']);
+});
+
+test('steady-state polling skips the reconcile path', () => {
+    const g = load();
+    g.setPads([pad(0), pad(1)]);
+    g.api.claim(0, 'five_fret');
+    const before = g.api._reconcileCount();
+    for (let i = 0; i < 5; i++) g.tick();
+    g.setPads([pad(0, { buttons: [1, 0, 0, 0] }), pad(1)]);
+    g.tick();
+    assert.equal(g.api._reconcileCount(), before, 'no reconcile while the claim is in place');
+    g.setPads([null, pad(1)]);
+    g.tick();
+    assert.equal(g.api._reconcileCount(), before + 1, 'an unplug takes the reconcile path');
+});
+
+test('inspect payload shape', async () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    g.api.claim(0, 'five_fret');
+    const r = await g.window.feedBack.capabilities.command('gamepad-input', 'inspect', { source: 'tester' });
+    const payload = r.payload;
+    assert.deepEqual(Object.keys(payload).sort(), ['available', 'claims', 'controllers', 'polling']);
+    assert.equal(payload.available, true);
+    assert.equal(payload.polling, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(payload.claims)), [{ index: 0, owner: 'five_fret', connected: true }]);
+    assert.equal(payload.controllers.length, 1);
+    assert.equal(payload.controllers[0].claimedBy, 'five_fret');
+});
+
 test('registers the capability owner with inspect and list-sources', async () => {
     const g = load();
     const caps = g.window.feedBack.capabilities;

@@ -7,10 +7,11 @@
 // same reason `midi-input` is: an input plane outlives any one feature.
 //
 // One owner per controller. Polling runs on requestAnimationFrame only while
-// at least one claim exists. A claimed controller that unplugs keeps its handle
-// (silent); when the same controllerKey reconnects, in any slot, events resume
-// on that handle. `claimCount()` lets core's menu gamepad support stand down
-// while any controller is being played.
+// at least one claim exists, and its steady state allocates nothing. A claimed
+// controller that unplugs keeps its handle (silent). When a controller with the
+// same `id` is back (its old slot preferred, else any free slot holding an
+// identical controller), events resume on that handle. `claimCount()` lets
+// core's menu gamepad support stand down while any controller is being played.
 //
 // Live events go only through the in-page handle on
 // `window.feedBack.gamepadInput`; the capability commands (`inspect`,
@@ -24,11 +25,23 @@
     if (window.feedBack.gamepadInput && window.feedBack.gamepadInput.version === 1) return;
 
     const AXIS_EPSILON = 0.02;      // axis changes smaller than this are ignored
+    const NO_PADS = Object.freeze([]);
 
-    // controllerKey → claim { owner, id, key, index, connected, handle, listeners:Set, buttons:[{pressed,value}], axes:[] }
+    // claim { owner, id, key, index, connected, handle, listeners:[fn],
+    //         pressed:[bool], values:[number], axes:[number] }
+    // `claims` is for key lookup; `claimList` is iterated on the hot path
+    // (indexed loops, no iterator allocation).
     const claims = new Map();
-    const changeListeners = new Set();
+    let claimList = [];
+    // Listener arrays are replaced, never mutated (copy-on-write), so dispatch
+    // iterates them in place and a listener that adds/removes mid-dispatch
+    // cannot disturb the loop.
+    let changeListeners = [];
+    // slot → change type a poll tick already announced, so the browser's own
+    // connect/disconnect event for the same transition is not announced twice.
+    const pollAnnounced = new Map();
     let rafPending = false;
+    let reconcileCount = 0;
 
     function _emit(name, detail) {
         try { capabilities.emitEvent('gamepad-input', name, detail || {}); }
@@ -39,38 +52,18 @@
         try { return window.performance.now() / 1000; } catch (_) { return 0; }
     }
 
+    // The browser's gamepad list, indexed directly (not copied).
     function _pads() {
         const nav = window.navigator;
-        if (!nav || typeof nav.getGamepads !== 'function') return [];
-        try { return Array.from(nav.getGamepads() || []); } catch (_) { return []; }
-    }
-
-    function _parseVendorProduct(id) {
-        const m = /Vendor:\s*([0-9a-f]{4})\s+Product:\s*([0-9a-f]{4})/i.exec(String(id || ''));
-        return m ? { vendor: m[1].toLowerCase(), product: m[2].toLowerCase() } : { vendor: null, product: null };
+        if (!nav || typeof nav.getGamepads !== 'function') return NO_PADS;
+        try { return nav.getGamepads() || NO_PADS; } catch (_) { return NO_PADS; }
     }
 
     function _live(p) { return !!(p && p.connected); }
 
-    // controllerKey for a new claim: `id#n`, the nth identical (same-id)
-    // controller in slot order. If a claim already holds that key (its
-    // identical twin unplugged and the slots renumbered), take the next free n.
-    function _keyFor(pads, index) {
-        const id = pads[index].id;
-        let n = 0;
-        for (const p of pads) {
-            if (_live(p) && p.id === id) n += 1;
-            if (p && p.index === index) break;
-        }
-        while (claims.has(`${id}#${n}`)) n += 1;
-        return `${id}#${n}`;
-    }
-
-    function _snapshotState(p) {
-        return {
-            buttons: Array.from(p.buttons || [], (b) => ({ pressed: !!(b && b.pressed), value: _buttonValue(b) })),
-            axes: Array.from(p.axes || [], (v) => Number(v) || 0),
-        };
+    function _parseVendorProduct(id) {
+        const m = /Vendor:\s*([0-9a-f]{4})\s+Product:\s*([0-9a-f]{4})/i.exec(String(id || ''));
+        return m ? { vendor: m[1].toLowerCase(), product: m[2].toLowerCase() } : { vendor: null, product: null };
     }
 
     function _buttonValue(b) {
@@ -79,11 +72,28 @@
         return Number.isFinite(v) ? v : (b.pressed ? 1 : 0);
     }
 
+    // controllerKey for a new claim: `id#n`, the nth identical (same-id)
+    // controller in slot order. If a claim already holds that key (its
+    // identical twin unplugged and the slots renumbered), take the next free n.
+    function _keyFor(pads, index) {
+        const id = pads[index].id;
+        let n = 0;
+        for (let i = 0; i <= index && i < pads.length; i++) {
+            if (_live(pads[i]) && pads[i].id === id) n += 1;
+        }
+        while (claims.has(`${id}#${n}`)) n += 1;
+        return `${id}#${n}`;
+    }
+
+    function _call(listeners, ev) {
+        for (let i = 0; i < listeners.length; i++) {
+            try { listeners[i](ev); } catch (_) { /* listener isolation */ }
+        }
+    }
+
     function _fireChange(type, index) {
         const ev = { type, index };
-        for (const fn of Array.from(changeListeners)) {
-            try { fn(ev); } catch (_) { /* listener isolation */ }
-        }
+        _call(changeListeners, ev);
         _emit('change', ev);
     }
 
@@ -91,23 +101,36 @@
     // disconnected one whose slot no other controller has taken.
     function _claimAt(index, pads) {
         const p = pads[index];
-        for (const c of claims.values()) {
+        for (let i = 0; i < claimList.length; i++) {
+            const c = claimList[i];
             if (c.index !== index) continue;
             if (!_live(p) || p.id === c.id) return c;
         }
         return null;
     }
 
+    // True when every claim is connected and its controller is still in its
+    // slot — the steady state, checked without allocating.
+    function _allInPlace(pads) {
+        for (let i = 0; i < claimList.length; i++) {
+            const c = claimList[i];
+            const p = pads[c.index];
+            if (!c.connected || !_live(p) || p.id !== c.id) return false;
+        }
+        return true;
+    }
+
     // Bring every claim's slot and connected flag in line with the pads. A
-    // claim keeps its slot while the same controller (same id) is there;
+    // claim keeps its slot while a controller with its `id` is there;
     // otherwise it moves to a free slot holding an identical controller
     // (preferring its own slot), else it goes silent until one appears.
     // Returns the [type, index] change events to announce.
     function _reconcile(pads) {
+        reconcileCount += 1;
         const taken = new Set();
         const unbound = [];
         const changes = [];
-        for (const c of claims.values()) {
+        for (const c of claimList) {
             const p = pads[c.index];
             if (_live(p) && p.id === c.id && !taken.has(c.index)) {
                 taken.add(c.index);
@@ -117,12 +140,15 @@
             }
         }
         for (const c of unbound) {
-            const p = pads.find((q) => _live(q) && q.id === c.id && !taken.has(q.index));
-            if (p) {
-                taken.add(p.index);
-                c.index = p.index;
-                c.handle.index = p.index;
-                if (!c.connected) { c.connected = true; changes.push(['connect', p.index]); }
+            let found = -1;
+            for (let i = 0; i < pads.length; i++) {
+                if (_live(pads[i]) && pads[i].id === c.id && !taken.has(i)) { found = i; break; }
+            }
+            if (found >= 0) {
+                taken.add(found);
+                c.index = found;
+                c.handle.index = found;
+                if (!c.connected) { c.connected = true; changes.push(['connect', found]); }
             } else if (c.connected) {
                 c.connected = false;
                 changes.push(['disconnect', c.index]);
@@ -131,56 +157,74 @@
         return changes;
     }
 
+    // Diff one controller against the claim's last reported state, in place.
+    // Allocates only an event object, and only when something changed.
+    function _diff(c, p, t) {
+        const buttons = p.buttons || NO_PADS;
+        for (let i = 0; i < buttons.length; i++) {
+            const b = buttons[i];
+            const pressed = !!(b && b.pressed);
+            const value = _buttonValue(b);
+            const prevValue = c.values[i] || 0;
+            if (pressed !== !!c.pressed[i] || Math.abs(value - prevValue) >= AXIS_EPSILON) {
+                c.pressed[i] = pressed;
+                c.values[i] = value;
+                if (c.listeners.length) _call(c.listeners, { type: 'button', index: i, value, pressed, t });
+            }
+        }
+        const axes = p.axes || NO_PADS;
+        for (let i = 0; i < axes.length; i++) {
+            const v = Number(axes[i]) || 0;
+            if (Math.abs(v - (c.axes[i] || 0)) >= AXIS_EPSILON) {
+                c.axes[i] = v;
+                if (c.listeners.length) _call(c.listeners, { type: 'axis', index: i, value: v, t });
+            }
+        }
+    }
+
     function _poll() {
         rafPending = false;
-        if (claims.size === 0) return;
+        if (claimList.length === 0) return;
         const pads = _pads();
-        for (const [type, index] of _reconcile(pads)) _fireChange(type, index);
+        if (!_allInPlace(pads)) {
+            const changes = _reconcile(pads);
+            for (const [type, index] of changes) {
+                pollAnnounced.set(index, type);
+                _fireChange(type, index);
+            }
+        }
         const t = _now();
-        for (const c of claims.values()) {
+        const list = claimList;
+        for (let i = 0; i < list.length; i++) {
+            const c = list[i];
             if (!c.connected) continue;
             const p = pads[c.index];
-            if (!p) continue;
-            const cur = _snapshotState(p);
-            const events = [];
-            cur.buttons.forEach((b, i) => {
-                const prev = c.buttons[i] || { pressed: false, value: 0 };
-                if (b.pressed !== prev.pressed || Math.abs(b.value - prev.value) >= AXIS_EPSILON) {
-                    c.buttons[i] = b;
-                    events.push({ type: 'button', index: i, value: b.value, pressed: b.pressed, t });
-                }
-            });
-            cur.axes.forEach((v, i) => {
-                const prev = c.axes[i] || 0;
-                if (Math.abs(v - prev) >= AXIS_EPSILON) {
-                    c.axes[i] = v;
-                    events.push({ type: 'axis', index: i, value: v, t });
-                }
-            });
-            for (const ev of events) {
-                for (const fn of Array.from(c.listeners)) {
-                    try { fn(ev); } catch (_) { /* listener isolation */ }
-                }
-            }
+            if (_live(p)) _diff(c, p, t);
         }
         _schedule();
     }
 
     function _schedule() {
-        if (rafPending || claims.size === 0) return;
+        if (rafPending || claimList.length === 0) return;
         const raf = window.requestAnimationFrame;
         if (typeof raf !== 'function') return;
         rafPending = true;
         raf.call(window, _poll);
     }
 
-    // A browser connect/disconnect event: announce it once, plus any claim
-    // that moved the other way in the same reconcile.
+    // A browser connect/disconnect event: announce it once (unless a poll tick
+    // already announced the same transition for that slot), plus any other
+    // claim change the same reconcile turns up.
     function _onConnection(type, e) {
         const index = e && e.gamepad && Number.isInteger(e.gamepad.index) ? e.gamepad.index : null;
-        const changes = claims.size ? _reconcile(_pads()) : [];
-        _fireChange(type, index);
-        for (const [t, i] of changes) if (t !== type) _fireChange(t, i);
+        const changes = claimList.length ? _reconcile(_pads()) : [];
+        const already = index !== null && pollAnnounced.get(index) === type;
+        if (index !== null) pollAnnounced.delete(index);
+        if (!already) _fireChange(type, index);
+        for (const [t, i] of changes) {
+            if (t === type && i === index) continue;
+            _fireChange(t, i);
+        }
     }
 
     try {
@@ -192,12 +236,13 @@
     function list() {
         const pads = _pads();
         const out = [];
-        for (const p of pads) {
+        for (let i = 0; i < pads.length; i++) {
+            const p = pads[i];
             if (!p) continue;
             const { vendor, product } = _parseVendorProduct(p.id);
-            const c = _claimAt(p.index, pads);
+            const c = _claimAt(i, pads);
             out.push({
-                index: p.index,
+                index: i,
                 id: p.id,
                 mapping: p.mapping,
                 vendor,
@@ -210,6 +255,7 @@
     }
 
     function claim(index, ownerId) {
+        if (!Number.isInteger(index) || index < 0) return null;
         const owner = String(ownerId || '').trim();
         if (!owner) return null;
         const pads = _pads();
@@ -218,22 +264,36 @@
         const p = pads[index];
         if (!_live(p)) return null;
         const key = _keyFor(pads, index);
-        const state = _snapshotState(p);
-        const c = { owner, id: p.id, key, index, connected: true, listeners: new Set(), buttons: state.buttons, axes: state.axes, handle: null };
+        const c = {
+            owner, id: p.id, key, index, connected: true, handle: null, listeners: [],
+            pressed: [], values: [], axes: [],
+        };
+        // Baseline: the controller's state now, so inputs held at claim time don't fire.
+        const buttons = p.buttons || NO_PADS;
+        for (let i = 0; i < buttons.length; i++) {
+            c.pressed[i] = !!(buttons[i] && buttons[i].pressed);
+            c.values[i] = _buttonValue(buttons[i]);
+        }
+        const axes = p.axes || NO_PADS;
+        for (let i = 0; i < axes.length; i++) c.axes[i] = Number(axes[i]) || 0;
         c.handle = {
             index,
             id: p.id,
             controllerKey: key,
-            addListener(fn) { if (typeof fn === 'function') c.listeners.add(fn); },
-            removeListener(fn) { c.listeners.delete(fn); },
+            addListener(fn) {
+                if (typeof fn === 'function' && !c.listeners.includes(fn)) c.listeners = c.listeners.concat(fn);
+            },
+            removeListener(fn) { c.listeners = c.listeners.filter((l) => l !== fn); },
             release() {
                 if (claims.get(key) !== c) return;
                 claims.delete(key);
-                c.listeners.clear();
+                claimList = claimList.filter((x) => x !== c);
+                c.listeners = [];
                 _fireChange('release', c.index);
             },
         };
         claims.set(key, c);
+        claimList = claimList.concat(c);
         _fireChange('claim', index);
         _schedule();
         return c.handle;
@@ -245,15 +305,15 @@
 
     function on(name, fn) {
         if (name !== 'change' || typeof fn !== 'function') return () => {};
-        changeListeners.add(fn);
-        return () => { changeListeners.delete(fn); };
+        changeListeners = changeListeners.concat(fn);
+        return () => { changeListeners = changeListeners.filter((l) => l !== fn); };
     }
 
     function _snapshot() {
         return {
             available: typeof (window.navigator && window.navigator.getGamepads) === 'function',
             controllers: list(),
-            claims: Array.from(claims.values(), (c) => ({ index: c.index, owner: c.owner, connected: c.connected })),
+            claims: claimList.map((c) => ({ index: c.index, owner: c.owner, connected: c.connected })),
             polling: rafPending,
         };
     }
@@ -277,7 +337,9 @@
         list,
         claim,
         isClaimed,
-        claimCount: () => claims.size,
+        claimCount: () => claimList.length,
         on,
+        // Test/diagnostic hook: how many times the slow reconcile path ran.
+        _reconcileCount: () => reconcileCount,
     };
 })();
