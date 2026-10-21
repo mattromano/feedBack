@@ -167,9 +167,32 @@ test('handleKey goes back and prevents default', async () => {
     assert.strictEqual((await p).reason, 'back');
 });
 
-test('index.html loads library-pick.js before songs.js', () => {
+test('index.html loads library-pick.js after app.js and before songs.js', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../static/v3/index.html'), 'utf8');
     const pick = html.indexOf('/static/v3/library-pick.js');
+    const app = html.indexOf('src="/static/app.js"');
     assert.ok(pick >= 0, 'library-pick.js is loaded');
+    assert.ok(app >= 0, 'app.js is loaded');
+    assert.ok(app < pick, 'library-pick.js must load after app.js (window.feedBack + showScreen)');
     assert.ok(pick < html.indexOf('/static/v3/songs.js'));
+});
+
+test('a rejected showScreen promise is caught (no unhandled rejection)', async () => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+        const api = createLibraryPick({
+            emit: () => {},
+            showScreen: () => Promise.reject(new Error('no such screen')),
+        });
+        const p = api.pick({ returnTo: 'plugin-missing' });
+        api.back();
+        assert.strictEqual((await p).reason, 'back');
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+        assert.deepStrictEqual(unhandled, []);
+    } finally {
+        process.off('unhandledRejection', onUnhandled);
+    }
 });

@@ -74,7 +74,12 @@
 
         function go(id) {
             if (typeof showScreen !== 'function') return;
-            try { showScreen(id); } catch (_) { /* navigation failure leaves the session state as is */ }
+            // A bad id can throw or reject (showScreen is async in the app);
+            // either way the session state stays as is and nothing goes unhandled.
+            try {
+                const r = showScreen(id);
+                if (r && typeof r.catch === 'function') r.catch(() => {});
+            } catch (_) { /* navigation failure leaves the session state as is */ }
         }
 
         function end(reason) {
