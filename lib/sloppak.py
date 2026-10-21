@@ -13,6 +13,7 @@ See the format spec in the project's sloppak plan for the full layout.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -52,7 +53,7 @@ FULL_MIX_STEM_ID = "full"
 
 import yaml
 
-from jsonc import load_json
+from jsonc import load_json, parse_jsonc
 from safepath import safe_join
 from song import (
     Song,
@@ -1617,6 +1618,43 @@ def _role_tuning_for_meta(arrangements_manifest: list[dict], role: str) -> list[
     return None
 
 
+def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[str]:
+    """`"<instrument>:<kind>"` per `type: five_fret` manifest entry, for the
+    library index (kind = the part file's `source.kind`).
+
+    Mirrors load_song()'s keep-rules for what the manifest declares (known
+    instrument, non-empty pointer) but reads only the tiny `source.kind` from
+    each part file — a missing/unreadable/odd file defaults to "chart" rather
+    than hiding a part the manifest declares. Never unpacks a zip."""
+    parts: list[str] = []
+    for entry in arr_list:
+        if not (isinstance(entry, dict)
+                and str(entry.get("type") or "").strip().lower() == "five_fret"):
+            continue
+        instrument = entry.get("instrument")
+        rel = entry.get("five_fret")
+        if instrument not in fivefret_mod.PARTS or not (isinstance(rel, str) and rel.strip()):
+            continue
+        kind = "chart"
+        try:
+            raw = read_member_bytes(path, rel)
+            if raw is None:
+                doc = None
+            elif rel.strip().lower().endswith(".jsonc"):
+                doc = parse_jsonc(raw.decode("utf-8"))
+            else:
+                doc = json.loads(raw)
+            src = doc.get("source") if isinstance(doc, dict) else None
+            if isinstance(src, dict) and src.get("kind") == "auto":
+                kind = "auto"
+        except Exception:
+            pass
+        tag = f"{instrument}:{kind}"
+        if tag not in parts:
+            parts.append(tag)
+    return parts
+
+
 def extract_meta(path: Path) -> dict:
     """Fast metadata for the library scanner. Reads only the manifest."""
     manifest = load_manifest(path)
@@ -1701,6 +1739,8 @@ def extract_meta(path: Path) -> dict:
         # mode scores against, so the library's Karaoke-ready filter keys on it.
         "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
         "has_drum_tab": has_drum_tab,
+        # ["guitar:chart", "bass:auto", ...] — the library's five_fret filter.
+        "five_fret_parts": _five_fret_parts_for_meta(path, arr_list),
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,

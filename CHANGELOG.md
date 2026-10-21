@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Five-fret parts (plastic-controller charts).** A feedpak can now carry
+  Guitar Hero / Rock Band style five-fret parts as `type: five_fret`
+  arrangement entries (`instrument` guitar, rhythm or bass, plus a `five_fret`
+  JSON side file whose `source.kind` is `chart` or `auto`). Core validates and
+  loads them (`lib/fivefret.py`), streams them over the highway WebSocket on
+  request (`?five_fret_part=<id>`, with `song_info.five_fret_parts` listing
+  what a pack has), and imports Rock Band / Clone Hero charts with the guitar,
+  rhythm and bass parts kept. The library indexes them too: items carry
+  `five_fret_parts` (for example `["guitar:chart", "bass:auto"]`) and
+  `/api/library` accepts `five_fret=any`, `guitar|rhythm|bass` (real or
+  auto-generated) or `guitar:chart` etc. (that part, real chart only).
 - **Library drum-chart filter.** `/api/library` songs now report `has_drum_tab` and `has_vocal_pitch`, and every library endpoint accepts `has_drums=1` (only songs with a drum chart: a `drum_tab`, or an arrangement named Drums, Percussion or Drum Kit) or `has_drums=0` (only songs without one).
 - **Karaoke library filter.** The Filters drawer has a one-click
   **Karaoke-ready** button that shows the songs you can sing: synced lyrics with
