@@ -176,3 +176,43 @@ def test_sng_rejects_garbage(tmp_path):
     p.write_bytes(b"SNGPKG" + (1).to_bytes(4, "little") + bytes(10))
     with pytest.raises(sngfile.SngError, match="truncated"):
         sngfile.read_sng(p)
+
+
+# ── five-fret parts ─────────────────────────────────────────────────────────
+
+def test_export_five_fret_only_pack(tmp_path):
+    """A pack with a five_fret part and no drums exports PART BASS (no PART DRUMS), with a
+    forced strum / HOPO / tap per note and the authored level only."""
+    import fivefretchart
+    root = tmp_path / "b.sloppak"
+    (root / "stems").mkdir(parents=True)
+    (root / "stems" / "full.ogg").write_bytes(FAKE_OGG)
+    beats = [{"time": 0.5 * i, "measure": i // 4 + 1 if i % 4 == 0 else -1} for i in range(16)]
+    notes = [{"t": 0.5, "f": 1}, {"t": 0.625, "f": 2, "h": True}, {"t": 1.0, "f": 6, "l": 0.5},
+             {"t": 2.0, "f": 0}, {"t": 2.5, "f": 4, "tap": True}]
+    ff = {"version": 1, "name": "Bass (5-fret)", "instrument": "bass", "source": {"kind": "chart"},
+          "notes": notes, "star_power": [{"start_time": 0.5, "end_time": 1.5}],
+          "levels": {"hard": {"notes": [{"t": 0.5, "f": 1}, {"t": 0.625, "f": 2, "tap": True}]},
+                     "easy": {"notes": [{"t": 0.5, "f": 1}], "generated": True}}}
+    (root / "five_fret_bass.json").write_text(json.dumps(ff))
+    (root / "song_timeline.json").write_text(json.dumps({"version": 1, "beats": beats, "sections": []}))
+    man = {"feedpak_version": "1.21.0", "title": "B", "artist": "Band", "duration": 8.0,
+           "stems": [{"id": "full", "file": "stems/full.ogg", "default": True}],
+           "arrangements": [{"id": "five_fret_bass", "name": "Bass (5-fret)", "type": "five_fret",
+                             "instrument": "bass", "five_fret": "five_fret_bass.json"}],
+           "song_timeline": "song_timeline.json"}
+    (root / "manifest.yaml").write_text(yaml.safe_dump(man, sort_keys=False))
+    s = sloppak_to_ch.export(root, tmp_path / "o")
+    assert s["parts"] == {"PART BASS": 5}
+    mid = mido.MidiFile(str(tmp_path / "o" / "notes.mid"))
+    assert "PART DRUMS" not in [t.name for t in mid.tracks]
+    ons = _ons(next(t for t in mid.tracks if t.name == "PART BASS"))
+    assert {(TPQ, 96), (TPQ, 102), (TPQ * 5 // 4, 97), (TPQ * 5 // 4, 101), (TPQ * 4, 95),
+            (TPQ * 4, 102), (TPQ * 5, 98), (TPQ * 5, 104), (TPQ, 116), (TPQ, 84), (TPQ, 90)} <= \
+        {(t, n) for t, n, _ in ons}
+    assert not {n for _, n, _ in ons} & {60, 66}                          # generated Easy not written
+    back, _ = fivefretchart.load_song_folder(tmp_path / "o")
+    assert [fivefretchart.note_json(n) for n in back["bass"].notes] == notes
+    assert set(back["bass"].levels) == {"hard"}
+    # a Hard-only tap goes out as a Hard Phase Shift tap phrase, not 104 (which would tap Expert too)
+    assert [fivefretchart.note_json(n) for n in back["bass"].levels["hard"]] == ff["levels"]["hard"]["notes"]
