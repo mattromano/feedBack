@@ -88,8 +88,10 @@ function buildSandbox() {
         playClick: () => {},
         // display-time.js seam (count-in.js imports these); the sweep clock is
         // covered by display_time.test.js.
-        setSweepTime: () => {},
-        clearSweepTime: () => {},
+        sweepCalls: [],
+        setSweepTime(t) { sandbox.sweepCalls.push(['set', t]); },
+        clearSweepTime() { sandbox.sweepCalls.push(['clear']); },
+        _listenForTransportInterrupt: () => {},
         showCountOverlay: () => {},
         hideCountOverlay: () => {},
         // beginCount sizes the count to the bar at loop A; the wrap-path
@@ -185,6 +187,15 @@ test('loop:restart fires once when wrap path runs', async () => {
     assert.equal(detail.loopB, 20);
     assert.equal(detail.time, 10);
     assert.equal(Object.keys(detail).length, 3, `unexpected extra keys in detail: ${Object.keys(detail)}`);
+
+    // The sweep drives the shared display clock: every frame sets it and emits
+    // count-in:sweep; completion clears it.
+    const sweeps = sandbox.__emitCalls.filter((c) => c.event === 'count-in:sweep');
+    assert.ok(sweeps.length >= 1, 'rewindStep must emit count-in:sweep');
+    assert.equal(sweeps[0].detail.time, 10, 'final frame lands on loop A');
+    assert.equal(sandbox.sweepCalls[0][0], 'set');
+    assert.equal(sandbox.sweepCalls[0][1], 10);
+    assert.equal(sandbox.sweepCalls[sandbox.sweepCalls.length - 1][0], 'clear', 'sweep cleared on completion');
 });
 
 test('loop:restart aborts when seek lands far from loopA (JUCE rollback)', async () => {

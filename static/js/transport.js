@@ -270,6 +270,9 @@ export async function _audioSeek(s, reason) {
     // jump regardless of which UI path triggered it. `reason` is a
     // free-form short string ('seek-by', 'loop-wrap', 'loop-set',
     // 'arrangement-restore', 'jump-fix') so subscribers can filter.
+    // A user-initiated seek interrupts a running count-in (count-in.js listens).
+    // The count-in's own loop-wrap seek must not cancel itself.
+    if (reason !== 'loop-wrap') window.feedBack.emit('transport:interrupt', { kind: 'seek', reason: reason || null });
     const gen = _audioSeekGen;
     _audioSeekChain = _audioSeekChain.then(async () => {
         if (gen !== _audioSeekGen) return { completed: false, from: NaN, to: NaN };
@@ -308,6 +311,8 @@ export async function _audioSeek(s, reason) {
 let _playAttemptGen = 0;
 
 export async function togglePlay() {
+    // Pressing play/pause interrupts a running count-in (count-in.js listens).
+    window.feedBack.emit('transport:interrupt', { kind: 'pause' });
     if (window._juceMode) {
         if (S.isPlaying) {
             await jucePlayer.pause();

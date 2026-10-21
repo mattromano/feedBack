@@ -132,6 +132,30 @@ const _CREDITS_HOLD_MS = 3000;
 // a count-in handoff that never plays). This hard cap guarantees the credits
 // never linger over the window.highway. Generous enough to outlast a normal count-in.
 const _CREDITS_MAX_MS = 12000;
+// A user seek or play/pause during a count-in (including the rewind sweep)
+// cancels it, which returns display time to the audio clock. transport.js emits
+// 'transport:interrupt'; the count-in's own loop-wrap seek is never announced.
+// Registered lazily (the bus does not exist at module-load time), once per bus.
+let _interruptBus = null;
+function _listenForTransportInterrupt() {
+    const bus = window.feedBack;
+    if (!bus || typeof bus.on !== 'function' || bus === _interruptBus) return;
+    _interruptBus = bus;
+    bus.on('transport:interrupt', (e) => {
+        if (!_countingIn) return;
+        _cancelCountIn();
+        // A seek leaves the transport paused mid-count-in with isPlaying still
+        // set; sync it like the sweep abort does. A pause press is followed by
+        // togglePlay's own pause branch, which needs isPlaying left alone.
+        if (e.detail && e.detail.kind === 'seek' && S.isPlaying) {
+            S.isPlaying = false;
+            setPlayButtonState(false);
+            window.feedBack.isPlaying = false;
+            window.feedBack.emit('song:pause', _songEventPayload());
+        }
+    });
+}
+
 export function _cancelCountIn() {
     _countInGen++;
     _countingIn = false;
@@ -247,6 +271,7 @@ export function hideSongCreditsOverlay() {
 export async function startCountIn(opts = {}) {
     if (_countingIn) return;
     _countingIn = true;
+    _listenForTransportInterrupt();
     // Snapshot the current gen so every delayed callback (rewind frames,
     // post-seek then, count-in ticks, post-count play) can bail if a
     // teardown bumped the gen mid-flight via _cancelCountIn().
@@ -407,6 +432,7 @@ export async function startCountIn(opts = {}) {
 export async function startSongCountIn() {
     if (_countingIn) return;
     _countingIn = true;
+    _listenForTransportInterrupt();
     // Snapshot the gen so a teardown (showScreen/playSong calls _cancelCountIn)
     // bumps it and every delayed callback below bails.
     const gen = _countInGen;
