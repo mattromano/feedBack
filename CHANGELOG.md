@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Five-fret auto-charter (offline, opt-in).** `scripts/five_fret_autochart.py`
+  makes five-fret parts from a pack's Rocksmith guitar, rhythm and bass
+  arrangements (`PACK... | --library DIR [--only REGEX] [--parts ...]`). It is
+  a dry run unless `--out DIR` is given, and even then it only writes the part
+  files (`source.kind: "auto"`, named "Guitar (auto)" etc., Expert plus
+  generated Hard / Medium / Easy), the manifest entries a pack writer would add
+  and a summary into that folder: it never modifies a pack, never replaces a
+  real chart, and refuses an output folder inside the library. The charter
+  (`lib/fivefret_autochart.py`, GPL-3.0-or-later) ports Onyx's autochart (itself
+  a port of Edward Haas's midi-ch) and Onyx's lower-level reducer.
+  `fivefretchart.ensure_levels` gains a `reducer` argument (`"simple"`, the
+  default, or `"onyx"`). `scripts/five_fret_benchmark.py` scores auto charts
+  against real 5-fret charts in the library (read-only, holdout split, SVG lane
+  strips) using `lib/fivefret_bench.py`.
 - **Five-fret parts (plastic-controller charts).** A feedpak can now carry
   Guitar Hero / Rock Band style five-fret parts as `type: five_fret`
   arrangement entries (`instrument` guitar, rhythm or bass, plus a `five_fret`
