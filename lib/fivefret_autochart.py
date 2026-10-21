@@ -2,8 +2,8 @@
 
 Ported from Onyx (Michael Tolly, mtolly/onyx, commit be402a777cb668fb9133471030c055c5e6956e3e,
 GPL-3.0), whose autochart is a port of Edward Haas's midi-ch (EFHIII/midi-ch, GPL-3.0).
-Licensed GPL-3.0-or-later as a separate file; core feedBack is AGPL-3.0, which GPL-3.0
-section 13 allows combining with. Nothing else in core copies Onyx code.
+Licensed GPL-3.0-or-later as a separate file; core feedBack is AGPL-3.0, which GPL-3.0 §13
+allows combining with. Nothing else in core copies Onyx code.
 
 Onyx files and functions this module ports (the later pieces arrive task by task):
 - Mode.hs: the Rocksmith -> five-fret conversion (pitch events, fret-hand-mute notes
@@ -18,6 +18,10 @@ Port the algorithm, not the bugs:
   last pitch).
 - midi-ch.cpp padding bounds `g - gd > 0` / `g + gd < groups.size() - 1` (and the
   off-by-one at l.140) become `g - gd >= 0` / `g + gd <= len(groups) - 1`.
+- midi-ch pads from its groups in creation order; here groups and their notes are
+  time-sorted first, so the borrowed notes are the nearest in time.
+- `std::sort` on the gaps is unstable; here gaps (quantised to 1/32 beat when a beat grid
+  is given) are visited in (gap, index) order.
 
 Left out: Onyx splits a tremolo into 1/4-beat notes; here a tremolo stays a sustain.
 
@@ -175,3 +179,173 @@ def arrangement_events(arr) -> list[PitchEvent]:
             power=len(simplified) == 2 and _is_power(distinct),
         ))
     return events
+
+
+# --- lane assignment: midi-ch `midich_compute` and Onyx `distinguishFrets` -------------
+
+_GAP_RESOLUTION = 32         # gaps are quantised to 1/32 beat on a beat grid
+
+
+def _power_pair(lanes: tuple[int, ...], n_lanes: int) -> tuple[int, ...]:
+    """A power chord's two lanes become adjacent: (lo, lo + 1), or the top pair."""
+    if len(lanes) != 2:
+        return lanes
+    lo = min(lanes[0], n_lanes - 2)
+    return (lo, lo + 1)
+
+
+def assign_lanes(groups: list[tuple[int, ...]], times: list[float], lanes: int = 5,
+                 grid: BeatGrid | None = None,
+                 power: list[bool] | None = None) -> list[tuple[int, ...]]:
+    """midi-ch lane assignment: one sorted lane tuple (0..lanes-1) per pitch tuple.
+
+    Notes are joined into groups of at most `lanes` distinct pitches, smallest time gap
+    first; a note's lane is its pitch's rank inside its (padded) group."""
+    if len(groups) != len(times):
+        raise ValueError("groups and times differ in length")
+    if any(not g for g in groups):
+        raise ValueError("assign_lanes needs a non-empty pitch tuple per event")
+    if grid is not None:
+        keys = [round(grid.beat_at(t) * _GAP_RESOLUTION) for t in times]
+    else:
+        keys = list(times)
+
+    # Flatten to notes sorted by time, then pitch (midi-ch's input order).
+    notes = sorted(((keys[e], p, e) for e, g in enumerate(groups) for p in sorted(set(g))),
+                   key=lambda n: (n[0], n[1]))
+    n = len(notes)
+    if n == 0:
+        return []
+    lane_of = [0] * n
+    if n > 1:
+        distinct_pitches = sorted({p for _, p, _ in notes})
+        rank_index = {p: i for i, p in enumerate(distinct_pitches)}
+        rank = [rank_index[p] for _, p, _ in notes]
+
+        def ranks_of(members):
+            return {rank[m] for m in members}
+
+        group_of: list[list[int] | None] = [None] * n
+        gaps = sorted(range(1, n), key=lambda i: (notes[i][0] - notes[i - 1][0], i))
+        for i in gaps:
+            a, b = group_of[i - 1], group_of[i]
+            if a is None and b is None:
+                grp = [i - 1, i]
+                group_of[i - 1] = group_of[i] = grp
+            elif a is None:
+                if len(ranks_of(b) | {rank[i - 1]}) <= lanes:
+                    b.append(i - 1)
+                    group_of[i - 1] = b
+                else:
+                    group_of[i - 1] = [i - 1]
+            elif b is None:
+                if len(ranks_of(a) | {rank[i]}) <= lanes:
+                    a.append(i)
+                    group_of[i] = a
+                else:
+                    group_of[i] = [i]
+            elif a is not b and len(ranks_of(a) | ranks_of(b)) <= lanes:
+                a.extend(b)
+                for m in b:
+                    group_of[m] = a
+
+        # Distinct groups, time-sorted, each with its notes time-sorted.
+        seen: dict[int, list[int]] = {}
+        for grp in group_of:
+            seen.setdefault(id(grp), grp)
+        ordered = sorted((sorted(grp) for grp in seen.values()), key=lambda g: g[0])
+
+        # Pad each group to `lanes` ranks, borrowing by position from its neighbours.
+        last = len(ordered) - 1
+        for g, members in enumerate(ordered):
+            distinct = ranks_of(members)
+            d, gd = 0, 1
+            while len(distinct) < lanes:
+                if g - gd >= 0 and d < len(ordered[g - gd]):
+                    prev = ordered[g - gd]
+                    distinct.add(rank[prev[len(prev) - 1 - d]])
+                if g + gd <= last and len(distinct) < lanes and d < len(ordered[g + gd]):
+                    distinct.add(rank[ordered[g + gd][d]])
+                d += 1
+                if (g - gd < 0 or d >= len(ordered[g - gd])) and \
+                        (g + gd > last or d >= len(ordered[g + gd])):
+                    gd += 1
+                    d = 0
+                if g - gd < 0 and g + gd > last:
+                    distinct.add(9999 + max(distinct))
+            padded = sorted(distinct)
+            for m in members:
+                lane_of[m] = padded.index(rank[m])
+
+    per_event: list[set[int]] = [set() for _ in groups]
+    for (_, _, e), lane in zip(notes, lane_of):
+        per_event[e].add(lane)
+    out = [tuple(sorted(s)) for s in per_event]
+    if power is not None:
+        out = [_power_pair(t, lanes) if pw else t for t, pw in zip(out, power)]
+    return out
+
+
+def distinguish_lanes(groups: list[tuple[int, ...]], out: list[tuple[int, ...]],
+                      lanes: int = 5,
+                      power: list[bool] | None = None) -> list[tuple[int, ...]]:
+    """Onyx `distinguishFrets`: when two consecutive different pitch sets came out on the
+    same lanes, move one of them (a whole run of its repeats) to the nearest other lane set
+    of the same size, aiming in the direction the pitch moved."""
+    if len(groups) != len(out):
+        raise ValueError("groups and out differ in length")
+    pw = power if power is not None else [False] * len(groups)
+
+    # Runs of consecutive events whose pitch set and lane set both repeat.
+    runs: list[list[int]] = []
+    for i in range(len(groups)):
+        if runs and set(groups[i]) == set(groups[runs[-1][0]]) and \
+                set(out[i]) == set(out[runs[-1][0]]):
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    orig = [frozenset(groups[r[0]]) for r in runs]
+    auto = [frozenset(out[r[0]]) for r in runs]
+    is_power = [any(pw[i] for i in r) for r in runs]
+
+    def average(xs) -> float:
+        return sum(xs) / len(xs) if xs else 0.0
+
+    def is_bottom(x) -> bool:
+        return x == frozenset(range(len(x)))
+
+    def is_top(x) -> bool:
+        return x == frozenset(range(lanes - len(x), lanes))
+
+    def fix_one(neighbours, aim_up: bool, first_try, adjacent: bool):
+        base = average(first_try)
+        choices = []
+        for mask in range(1 << lanes):
+            fc = frozenset(k for k in range(lanes) if mask >> k & 1)
+            if len(fc) != len(first_try) or fc in neighbours:
+                continue
+            if adjacent and len(fc) == 2 and max(fc) - min(fc) != 1:
+                continue
+            distance = base - average(fc)
+            wrong_way = distance > 0 if aim_up else distance < 0
+            choices.append((wrong_way, abs(distance), sorted(fc), fc))
+        return min(choices)[3] if choices else first_try
+
+    prev = None
+    for k in range(len(runs) - 1):
+        a1, a2 = auto[k], auto[k + 1]
+        if a1 == a2:
+            up = average(orig[k]) <= average(orig[k + 1])
+            if (not is_top(a2)) if up else (not is_bottom(a2)):
+                neighbours = [a1] + ([auto[k + 2]] if k + 2 < len(runs) else [])
+                auto[k + 1] = fix_one(neighbours, up, a2, is_power[k + 1])
+            else:
+                neighbours = [a2] + ([prev] if prev is not None else [])
+                auto[k] = fix_one(neighbours, not up, a1, is_power[k])
+        prev = auto[k]
+
+    result = list(out)
+    for r, lane_set in zip(runs, auto):
+        for i in r:
+            result[i] = tuple(sorted(lane_set))
+    return result

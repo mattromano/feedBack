@@ -127,3 +127,152 @@ def test_grid_from_tempo():
     assert g.time_at(4) == pytest.approx(2.25)
     assert g.beats_since_measure(2.25) == pytest.approx(0)
     assert g.downbeats[:5] == [True, False, False, False, True]
+
+
+def test_perfect_fourth_double_stop_is_power():
+    arr = _arr([Note(time=1.0, string=0, fret=0), Note(time=1.0, string=0, fret=5)])
+    ev = ac.arrangement_events(arr)[0]
+    assert ev.pitches == (40, 45) and ev.power is True
+
+
+# --- lane assignment (midi-ch) and distinguish_lanes ---------------------------------
+
+def _line(pitches, start=0.0, step=0.5):
+    return [(p,) for p in pitches], [start + i * step for i in range(len(pitches))]
+
+
+def _flat(lanes):
+    assert all(len(t) == 1 for t in lanes)
+    return [t[0] for t in lanes]
+
+
+def test_rising_line_moves_right():
+    groups, times = _line([40, 42, 43, 45, 47])
+    assert _flat(ac.assign_lanes(groups, times)) == [0, 1, 2, 3, 4]
+
+
+def test_falling_line_moves_left():
+    groups, times = _line([47, 45, 43, 42, 40])
+    assert _flat(ac.assign_lanes(groups, times)) == [4, 3, 2, 1, 0]
+
+
+def test_repeated_pitch_same_lane():
+    groups, times = _line([40, 42, 42, 45, 42])
+    lanes = _flat(ac.assign_lanes(groups, times))
+    assert lanes[1] == lanes[2] == lanes[4]
+    assert lanes[0] < lanes[1] < lanes[3]
+
+
+def test_lane_is_rank_within_group():
+    groups, times = _line([40, 41, 47])
+    assert _flat(ac.assign_lanes(groups, times)) == [0, 1, 2]
+
+
+def test_one_pitch_riff_stays_put():
+    a, ta = _line([40, 42, 43, 45, 47])
+    riff, tr = _line([50, 50, 50, 50], start=10.0, step=0.25)
+    c, tc = _line([40, 42, 43, 45, 47], start=20.0)
+    lanes = _flat(ac.assign_lanes(a + riff + c, ta + tr + tc))
+    assert len(set(lanes[5:9])) == 1
+    groups, times = _line([45] * 6)
+    assert _flat(ac.assign_lanes(groups, times)) == [0] * 6
+    assert ac.assign_lanes([(45,)], [1.0]) == [(0,)]
+    assert ac.assign_lanes([], []) == []
+
+
+def test_window_reanchors_after_gap():
+    a, ta = _line([40, 42, 43, 45, 47])
+    b, tb = _line([52, 54, 55, 57, 59], start=ta[-1] + 4.0)
+    assert _flat(ac.assign_lanes(a + b, ta + tb)) == [0, 1, 2, 3, 4] * 2
+
+
+def test_chords_two_or_three_lanes_follow_pitch():
+    out = ac.assign_lanes([(40, 47), (43, 50)], [0.0, 0.5])
+    assert out == [(0, 2), (1, 3)]
+    out = ac.assign_lanes([(40, 44, 47), (45, 49, 52)], [0.0, 0.5])
+    assert [len(t) for t in out] == [3, 3]
+    assert out[1][0] > out[0][0]
+
+
+def test_padding_borrows_from_time_neighbours():
+    # Groups (time order): {40,41,42,43,44}, {50}, {60,61,62,63,64}. The middle one-note
+    # group borrows the previous group's last notes and the next group's first notes.
+    a, ta = _line([40, 41, 42, 43, 44])
+    b, tb = _line([50], start=10.0)
+    c, tc = _line([60, 61, 62, 63, 64], start=20.0)
+    lanes = _flat(ac.assign_lanes(a + b + c, ta + tb + tc))
+    # padded set: 50 + 44, 60, 43, 61 -> sorted 43, 44, 50, 60, 61 -> 50 is lane 2
+    assert lanes[5] == 2
+
+
+def test_padding_borrows_from_second_to_last_neighbour():
+    # Groups (time order): {50,51,52}, {40,41,42}, {60,...,64}; none can merge (> 5 ranks).
+    # The first group needs two more ranks. midi-ch's l.140 off-by-one moved on from the
+    # second-to-last group after one note (taking 40, then 60); fixed, it takes 40 and 41.
+    a, ta = _line([50, 51, 52])
+    b, tb = _line([40, 41, 42], start=10.0)
+    c, tc = _line([60, 61, 62, 63, 64], start=22.0)
+    lanes = _flat(ac.assign_lanes(a + b + c, ta + tb + tc))
+    # padded set for the first group: 40, 41, 50, 51, 52
+    assert lanes[:3] == [2, 3, 4]
+
+
+def test_gaps_quantised_to_grid_ties_by_index():
+    # Two lanes: whichever gap is visited first decides the grouping. In seconds the second
+    # gap (0.4999) is smaller; on the grid both are 1 beat at 1/32 resolution, so the tie
+    # goes to the first gap by index.
+    groups = [(40,), (41,), (42,)]
+    times = [0.0, 0.5001, 1.0]
+    assert _flat(ac.assign_lanes(groups, times, lanes=2)) == [0, 0, 1]
+    grid = ac.BeatGrid.from_beats([])
+    assert _flat(ac.assign_lanes(groups, times, lanes=2, grid=grid)) == [0, 1, 1]
+
+
+def test_power_chord_adjacent():
+    groups = [(40,), (40, 47), (45, 52)]
+    times = [0.0, 0.5, 1.0]
+    plain = ac.assign_lanes(groups, times)
+    assert any(t[1] - t[0] > 1 for t in plain[1:])
+    out = ac.assign_lanes(groups, times, power=[False, True, True])
+    assert all(t[1] - t[0] == 1 for t in out[1:])
+    assert out[2][0] >= out[1][0]
+
+
+def test_major_third_double_stop_not_adjacent():
+    groups = [(40,), (42,), (40, 44)]
+    out = ac.assign_lanes(groups, [0.0, 0.5, 1.0], power=[False, False, False])
+    assert out[2] == (0, 2)
+
+
+def test_distinguish_moves_collision():
+    # rising pitch -> second event moves up
+    assert ac.distinguish_lanes([(40,), (45,)], [(2,), (2,)]) == [(2,), (3,)]
+    # falling pitch -> second event moves down
+    assert ac.distinguish_lanes([(45,), (40,)], [(2,), (2,)]) == [(2,), (1,)]
+    # the second can't move up from the top lane -> the first moves down instead
+    assert ac.distinguish_lanes([(40,), (45,)], [(4,), (4,)]) == [(3,), (4,)]
+    # the moved event avoids its next neighbour too
+    assert ac.distinguish_lanes([(40,), (45,), (47,)], [(2,), (2,), (3,)]) == \
+        [(2,), (4,), (3,)]
+
+
+def test_distinguish_moves_whole_run():
+    # AutoChart.hs l.43-45: repeats of the second pitch set move together
+    out = ac.distinguish_lanes([(40,), (45,), (45,), (45,)], [(2,)] * 4)
+    assert out == [(2,), (3,), (3,), (3,)]
+
+
+def test_distinguish_power_moves_to_adjacent_pair():
+    groups = [(40, 47), (42, 49)]
+    out = ac.distinguish_lanes(groups, [(1, 2), (1, 2)], power=[True, True])
+    assert out == [(1, 2), (2, 3)]
+    # Without the power flag Onyx's fixOne takes {0,3}: same average, so it counts as
+    # "in the aimed direction" at distance 0.
+    assert ac.distinguish_lanes(groups, [(1, 2), (1, 2)]) == [(1, 2), (0, 3)]
+
+
+def test_distinguish_keeps_same_pitch_same_lane():
+    groups = [(40,), (40,), (42,), (42,)]
+    out = [(1,), (1,), (2,), (2,)]
+    assert ac.distinguish_lanes(groups, out) == out
+    assert ac.distinguish_lanes([(40,)] * 3, [(0,)] * 3) == [(0,)] * 3
