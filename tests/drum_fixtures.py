@@ -13,9 +13,10 @@ FAKE_OGG = b"OggS\x00fake-audio"
 
 
 def write_mid(path: Path, notes, *, tempos=((0, 120.0),), sigs=((0, 4, 4),), texts=(), sections=(),
-              tpq: int = TPQ, track_name: str = "PART DRUMS"):
+              tpq: int = TPQ, track_name: str = "PART DRUMS", extra_tracks=()):
     """notes: (tick, midi_note, velocity, length_ticks); texts: (tick, text) in the drum track;
-    sections: (tick, name) -> EVENTS "[section name]"."""
+    sections: (tick, name) -> EVENTS "[section name]"; extra_tracks: (name, notes, texts,
+    text meta type) for more part tracks (PART VOCALS lyrics are "lyrics" or "text" events)."""
     import mido
     mid = mido.MidiFile(type=1, ticks_per_beat=tpq)
 
@@ -34,11 +35,18 @@ def write_mid(path: Path, notes, *, tempos=((0, 120.0),), sigs=((0, 4, 4),), tex
     sync += [(t, 0, mido.MetaMessage("time_signature", numerator=n, denominator=d)) for t, n, d in sigs]
     track("sync", sync)
     track("EVENTS", [(t, 0, mido.MetaMessage("text", text=f"[section {n}]")) for t, n in sections])
-    ev = [(t, 0, mido.MetaMessage("text", text=x)) for t, x in texts]
-    for tick, note, vel, length in notes:
-        ev.append((tick, 2, mido.Message("note_on", note=note, velocity=vel, channel=0)))
-        ev.append((tick + max(1, length), 1, mido.Message("note_off", note=note, velocity=0, channel=0)))
-    track(track_name, ev)
+
+    def part(name, notes, texts, text_type="text"):
+        ev = [(t, 0, mido.MetaMessage(text_type, text=x)) for t, x in texts]
+        for tick, note, vel, length in notes:
+            ev.append((tick, 2, mido.Message("note_on", note=note, velocity=vel, channel=0)))
+            ev.append((tick + max(1, length), 1, mido.Message("note_off", note=note, velocity=0, channel=0)))
+        track(name, ev)
+
+    if track_name:
+        part(track_name, notes, texts)
+    for extra in extra_tracks:
+        part(*extra)
     mid.save(str(path))
     return path
 

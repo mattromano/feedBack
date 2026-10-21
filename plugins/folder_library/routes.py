@@ -136,7 +136,8 @@ def setup(app, context):
 
         # Cache miss — run the expensive extract.
         m = {"title": None, "artist": None, "album": None, "duration": None,
-             "year": None, "tuning": None, "arrangements": [], "stems": [], "lyrics": False}
+             "year": None, "tuning": None, "arrangements": [], "stems": [], "lyrics": False,
+             "vocal_pitch": False}
         try:
             raw = context["extract_meta"](p)
             if raw:
@@ -179,6 +180,7 @@ def setup(app, context):
                         else:
                             m["lyrics"] = bool(_val)
                         break
+                m["vocal_pitch"] = bool(raw.get("has_vocal_pitch"))
         except Exception as exc:
             log.debug("meta failed for %s: %s", p.name, exc)
         if not m["title"]:
@@ -228,7 +230,8 @@ def setup(app, context):
         st_has    = _split(stems_has)
         st_lacks  = _split(stems_lacks)
         tun_set   = set(_split(tunings))
-        lyr       = None if has_lyrics == "" else (has_lyrics == "1")
+        lyr       = None if has_lyrics == "" else (has_lyrics in ("1", "pitch"))
+        pitch     = has_lyrics == "pitch"   # Karaoke-ready: lyrics + vocal pitch
 
         if not any([arr_has, arr_lacks, st_has, st_lacks, tun_set, lyr is not None]):
             return tree  # no filters active — return as-is
@@ -241,6 +244,7 @@ def setup(app, context):
             if st_has    and not any(x in stms for x in st_has):    return False
             if st_lacks  and     any(x in stms for x in st_lacks):  return False
             if lyr is not None and bool(s.get("lyrics")) != lyr:    return False
+            if pitch and not s.get("vocal_pitch"):                   return False
             if tun_set and (s.get("tuning") or "").lower() not in tun_set: return False
             return True
 

@@ -2,8 +2,8 @@
 // The Arrangements → "Vocals" pill was dead UI: the server only accepts
 // Lead/Rhythm/Bass/Combo (lib/metadata_db.py _ALLOWED_ARRANGEMENT_NAMES) and the
 // scanner never stores a vocals arrangement, so the pill silently filtered
-// nothing. Karaoke needs synced lyrics plus a separated vocals stem, so the
-// drawer offers a one-click "Karaoke" filter composed of those two facets.
+// nothing. Karaoke-ready means the lyrics plugin's singing mode actually runs:
+// per-syllable vocal pitch (has_lyrics=pitch) plus a separated vocals stem.
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -23,11 +23,11 @@ test('drawer renders a Karaoke quick filter button', () => {
     assert.match(src, /Karaoke-ready/);
 });
 
-test('Karaoke filter toggles has-lyrics plus the vocals stem', () => {
+test('Karaoke filter toggles lyrics-with-pitch plus the vocals stem', () => {
     const at = src.indexOf("d.querySelectorAll('[data-karaoke]')");
     assert.ok(at >= 0, 'no [data-karaoke] click handler');
     const handler = src.slice(at, at + 900);
-    assert.match(handler, /f\.lyrics = '1'/);
+    assert.match(handler, /f\.lyrics = 'pitch'/);
     assert.match(handler, /f\.stem_has\.push\('vocals'\)/);
     assert.match(handler, /f\.stem_lacks = f\.stem_lacks\.filter\(\(s\) => s !== 'vocals'\)/);
     assert.match(handler, /renderDrawer\(\)/);

@@ -1614,6 +1614,9 @@ def extract_meta(path: Path) -> dict:
         **role_tunings,
         "arrangements": arrangements,
         "has_lyrics": has_lyrics,
+        # Per-syllable vocal pitch (spec §7.2): what the lyrics plugin's singing
+        # mode scores against, so the library's Karaoke-ready filter keys on it.
+        "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,

@@ -9,8 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Karaoke library filter.** The Filters drawer has a one-click
-  **Karaoke-ready** button that shows songs with synced lyrics and a separated
-  vocals stem. The Arrangements facet no longer offers a **Vocals** pill: the
+  **Karaoke-ready** button that shows the songs you can sing: synced lyrics with
+  per-syllable vocal pitch (`has_lyrics=pitch`) and a separated vocals stem, so
+  songs whose pitch was never extracted stay out. The library now records
+  whether each pack declares `vocal_pitch`; existing libraries backfill it on the
+  next scan. The Arrangements facet no longer offers a **Vocals** pill: the
   server ignored it, so it silently filtered nothing.
 - **Songs table view.** A fifth library view (☷, next to grid / list /
   albums / folders) shows the whole filtered library as one dense, sortable
