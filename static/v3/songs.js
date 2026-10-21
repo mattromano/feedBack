@@ -191,10 +191,20 @@
             };
         }
     }
+    // Restore the saved prefs once (render() calls this before the first toolbar
+    // build), then re-apply a library pick's view rule: the restored view may be
+    // albums/table/folder, which a pick never shows (they play on their own).
+    function _restoreViewState() {
+        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
+        _applyPickView();
+    }
     // Persist the current view prefs (best-effort; storage may be full/disabled).
     // Called from reload(), which every sort/format/filter/view change funnels
-    // through — so this is the single write point.
+    // through — so this is the single write point. Never before the saved prefs
+    // were restored: the defaults would overwrite them (a pick can reach
+    // reload() before the first render()).
     function saveLibraryPrefs() {
+        if (!_prefsRestored) return;
         try {
             const f = state.filters;
             localStorage.setItem(PREFS_KEY, JSON.stringify({
@@ -282,6 +292,9 @@
     const pickApi = () => (sm && sm.library && sm.library.pickState) || null;
     function pickOn() { const p = pickApi(); return !!(p && p.session()); }
     function pickSelectedKey() { const p = pickApi(); const s = p && p.session(); return (s && s.selected && s.selected.filename) || ''; }
+    // Is this row the pick's selection? An empty key means nothing is selected,
+    // so it never matches (an unsynced remote row's local filename is '' too).
+    function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song); }
 
     function queryParams(extra, opts) {
         const f = state.filters;
@@ -972,10 +985,8 @@
             : '';
         // Recycled cards re-render from state, so a selected card must paint its
         // ring on initial markup (toggleSelect only adds it to a live node).
-        // Library pick: the selected card gets the same ring plus a Selected
-        // badge (an empty key means nothing is selected, so it never matches).
-        const pickSelKey = pickOn() ? pickSelectedKey() : '';
-        const pickSel = !!pickSelKey && pickSelKey === localFilename(song);
+        // Library pick: the selected card gets the same ring plus a Selected badge.
+        const pickSel = pickIsSelected(song);
         const selRing = (state.selected.has(key) || pickSel) ? ' ring-2 ring-fb-primary' : '';
         const pickBadge = pickSel
             ? '<span data-pick-badge class="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 bg-fb-primary text-white text-xs font-bold px-2 py-0.5 rounded-full pointer-events-none">Selected</span>'
@@ -1737,6 +1748,10 @@
             document.body.appendChild(bar);
         }
         bar.setAttribute('aria-label', s.title);
+        // The rebuild below replaces the chip buttons; keep keyboard focus on
+        // the chip that had it (by chip id) instead of dropping it to <body>.
+        const focusedChip = (document.activeElement && bar.contains(document.activeElement))
+            ? document.activeElement.getAttribute('data-pick-filter') : null;
         const sel = s.selected;
         const text = note || (sel
             ? 'Selected: ' + (sel.title || sel.filename) + (sel.artist ? ' — ' + sel.artist : '')
@@ -1754,14 +1769,17 @@
         }));
         bar.querySelector('[data-pick-back]').addEventListener('click', () => { const p = pickApi(); if (p) p.back(); });
         bar.querySelector('[data-pick-use]').addEventListener('click', () => { const p = pickApi(); if (p) p.confirm(); });
+        if (focusedChip !== null) {
+            const again = Array.from(bar.querySelectorAll('[data-pick-filter]'))
+                .find((b) => b.getAttribute('data-pick-filter') === focusedChip);
+            if (again) again.focus();
+        }
     }
 
-    // library:pick-changed: a pick started, ended, toggled a chip or moved its
-    // selection. Start/end/chips change the query (reload, or mark the grid
-    // dirty off-screen); a selection move only repaints the window + bar.
-    function onPickChanged() {
-        const key = pickOn() ? JSON.stringify(pickApi().params()) : '';
-        const prevView = state.view;
+    // A pick never shows albums/table/folder: switch to grid and remember the
+    // view; the pick's end puts it back. Shared by onPickChanged and
+    // _restoreViewState (the saved view lands after a pick may have started).
+    function _applyPickView() {
         if (pickOn() && state.pickPrevView === null
             && (state.view === 'albums' || state.view === 'table' || state.view === 'folder')) {
             state.pickPrevView = state.view;
@@ -1770,6 +1788,15 @@
             state.view = state.pickPrevView;
             state.pickPrevView = null;
         }
+    }
+
+    // library:pick-changed: a pick started, ended, toggled a chip or moved its
+    // selection. Start/end/chips change the query (reload, or mark the grid
+    // dirty off-screen); a selection move only repaints the window + bar.
+    function onPickChanged() {
+        const key = pickOn() ? JSON.stringify(pickApi().params()) : '';
+        const prevView = state.view;
+        _applyPickView();
         if (pickOn() && state.selectMode) setSelectMode(false);
         if (key !== state.pickKey || state.view !== prevView) {
             state.pickKey = key;
@@ -2105,7 +2132,7 @@
     // otherwise the node is reused as-is across window slides.
     function _cardSig(i) {
         return (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0')
-            + (pickOn() ? (state.songs[i] && pickSelectedKey() === localFilename(state.songs[i]) ? 'P' : 'p') : '');
+            + (pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '');
     }
 
     function _buildCardNode(i) {
@@ -3898,7 +3925,7 @@
         if (_closeCardMenu) _closeCardMenu();
         // Restore last-used sort/format/view/filters once, before building the
         // toolbar so its selects reflect the saved choice (default: Artist A–Z).
-        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
+        _restoreViewState();
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
@@ -4108,7 +4135,12 @@
         // A library scan / DLC-folder change marked the grid stale — re-fetch
         // from scratch instead of restoring a cached (possibly empty, pre-DLC)
         // snapshot. Must win over every fast-path below.
-        if (_libraryDirty) { _libraryDirty = false; await reload(); return; }
+        // Only once built: a first visit (e.g. a library pick opening Songs)
+        // has no DOM to reload into and must take the full render() below.
+        if (_libraryDirty) {
+            _libraryDirty = false;
+            if (state.built) { await reload(); return; }
+        }
         // Keep the entry-point gates current (a Settings visit may have
         // toggled artist pages / external links). Fire-and-forget.
         refreshArtistPageGates();

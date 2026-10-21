@@ -80,6 +80,16 @@ test('onV3SongsScreenEnter ends with renderPickBar on every path', () => {
     assert.match(body, /await _enterSongsScreen\(\);\s*\} finally \{[^}]*renderPickBar\(\);\s*\}/);
 });
 
+test('renderPickBar restores focus to the toggled chip by its id', () => {
+    const body = fnBody('renderPickBar');
+    const save = body.indexOf("document.activeElement.getAttribute('data-pick-filter')");
+    const rebuild = body.indexOf('bar.innerHTML =');
+    const restore = body.indexOf('again.focus()');
+    assert.ok(save >= 0 && rebuild >= 0 && restore >= 0);
+    assert.ok(save < rebuild && rebuild < restore, 'read the focused chip id, rebuild, then refocus it');
+    assert.match(body, /b\.getAttribute\('data-pick-filter'\) === focusedChip/);
+});
+
 test('window.v3Songs exposes pickActive', () => {
     assert.match(src, /pickActive: pickOn/);
 });
@@ -199,7 +209,13 @@ test('pickCard mirror matches the source', () => {
 
 // ── Mirror: _cardSig ─────────────────────────────────────────────────────────
 
-const SIG_PICK = "(pickOn() ? (state.songs[i] && pickSelectedKey() === localFilename(state.songs[i]) ? 'P' : 'p') : '')";
+const SIG_PICK = "(pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '')";
+const IS_SELECTED = "function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song); }";
+
+test('pickIsSelected mirror matches the source, and songCard uses it', () => {
+    assert.ok(src.includes(IS_SELECTED), 'pickIsSelected drifted from the mirror');
+    assert.match(fnBody('songCard'), /const pickSel = pickIsSelected\(song\);/);
+});
 
 test('_cardSig mirror matches the source', () => {
     assert.ok(fnBody('_cardSig').includes(SIG_PICK), '_cardSig pick marker drifted from the mirror');
@@ -209,21 +225,33 @@ function sigHarness() {
     const state = { songs: [], selectMode: false };
     for (let i = 0; i < 6; i++) state.songs[i] = { filename: 'song' + i };
     state.songs[6] = undefined;   // a skeleton hole
+    state.songs[7] = { id: 'remote-1' };   // an unsynced remote row: no local file
     let session = null;
     const pickOn = () => !!session;
     const pickSelectedKey = () => (session && session.selected && session.selected.filename) || '';
     const localFilename = (s) => s.filename || '';
+    // eslint-disable-next-line no-eval
+    const pickIsSelected = eval('(' + IS_SELECTED + ')');
     // eslint-disable-next-line no-unused-vars
     function _cardSig(i) {
         return (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0') + eval(SIG_PICK);
     }
-    const all = () => Array.from({ length: 7 }, (_, i) => _cardSig(i));
+    const all = () => Array.from({ length: 8 }, (_, i) => _cardSig(i));
     return { all, setSession: (s) => { session = s; } };
 }
 
 test('_cardSig: no session keeps today\'s signature', () => {
     const h = sigHarness();
-    assert.deepEqual(h.all(), ['r0', 'r0', 'r0', 'r0', 'r0', 'r0', 's0']);
+    assert.deepEqual(h.all(), ['r0', 'r0', 'r0', 'r0', 'r0', 'r0', 's0', 'r0']);
+});
+
+test('_cardSig: with nothing selected no card (not even a remote one) is marked selected', () => {
+    const h = sigHarness();
+    h.setSession({ selected: null });
+    assert.deepEqual(h.all(), ['r0p', 'r0p', 'r0p', 'r0p', 'r0p', 'r0p', 's0p', 'r0p']);
+    h.setSession({ selected: { filename: 'song2' } });
+    const changed = h.all().map((s, i) => (s === 'r0P' ? i : -1)).filter((i) => i >= 0);
+    assert.deepEqual(changed, [2], 'the first selection rebuilds only the selected card');
 });
 
 test('_cardSig: moving the selection changes only the two cards involved', () => {
