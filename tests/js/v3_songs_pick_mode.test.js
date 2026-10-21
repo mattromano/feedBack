@@ -336,3 +336,10 @@ test('saveLibraryPrefs never writes before the saved prefs were restored', () =>
     const first = body.slice(body.indexOf('{') + 1).trim();
     assert.ok(first.startsWith('if (!_prefsRestored) return;'), 'the first statement must be the _prefsRestored guard');
 });
+
+test('leaving Songs removes the pick bar only when Songs is no longer active', () => {
+    const at = src.indexOf("sm.on('screen:changed'");
+    assert.ok(at >= 0, 'screen:changed handler not found');
+    const body = src.slice(at, at + 900);
+    assert.match(body, /if \(!songsActive\(\)\) \{ const pb = document\.getElementById\('v3-songs-pickbar'\)/);
+});

@@ -4725,7 +4725,8 @@
             if (id === 'v3-songs') { onV3SongsScreenEnter(); return; }
             // Leaving Songs: the pick bar goes too (library-pick.js has already
             // ended the session as 'left').
-            { const pb = document.getElementById('v3-songs-pickbar'); if (pb) pb.remove(); }
+            // A stale screen:changed (Songs still active) keeps the bar with the live pick.
+            if (!songsActive()) { const pb = document.getElementById('v3-songs-pickbar'); if (pb) pb.remove(); }
             // Leaving Songs: tear down select mode + the body-mounted batch bar,
             // so an active multi-selection doesn't leave a floating bar (and
             // stale selection) visible on unrelated screens.
