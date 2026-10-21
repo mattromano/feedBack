@@ -429,17 +429,24 @@ def _parse_has_drums(raw: str) -> int | None:
 _FIVE_FRET_INSTRUMENTS = ("guitar", "rhythm", "bass")
 
 
-def _parse_five_fret(raw: str) -> str | None:
-    """Parse for five_fret. `any` → any 5-fret part; `guitar|rhythm|bass` →
-    that part (chart or auto); `<instrument>:chart|auto` → that part from that
-    source only. Anything else (including empty) → no filter."""
-    raw = (raw or "").strip().lower()
-    if raw == "any":
-        return raw
-    inst, _, kind = raw.partition(":")
-    if inst in _FIVE_FRET_INSTRUMENTS and kind in ("", "chart", "auto"):
-        return raw
-    return None
+def _parse_five_fret(raw: str) -> tuple[str, ...] | None:
+    """Parse for five_fret: a comma list of entries that must ALL match (AND).
+    Entry: `any` → any 5-fret part; `any:chart|auto` → any part from that
+    source; `guitar|rhythm|bass` → that part (chart or auto);
+    `<instrument>:chart|auto` → that part from that source only. Invalid
+    entries are dropped and duplicates collapse; no valid entry (including
+    empty) → None, i.e. no filter."""
+    entries: list[str] = []
+    for part in (raw or "").split(","):
+        entry = part.strip().lower()
+        inst, _, kind = entry.partition(":")
+        if inst == "any":
+            ok = kind in ("", "chart", "auto")
+        else:
+            ok = inst in _FIVE_FRET_INSTRUMENTS and kind in ("", "chart", "auto")
+        if ok and entry not in entries:
+            entries.append(entry)
+    return tuple(entries) or None
 
 
 def _library_filter_args(q: str = "", favorites: int = 0, format: str = "",

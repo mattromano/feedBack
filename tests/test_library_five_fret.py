@@ -65,6 +65,27 @@ def test_meta_reads_zipped_pack(tmp_path):
     assert sloppak_mod.extract_meta(z)["five_fret_parts"] == ["bass:auto"]
 
 
+def test_meta_five_fret_only(tmp_path):
+    # the helper's "Lead" fretted arrangement makes it a real-guitar pack
+    assert sloppak_mod.extract_meta(_write_pak(tmp_path / "a", [("bass", "chart")]))["five_fret_only"] is False
+    assert sloppak_mod.extract_meta(_write_pak(tmp_path / "b", []))["five_fret_only"] is False
+    only = _pack(tmp_path / "c", [_ff("guitar", "Plastic Guitar"), _ff("bass", "Plastic Bass")])
+    assert sloppak_mod.extract_meta(only)["five_fret_only"] is True
+    # a drum tab means it's not 5-fret-only
+    with_drums = _pack(tmp_path / "d", [
+        {"id": "d", "name": "Drums", "type": "drums", "drum_tab": "d.json"}, _ff("guitar", "G")])
+    assert sloppak_mod.extract_meta(with_drums)["five_fret_only"] is False
+
+
+def test_put_get_round_trips_five_fret_only(tmp_path):
+    db = MetadataDB(tmp_path)
+    db.put("o.sloppak", 1.0, 1, {"title": "O", "five_fret_parts": ["guitar:chart"], "five_fret_only": True})
+    db.put("n.sloppak", 1.0, 1, {"title": "N"})
+    assert db.get("o.sloppak", 1.0, 1)["five_fret_only"] is True
+    # put() never writes NULL: "not only" is False, not "never extracted".
+    assert db.get("n.sloppak", 1.0, 1)["five_fret_only"] is False
+
+
 def test_put_get_round_trips_parts(tmp_path):
     db = MetadataDB(tmp_path)
     db.put("p.sloppak", 1.0, 1, {"title": "P", "five_fret_parts": ["guitar:chart"]})
@@ -88,18 +109,33 @@ def test_migration_adds_column(tmp_path):
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(songs)")}
     assert "five_fret_parts" in cols
     assert "five_fret_parts" in MetadataDB._EXTRACTION_MARKER_COLS
+    assert "five_fret_only" in cols
+    assert "five_fret_only" in MetadataDB._EXTRACTION_MARKER_COLS
     rows = dict(db.conn.execute("SELECT filename, five_fret_parts FROM songs").fetchall())
     assert rows["old.archive"] == "[]"
     # The sloppak row stays NULL until the scanner re-extracts it.
     assert rows["old.sloppak"] is None
     assert db.get("old.sloppak", 1.0, 1)["five_fret_parts"] is None
+    assert db.get("old.sloppak", 1.0, 1)["five_fret_only"] is None
+    assert db.conn.execute("SELECT five_fret_only FROM songs WHERE filename='old.archive'").fetchone()[0] == 0
 
 
 def test_parse_five_fret():
     for ok in ("any", "guitar", "rhythm", "bass", "bass:chart", "guitar:auto", " BASS:Chart "):
-        assert _parse_five_fret(ok) == ok.strip().lower()
-    for bad in ("", "drums", "bass:real", "any:chart", ":chart", "x"):
+        assert _parse_five_fret(ok) == (ok.strip().lower(),)
+    for bad in ("", "drums", "bass:real", ":chart", "x", "any:real"):
         assert _parse_five_fret(bad) is None
+
+
+def test_parse_five_fret_list():
+    assert _parse_five_fret("guitar,bass") == ("guitar", "bass")
+    assert _parse_five_fret("any:chart") == ("any:chart",)
+    assert _parse_five_fret("any:auto") == ("any:auto",)
+    assert _parse_five_fret("bass,nope") == ("bass",)
+    assert _parse_five_fret("nope") is None
+    assert _parse_five_fret(" Guitar , BASS:chart ,") == ("guitar", "bass:chart")
+    assert _parse_five_fret("bass,bass, bass") == ("bass",)
+    assert _parse_five_fret(",,") is None
 
 
 # ── API filter ──────────────────────────────────────────────────────────────
@@ -108,6 +144,7 @@ _SONGS = (
     ("both.sloppak", ["guitar:chart", "bass:auto"]),
     ("realbass.sloppak", ["bass:chart"]),
     ("rhythm.sloppak", ["rhythm:auto"]),
+    ("guitaronly.sloppak", ["guitar:chart"]),
     ("none.sloppak", []),
 )
 
@@ -119,7 +156,8 @@ def client(tmp_path, monkeypatch):
     mod = importlib.import_module("server")
     for fn, parts in _SONGS:
         mod.meta_db.put(fn, 1.0, 1, {"title": fn, "artist": fn, "album": f"Album {fn}",
-                                     "format": "sloppak", "five_fret_parts": parts})
+                                     "format": "sloppak", "five_fret_parts": parts,
+                                     "five_fret_only": fn == "guitaronly.sloppak"})
     c = TestClient(mod.app)
     try:
         yield c
@@ -137,15 +175,17 @@ def test_items_carry_parts(client):
     items = {s["filename"]: s for s in client.get("/api/library").json()["songs"]}
     assert items["both.sloppak"]["five_fret_parts"] == ["guitar:chart", "bass:auto"]
     assert items["none.sloppak"]["five_fret_parts"] == []
+    assert items["both.sloppak"]["five_fret_only"] is False
+    assert items["guitaronly.sloppak"]["five_fret_only"] is True
 
 
 def test_filter_any(client):
-    assert _files(client, five_fret="any") == {"both.sloppak", "realbass.sloppak", "rhythm.sloppak"}
+    assert _files(client, five_fret="any") == {"both.sloppak", "realbass.sloppak", "rhythm.sloppak", "guitaronly.sloppak"}
 
 
 def test_filter_part(client):
     assert _files(client, five_fret="bass") == {"both.sloppak", "realbass.sloppak"}
-    assert _files(client, five_fret="guitar") == {"both.sloppak"}
+    assert _files(client, five_fret="guitar") == {"both.sloppak", "guitaronly.sloppak"}
     assert _files(client, five_fret="rhythm") == {"rhythm.sloppak"}
 
 
@@ -153,7 +193,24 @@ def test_filter_part_real_only(client):
     # an auto bass doesn't match bass:chart
     assert _files(client, five_fret="bass:chart") == {"realbass.sloppak"}
     assert _files(client, five_fret="bass:auto") == {"both.sloppak"}
-    assert _files(client, five_fret="guitar:chart") == {"both.sloppak"}
+    assert _files(client, five_fret="guitar:chart") == {"both.sloppak", "guitaronly.sloppak"}
+
+
+def test_filter_and_list(client):
+    # every entry must match: a guitar-only song fails "guitar,bass"
+    assert _files(client, five_fret="guitar,bass") == {"both.sloppak"}
+    assert "guitaronly.sloppak" not in _files(client, five_fret="guitar,bass")
+    assert "guitaronly.sloppak" in _files(client, five_fret="guitar")
+    assert _files(client, five_fret="bass,rhythm") == set()
+    # invalid entries are dropped, not ANDed
+    assert _files(client, five_fret="bass,nope") == _files(client, five_fret="bass")
+
+
+def test_filter_any_chart(client):
+    # an auto-only song fails any:chart; a real-chart part anywhere passes
+    assert _files(client, five_fret="any:chart") == {"both.sloppak", "realbass.sloppak", "guitaronly.sloppak"}
+    assert _files(client, five_fret="any:auto") == {"both.sloppak", "rhythm.sloppak"}
+    assert _files(client, five_fret="any:chart,bass") == {"both.sloppak", "realbass.sloppak"}
 
 
 def test_invalid_filter_is_ignored(client):
@@ -172,7 +229,8 @@ def test_filter_reaches_every_endpoint(client):
 
 def test_filter_in_grouped_mode(client):
     rows = client.get("/api/library", params={"five_fret": "any", "group": 1}).json()["songs"]
-    assert {s.get("title") for s in rows} == {"both.sloppak", "realbass.sloppak", "rhythm.sloppak"}
+    assert {s.get("title") for s in rows} == {
+        "both.sloppak", "realbass.sloppak", "rhythm.sloppak", "guitaronly.sloppak"}
 
 
 @pytest.fixture()
