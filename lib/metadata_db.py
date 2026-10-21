@@ -3698,6 +3698,7 @@ class MetadataDB:
                      stems_has: list[str] | None = None,
                      stems_lacks: list[str] | None = None,
                      has_lyrics: int | None = None,
+                     has_drums: int | None = None,
                      tunings: list[str] | None = None,
                      mastery: list[str] | None = None,
                      tags_has: list[str] | None = None,
@@ -3813,7 +3814,7 @@ class MetadataDB:
                 "songs", format_filter=format_filter,
                 arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
                 stems_has=stems_has, stems_lacks=stems_lacks,
-                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+                has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, naming_mode=naming_mode,
                 instrument=instrument, playable_from_pitch=playable_from_pitch)
             where += ifrag
             params += iparams
@@ -3825,6 +3826,7 @@ class MetadataDB:
                                stems_has: list[str] | None = None,
                                stems_lacks: list[str] | None = None,
                                has_lyrics: int | None = None,
+                               has_drums: int | None = None,
                                tunings: list[str] | None = None,
                                naming_mode: str = "legacy",
                                instrument: str = DEFAULT_PERSPECTIVE,
@@ -3965,6 +3967,10 @@ class MetadataDB:
         elif has_lyrics == LYRICS_WITH_PITCH:
             # Karaoke-ready: lyrics the singing mode can score (spec §7.2 pitch).
             where += f" AND {alias}.has_lyrics = 1 AND {alias}.has_vocal_pitch = 1"
+        if has_drums == 1:
+            where += f" AND {alias}.has_drum_tab = 1"
+        elif has_drums == 0:
+            where += f" AND IFNULL({alias}.has_drum_tab, 0) = 0"
         if tunings:
             # Keep the input cap conservative (32) so a hostile caller
             # can't blow out the parameter list. Real tuning sets in the
@@ -4259,6 +4265,7 @@ class MetadataDB:
                    stems_has: list[str] | None = None,
                    stems_lacks: list[str] | None = None,
                    has_lyrics: int | None = None,
+                   has_drums: int | None = None,
                    tunings: list[str] | None = None,
                    mastery: list[str] | None = None,
                    tags_has: list[str] | None = None,
@@ -4295,7 +4302,7 @@ class MetadataDB:
             artist_filter=artist_filter, album_filter=album_filter,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
-            has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
+            has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, mastery=mastery,
             tags_has=tags_has, user_difficulty_in=user_difficulty_in,
             match_states=match_states, genre=genre,
             naming_mode=naming_mode, instrument=instrument,
@@ -4309,7 +4316,7 @@ class MetadataDB:
                 "m", format_filter=format_filter,
                 arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
                 stems_has=stems_has, stems_lacks=stems_lacks,
-                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+                has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, naming_mode=naming_mode,
                 instrument=instrument, playable_from_pitch=playable_from_pitch)
             mfrag, mparams = self._grouped_member_match(ifrag, iparams)
             where += mfrag
@@ -4469,7 +4476,7 @@ class MetadataDB:
             cols = ("SELECT filename, title, artist, album, year, duration, tuning, "
                     "arrangements, has_lyrics, mtime, format, stem_count, stem_ids, "
                     "tuning_name, tuning_offsets, bass_tuning_name, bass_tuning_offsets, "
-                    "rhythm_tuning_name, rhythm_tuning_offsets "
+                    "rhythm_tuning_name, rhythm_tuning_offsets, has_vocal_pitch, has_drum_tab "
                     "FROM songs ")
             cursor = _decode_cursor(after) if after else None
             eff_sort = _effective_keyset_sort(sort, direction)
@@ -4510,6 +4517,7 @@ class MetadataDB:
                 "bass_tuning_offsets": r[16] or "",
                 "rhythm_tuning_name": r[17] or "",
                 "rhythm_tuning_offsets": r[18] or "",
+                "has_vocal_pitch": bool(r[19]), "has_drum_tab": bool(r[20]),
                 "has_estd": r[0] in estd, "favorite": r[0] in favs,
             })
         # PROVENANCE (non-default perspectives): a row shown to a bass or
@@ -4623,7 +4631,8 @@ class MetadataDB:
         rows = self.conn.execute(
             "SELECT mw.effective_work_key, m.filename, m.title, m.duration, m.tuning, "
             "m.arrangements, m.has_lyrics, m.mtime, m.format, m.stem_count, m.stem_ids, "
-            "m.tuning_name, m.tuning_offsets, m.bass_tuning_name, m.bass_tuning_offsets "
+            "m.tuning_name, m.tuning_offsets, m.bass_tuning_name, m.bass_tuning_offsets, "
+            "m.has_vocal_pitch, m.has_drum_tab "
             "FROM songs m JOIN work_display mw ON mw.filename = m.filename "
             f"WHERE mw.effective_work_key IN ({ph}){intrinsic_frag} "
             "ORDER BY mw.is_group_representative DESC, m.mtime DESC, m.filename",
@@ -4645,6 +4654,7 @@ class MetadataDB:
                 "stem_ids": json.loads(m[10]) if m[10] else [],
                 "tuning_name": m[11] or "", "tuning_offsets": m[12] or "",
                 "bass_tuning_name": m[13] or "", "bass_tuning_offsets": m[14] or "",
+                "has_vocal_pitch": bool(m[15]), "has_drum_tab": bool(m[16]),
             }
 
     def query_artists(self, letter: str = "", q: str = "",
@@ -4658,6 +4668,7 @@ class MetadataDB:
                       stems_has: list[str] | None = None,
                       stems_lacks: list[str] | None = None,
                       has_lyrics: int | None = None,
+                      has_drums: int | None = None,
                       tunings: list[str] | None = None,
                       naming_mode: str = "legacy",
                       instrument: str = DEFAULT_PERSPECTIVE,
@@ -4668,7 +4679,7 @@ class MetadataDB:
             artist_filter=artist_filter, album_filter=album_filter,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
-            has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+            has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, naming_mode=naming_mode,
             instrument=instrument, playable_from_pitch=playable_from_pitch,
         )
         # Canonicalize artists at display when aliases exist (P4): dedupe / group /
@@ -4758,7 +4769,7 @@ class MetadataDB:
                      artist_filter="", album_filter="",
                      arrangements_has=None, arrangements_lacks=None,
                      stems_has=None, stems_lacks=None,
-                     has_lyrics=None, tunings=None, mastery=None,
+                     has_lyrics=None, has_drums=None, tunings=None, mastery=None,
                      match_states=None, genre=None,
                      naming_mode="legacy", instrument=DEFAULT_PERSPECTIVE,
                      playable_from_pitch=None, page=0, size=120):
@@ -4771,7 +4782,7 @@ class MetadataDB:
             artist_filter=artist_filter, album_filter=album_filter,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
-            has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
+            has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, mastery=mastery,
             match_states=match_states, genre=genre,
             naming_mode=naming_mode, instrument=instrument,
             playable_from_pitch=playable_from_pitch,
@@ -4800,6 +4811,7 @@ class MetadataDB:
                     stems_has: list[str] | None = None,
                     stems_lacks: list[str] | None = None,
                     has_lyrics: int | None = None,
+                    has_drums: int | None = None,
                     tunings: list[str] | None = None,
                     match_states: list[str] | None = None,
                     sort: str = "artist",
@@ -4833,7 +4845,7 @@ class MetadataDB:
             artist_filter=artist_filter, album_filter=album_filter,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
-            has_lyrics=has_lyrics, tunings=tunings, match_states=match_states,
+            has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, match_states=match_states,
             naming_mode=naming_mode, instrument=instrument,
             playable_from_pitch=playable_from_pitch,
             include_intrinsic=not group,
@@ -4847,7 +4859,7 @@ class MetadataDB:
                 "m", format_filter=format_filter,
                 arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
                 stems_has=stems_has, stems_lacks=stems_lacks,
-                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+                has_lyrics=has_lyrics, has_drums=has_drums, tunings=tunings, naming_mode=naming_mode,
                 instrument=instrument, playable_from_pitch=playable_from_pitch)
             mfrag, mparams = self._grouped_member_match(ifrag, iparams)
             where += mfrag

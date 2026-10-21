@@ -277,7 +277,7 @@ class LibraryProviderRegistry:
 _LIBRARY_FILTER_PARAM_KEYS = frozenset((
     "q", "favorites", "format", "artist", "album",
     "arrangements_has", "arrangements_lacks", "stems_has", "stems_lacks",
-    "has_lyrics", "tunings",
+    "has_lyrics", "has_drums", "tunings",
 ))
 
 
@@ -290,7 +290,7 @@ _RULE_CSV_KEYS = frozenset((
 ))
 
 
-_RULE_STR_KEYS = frozenset(("q", "format", "artist", "album", "has_lyrics", "sort"))
+_RULE_STR_KEYS = frozenset(("q", "format", "artist", "album", "has_lyrics", "has_drums", "sort"))
 
 
 def _sanitize_collection_rules(raw) -> dict:
@@ -416,11 +416,22 @@ def _parse_has_lyrics(raw: str) -> int | None:
     return None
 
 
+def _parse_has_drums(raw: str) -> int | None:
+    """Parse for has_drums. `1` → only songs with a drum chart, `0` → only
+    songs without one, anything else (including empty) → no filter."""
+    if raw == "1":
+        return 1
+    if raw == "0":
+        return 0
+    return None
+
+
 def _library_filter_args(q: str = "", favorites: int = 0, format: str = "",
                          artist: str = "", album: str = "",
                          arrangements_has: str = "", arrangements_lacks: str = "",
                          stems_has: str = "", stems_lacks: str = "",
-                         has_lyrics: str = "", tunings: str = "",
+                         has_lyrics: str = "", has_drums: str = "",
+                         tunings: str = "",
                          instrument: str = "", tuning_match: str = "",
                          playable_offsets: str = "", playable_instrument: str = "",
                          playable_string_count: str = "") -> dict:
@@ -436,6 +447,7 @@ def _library_filter_args(q: str = "", favorites: int = 0, format: str = "",
         "stems_has": _split_csv(stems_has),
         "stems_lacks": _split_csv(stems_lacks),
         "has_lyrics": _parse_has_lyrics(has_lyrics),
+        "has_drums": _parse_has_drums(has_drums),
         "tunings": _split_csv(tunings),
         # Which perspective the tuning facet/filter/sort speaks for (the
         # caller's play role, NOT a saved rule — see _sanitize_collection_rules).
