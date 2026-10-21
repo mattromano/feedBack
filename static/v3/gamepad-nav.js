@@ -82,6 +82,11 @@
             // (hidden, not removed) when you navigate away, so a hidden back
             // button from a screen you're not on can sort before the visible
             // one that actually applies. Check every match for visibility.
+            // An open library pick (feedBack.library.pick, library-pick.js)
+            // owns Escape: its window listener goes Back to the screen that
+            // opened it. Jumping home here too would race that navigation.
+            var lib = window.feedBack && window.feedBack.library;
+            if (lib && lib.pickState && typeof lib.pickState.session === 'function' && lib.pickState.session()) return;
             var backBtns = document.querySelectorAll('[data-ap-back], [data-albums-back], #v3-pl-back');
             var backBtn = Array.prototype.find.call(backBtns, visible);
             if (backBtn) backBtn.click();

@@ -209,3 +209,47 @@ Rules: inject on every event (the mount is fresh), keep the section
 **absent-not-empty** (no state → leave the mount alone / empty), and guard
 re-wired listeners with a `dataset` flag when your own refresh path can run
 against an unwiped mount.
+
+## Picking a song from the library (`feedBack.library.pick`)
+
+A plugin that needs the user to choose a song sends them to the app's own
+Songs screen in **pick mode** instead of building its own list:
+
+```js
+const { item, filters, reason } = await window.feedBack.library.pick({
+    title: 'Pick a song for the band',
+    filters: [
+        { id: 'drums', label: 'Drum chart', params: { has_drums: '1' }, on: true },
+        { id: 'vocals', label: 'Vocal pitch', params: { has_lyrics: 'pitch' }, on: false },
+    ],
+    selected: { filename: lastSong.filename },   // or null
+    returnTo: 'plugin-my_plugin',                // screen to show after Use / Back, or null
+    confirmLabel: 'Use this song',               // default
+    backLabel: 'Back',                           // default
+});
+```
+
+- **Options:** `title` (string, default `''`), `filters` (chips: `{ id, label,
+  params, on }`, where `params` maps an `/api/library` query key to a string;
+  entries without a string `id` and `label` are dropped), `selected` (a row with
+  a `filename`, shown as already selected), `returnTo`, `confirmLabel`,
+  `backLabel`.
+- **Resolution:** `{ item, filters, reason }`. `item` is the picked library row
+  (with its local `filename`) or `null`; `filters` is `{ [id]: on }` for every
+  chip, so you can remember the user's chip choices even after Back; `reason` is
+  `'picked' | 'back' | 'left' | 'replaced'`. The promise never rejects.
+- **Cards select instead of playing.** Clicking a card selects it (a second
+  click on the selected card uses it); "Use this song" resolves `'picked'`.
+- **Chip params replace the user's same-key drawer filter while picking.** The
+  user's own drawer filters are not changed or saved. Two chips that are on and
+  send the same key have their comma lists unioned.
+- **Esc = Back** on the Songs screen (unless a text field, the filter drawer or
+  a modal has it). Back resolves `'back'` with `item: null`. Both Use and Back
+  return to `returnTo` when it is set.
+- **Leaving the Songs screen** any other way (sidebar, topbar, …) resolves
+  `'left'` without navigating. Calling `pick` again while a pick is open
+  resolves the first with `'replaced'`.
+- Each start, selection or chip toggle emits `library:pick-changed
+  { active: true }`; each end emits `library:pick-changed { active: false }`.
+- `feedBack.library.pickState` is the session handle the Songs screen uses. It
+  is **core-internal**: plugins call `pick` only.

@@ -155,3 +155,27 @@ test('Escape with no visible back button falls back to the home screen', () => {
   assert.deepEqual(g.state.screens, ['v3-home']);
   assert.deepEqual(g.state.clicked, []);
 });
+
+test('Escape leaves an open library pick to its own Back (no v3-home jump)', () => {
+  let handler = null;
+  const screens = [];
+  const document = {
+    body: { tagName: 'BODY' },
+    activeElement: null,
+    addEventListener(type, fn) { if (type === 'keydown') handler = fn; },
+    querySelector() { return null; },
+    getElementById() { return null; },
+    querySelectorAll() { return []; },
+  };
+  let open = true;
+  const window = {
+    showScreen: (id) => screens.push(id),
+    feedBack: { library: { pickState: { session: () => (open ? { title: 'Pick' } : null) } } },
+  };
+  vm.runInNewContext(SRC, { document, window });
+  handler({ isTrusted: false, defaultPrevented: false, key: 'Escape' });
+  assert.deepEqual(screens, [], 'an open pick owns Escape');
+  open = false;
+  handler({ isTrusted: false, defaultPrevented: false, key: 'Escape' });
+  assert.deepEqual(screens, ['v3-home'], 'without a pick the fallback still goes home');
+});

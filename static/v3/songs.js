@@ -73,6 +73,9 @@
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
+        // Library pick (feedBack.library.pick): the chip params the grid was
+        // loaded under, and the view a pick switched away from (null = none).
+        pickKey: '', pickPrevView: null,
         railLetters: null, railLettersAreSongCounts: false, railJumping: false,
         // ── Artist page (PR-B) ──
         // Non-null while the artist sub-page is showing (the artist's canonical
@@ -143,6 +146,7 @@
             format: st.format || '',
             artist: st.artist || '',
             album: st.album || '',
+            pick: st.pickKey || '',
             filters: {
                 arr_has: [...(f.arr_has || [])].sort(),
                 arr_lacks: [...(f.arr_lacks || [])].sort(),
@@ -187,14 +191,24 @@
             };
         }
     }
+    // Restore the saved prefs once (render() calls this before the first toolbar
+    // build), then re-apply a library pick's view rule: the restored view may be
+    // albums/table/folder, which a pick never shows (they play on their own).
+    function _restoreViewState() {
+        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
+        _applyPickView();
+    }
     // Persist the current view prefs (best-effort; storage may be full/disabled).
     // Called from reload(), which every sort/format/filter/view change funnels
-    // through — so this is the single write point.
+    // through — so this is the single write point. Never before the saved prefs
+    // were restored: the defaults would overwrite them (a pick can reach
+    // reload() before the first render()).
     function saveLibraryPrefs() {
+        if (!_prefsRestored) return;
         try {
             const f = state.filters;
             localStorage.setItem(PREFS_KEY, JSON.stringify({
-                sort: state.sort, format: state.format, view: state.view,
+                sort: state.sort, format: state.format, view: state.pickPrevView || state.view,
                 grouping: state.grouping !== false,
                 filters: {
                     arr_has: [...f.arr_has], arr_lacks: [...f.arr_lacks],
@@ -271,6 +285,19 @@
     // then carry no chart_count, so no ⚑ chips render).
     function groupingActive() { return state.grouping !== false; }
 
+    // ── Library pick (feedBack.library.pick, static/v3/library-pick.js) ──────
+    // While a plugin's pick session is open, cards select instead of playing
+    // and the session's chip params ride the grid query. songs.js only reads
+    // the session through pickState (core-internal).
+    const pickApi = () => (sm && sm.library && sm.library.pickState) || null;
+    function pickOn() { const p = pickApi(); return !!(p && p.session()); }
+    function pickSelectedKey() { const p = pickApi(); const s = p && p.session(); return (s && s.selected && s.selected.filename) || ''; }
+    // Is this row the pick's selection? A grouped card shows (and plays) its
+    // display_chart, so that's the chart it's keyed on. An empty key means
+    // nothing is selected, so it never matches (an unsynced remote row's local
+    // filename is '' too).
+    function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song.display_chart ? Object.assign({}, song, song.display_chart) : song); }
+
     function queryParams(extra, opts) {
         const f = state.filters;
         const skipArtistAlbum = opts && opts.catalog;
@@ -298,6 +325,9 @@
         if (f.mastery && f.mastery.length) p.set('mastery', f.mastery.join(','));
         if (f.match && f.match.length) p.set('match', f.match.join(','));
         if (f.genre && f.genre.length) p.set('genre', f.genre.join(','));
+        // A pick's chip params replace the drawer's value for the same key (a
+        // union would widen the result); different keys AND as usual.
+        { const pk = pickApi(); if (pk && pk.session()) Object.entries(pk.params()).forEach(([k, v]) => p.set(k, v)); }
         Object.entries(extra || {}).forEach(([k, v]) => p.set(k, v));
         return p;
     }
@@ -402,11 +432,26 @@
         if (treeBtn) treeBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
         const folderBtn = document.getElementById('v3-songs-folder-btn');
         if (folderBtn) folderBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+        // A pick can switch the view to grid off-screen, so keep these in step too.
+        ['albums', 'table'].forEach((v) => {
+            const b = document.getElementById('v3-songs-' + v + '-btn');
+            if (b) b.className = 'px-3 py-2 text-sm ' + (state.view === v ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+        });
         // Select button tracks state.selectMode — the screen-leave teardown clears
         // select mode, so a cached-DOM re-entry must re-style the button (and the
         // window re-renders without checkboxes via renderWindow's selectMode check).
         const selBtn = document.getElementById('v3-songs-select');
         if (selBtn) selBtn.className = btnCtrl + (state.selectMode ? ' bg-fb-primary text-white' : '');
+        // While picking: no select mode, and no albums/table/folder (they play
+        // through handlers of their own). Inline opacity survives setView's
+        // className rewrites.
+        const picking = pickOn();
+        ['v3-songs-select', 'v3-songs-albums-btn', 'v3-songs-table-btn', 'v3-songs-folder-btn'].forEach((id) => {
+            const b = document.getElementById(id);
+            if (!b) return;
+            b.disabled = picking;
+            b.style.opacity = picking ? '0.4' : '';
+        });
         updateFilterBadge();
     }
 
@@ -648,7 +693,7 @@
     // and play local files while browsing a remote library. Hide it there.
     function libHomeVisible() {
         return state.view === 'grid' && state.provider === 'local'
-            && !state.selectMode && !state.q && activeFilterCount() === 0;
+            && !state.selectMode && !state.q && activeFilterCount() === 0 && !pickOn();
     }
 
     let _homeToken = 0;
@@ -942,11 +987,16 @@
             : '';
         // Recycled cards re-render from state, so a selected card must paint its
         // ring on initial markup (toggleSelect only adds it to a live node).
-        const selRing = state.selected.has(key) ? ' ring-2 ring-fb-primary' : '';
+        // Library pick: the selected card gets the same ring plus a Selected badge.
+        const pickSel = pickIsSelected(song);
+        const selRing = (state.selected.has(key) || pickSel) ? ' ring-2 ring-fb-primary' : '';
+        const pickBadge = pickSel
+            ? '<span data-pick-badge class="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 bg-fb-primary text-white text-xs font-bold px-2 py-0.5 rounded-full pointer-events-none">Selected</span>'
+            : '';
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
             '<img src="' + esc(artUrl(shown)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
-            tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay +
+            tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay + pickBadge +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
             '<button data-fav data-fav-idle="text-white" title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
@@ -1611,6 +1661,47 @@
         }, true);
     }
 
+    // Library pick: the same capture-phase interception as select mode, so a
+    // click anywhere in a card (body, arrangement chips, fav, save, ⋮, artist
+    // link, ⚑ charts) selects and never plays, and the context menu (which
+    // has Play) stays shut. Bound BEFORE bindSelectGuard on each host.
+    function bindPickGuard(hostEl) {
+        if (!hostEl) return;
+        const cardIn = (e) => {
+            if (!pickOn()) return null;
+            const card = e.target && e.target.closest ? e.target.closest('[data-fn]') : null;
+            return (card && hostEl.contains(card)) ? card : null;
+        };
+        hostEl.addEventListener('click', (e) => {
+            const card = cardIn(e);
+            if (!card) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            pickCard(card);
+        }, true);
+        hostEl.addEventListener('contextmenu', (e) => {
+            if (!cardIn(e)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+        }, true);
+    }
+
+    // A card click while picking: select it, or use it when it's already the
+    // selection. The pick is the chart the card shows and plays (wireCards'
+    // playTarget: the display_chart when a filter attached one), so both the
+    // key and the item carry that chart's local filename and facts; a remote
+    // song that isn't on this machine can't be picked.
+    function pickCard(cardEl) {
+        const fn = cardEl.getAttribute('data-fn');
+        const song = state.songsById[fn];
+        if (!song) return;
+        const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
+        const lf = localFilename(playTarget);
+        if (!lf) { renderPickBar('Only songs on this machine can be picked'); return; }
+        if (pickSelectedKey() === lf) { pickApi().confirm(); return; }
+        pickApi().select(Object.assign({}, playTarget, { filename: lf }));
+    }
+
     function setSelectMode(on) {
         state.selectMode = on;
         if (!on) state.selected.clear();
@@ -1644,6 +1735,92 @@
             finishBatch();
         });
         bar.querySelector('[data-batch="details"]').addEventListener('click', openBulkEdit);
+    }
+
+    // The pick bar (body-mounted like the batch bar): title, the plugin's
+    // chips, what's selected (or a note), Back and Use this song.
+    function renderPickBar(note) {
+        let bar = document.getElementById('v3-songs-pickbar');
+        const s = (pickOn() && songsActive()) ? pickApi().session() : null;
+        if (!s) { if (bar) bar.remove(); return; }
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'v3-songs-pickbar';
+            bar.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex flex-wrap items-center gap-3 bg-fb-card border border-fb-border/60 rounded-2xl shadow-xl px-4 py-2 max-w-[95vw]';
+            bar.setAttribute('role', 'region');
+            document.body.appendChild(bar);
+        }
+        bar.setAttribute('aria-label', s.title);
+        // The rebuild below replaces the chip buttons; keep keyboard focus on
+        // the chip that had it (by chip id) instead of dropping it to <body>.
+        const focusedChip = (document.activeElement && bar.contains(document.activeElement))
+            ? document.activeElement.getAttribute('data-pick-filter') : null;
+        const sel = s.selected;
+        const text = note || (sel
+            ? 'Selected: ' + (sel.title || sel.filename) + (sel.artist ? ' — ' + sel.artist : '')
+            : 'Nothing selected yet');
+        const chip = (f) => '<button data-pick-filter="' + esc(f.id) + '" aria-pressed="' + (f.on ? 'true' : 'false') + '" class="text-sm px-3 py-1 rounded-full ' +
+            (f.on ? 'bg-fb-primary text-white' : 'bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text') + '">' + esc(f.label) + '</button>';
+        bar.innerHTML =
+            '<strong data-pick-title class="text-sm text-fb-text">' + esc(s.title) + '</strong>' +
+            s.filters.map(chip).join('') +
+            '<span data-pick-selected aria-live="polite" class="text-sm text-fb-textDim">' + esc(text) + '</span>' +
+            '<button data-pick-back class="text-sm text-fb-textDim hover:text-fb-text px-2">' + esc(s.backLabel) + '</button>' +
+            '<button data-pick-use class="text-sm bg-fb-primary hover:bg-fb-primaryHi text-white px-3 py-1 rounded-full disabled:opacity-40"' + (sel ? '' : ' disabled') + '>' + esc(s.confirmLabel) + '</button>';
+        bar.querySelectorAll('[data-pick-filter]').forEach((b) => b.addEventListener('click', () => {
+            const p = pickApi(); if (p) p.toggle(b.getAttribute('data-pick-filter'));
+        }));
+        bar.querySelector('[data-pick-back]').addEventListener('click', () => { const p = pickApi(); if (p) p.back(); });
+        bar.querySelector('[data-pick-use]').addEventListener('click', () => { const p = pickApi(); if (p) p.confirm(); });
+        if (focusedChip !== null) {
+            const again = Array.from(bar.querySelectorAll('[data-pick-filter]'))
+                .find((b) => b.getAttribute('data-pick-filter') === focusedChip);
+            if (again) again.focus();
+        }
+    }
+
+    // A pick never shows albums/table/folder: switch to grid and remember the
+    // view; the pick's end puts it back. Shared by onPickChanged and
+    // _restoreViewState (the saved view lands after a pick may have started).
+    function _applyPickView() {
+        if (pickOn() && state.pickPrevView === null
+            && (state.view === 'albums' || state.view === 'table' || state.view === 'folder')) {
+            state.pickPrevView = state.view;
+            state.view = 'grid';
+        } else if (!pickOn() && state.pickPrevView !== null) {
+            state.view = state.pickPrevView;
+            state.pickPrevView = null;
+        }
+    }
+
+    // library:pick-changed: a pick started, ended, toggled a chip or moved its
+    // selection. Start/end/chips change the query (reload, or mark the grid
+    // dirty off-screen); a selection move only repaints the window + bar.
+    function onPickChanged() {
+        const key = pickOn() ? JSON.stringify(pickApi().params()) : '';
+        const prevView = state.view;
+        _applyPickView();
+        if (pickOn() && state.selectMode) setSelectMode(false);
+        if (key !== state.pickKey || state.view !== prevView) {
+            state.pickKey = key;
+            if (songsActive()) reload(); else _libraryDirty = true;
+        } else if (songsActive() && state.view === 'tree') {
+            // The tree has no window renderer: rebuild only the rows whose
+            // Selected marker moved, then wire the fresh nodes.
+            const tree = document.getElementById('v3-songs-tree');
+            document.querySelectorAll('#v3-songs-tree [data-fn]').forEach((el) => {
+                const s = state.songsById[el.getAttribute('data-fn')];
+                if (s && !!el.querySelector('[data-pick-badge]') !== pickIsSelected(s)) el.outerHTML = treeSongRowHtml(s);
+            });
+            if (tree) wireCards(tree);
+        } else if (songsActive()) {
+            // renderWindow skips an unchanged range; clear it so _cardSig
+            // re-checks every card (only the two whose marker moved rebuild).
+            state.winRange = null;
+            requestWindowRender();
+        }
+        if (songsActive()) syncChromeFromState();
+        renderPickBar();
     }
 
     async function batchSave() {
@@ -1966,7 +2143,8 @@
     // node must be rebuilt (a hole filled after a fetch, or select mode toggled) —
     // otherwise the node is reused as-is across window slides.
     function _cardSig(i) {
-        return (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0');
+        return (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0')
+            + (pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '');
     }
 
     function _buildCardNode(i) {
@@ -2534,6 +2712,8 @@
     // behaviour from one markup source.
     function treeSongRowHtml(s) {
         const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
+        // Library pick: the selected row gets the grid card's ring + Selected badge.
+        const pickSel = pickIsSelected(s);
         // Display-only checkbox (pointer-events-none); the row's
         // capture-phase select handler (render()) owns the toggle.
         const checkbox = state.selectMode
@@ -2542,8 +2722,9 @@
         return (
         '<div class="relative flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
         checkbox +
-        '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
+        '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + ((sel || pickSel) ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
         '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
+        (pickSel ? '<span data-pick-badge class="shrink-0 bg-fb-primary text-white text-xs font-bold px-2 py-0.5 rounded-full pointer-events-none">Selected</span>' : '') +
         (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
         (fl ? '<span class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
         accuracyBadge(k, 'tree') +
@@ -3759,7 +3940,7 @@
         if (_closeCardMenu) _closeCardMenu();
         // Restore last-used sort/format/view/filters once, before building the
         // toolbar so its selects reflect the saved choice (default: Artist A–Z).
-        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
+        _restoreViewState();
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
@@ -3919,8 +4100,13 @@
         // page renders the same [data-fn] song rows into its own host, so it
         // needs the guard too — otherwise a row click there plays instead of
         // toggling when select mode is already on.
+        // The pick guard goes first so, while picking, a card click selects
+        // before anything else (including select mode) sees it.
+        bindPickGuard(byId('v3-songs-grid'));
         bindSelectGuard(byId('v3-songs-grid'));
+        bindPickGuard(byId('v3-songs-tree'));
         bindSelectGuard(byId('v3-songs-tree'));
+        bindPickGuard(byId('v3-songs-artistpage'));
         bindSelectGuard(byId('v3-songs-artistpage'));
         const setView = async (v) => {
             state.view = v;
@@ -3949,11 +4135,27 @@
         state.built = true;
     }
 
+    // Every entry path (including the early returns below) ends with the pick
+    // chrome in step: the toolbar's pick-disabled buttons and the pick bar.
     async function onV3SongsScreenEnter() {
+        try {
+            await _enterSongsScreen();
+        } finally {
+            if (state.built) syncChromeFromState();
+            renderPickBar();
+        }
+    }
+
+    async function _enterSongsScreen() {
         // A library scan / DLC-folder change marked the grid stale — re-fetch
         // from scratch instead of restoring a cached (possibly empty, pre-DLC)
         // snapshot. Must win over every fast-path below.
-        if (_libraryDirty) { _libraryDirty = false; await reload(); return; }
+        // Only once built: a first visit (e.g. a library pick opening Songs)
+        // has no DOM to reload into and must take the full render() below.
+        if (_libraryDirty) {
+            _libraryDirty = false;
+            if (state.built) { await reload(); return; }
+        }
         // Keep the entry-point gates current (a Settings visit may have
         // toggled artist pages / external links). Fire-and-forget.
         refreshArtistPageGates();
@@ -4370,6 +4572,8 @@
         getSort: () => state.sort,
         getArtist: () => state.artist,
         getAlbum: () => state.album,
+        // Read-only: is a feedBack.library.pick session open?
+        pickActive: pickOn,
         // The grid is windowed: only a slice of cards is in the DOM at any time.
         // A plugin that decorates cards should read THIS (not a global
         // querySelectorAll that assumes every card is present) and re-run on each
@@ -4519,6 +4723,10 @@
         sm.on('screen:changed', (e) => {
             const id = e && e.detail && e.detail.id;
             if (id === 'v3-songs') { onV3SongsScreenEnter(); return; }
+            // Leaving Songs: the pick bar goes too (library-pick.js has already
+            // ended the session as 'left').
+            // A stale screen:changed (Songs still active) keeps the bar with the live pick.
+            if (!songsActive()) { const pb = document.getElementById('v3-songs-pickbar'); if (pb) pb.remove(); }
             // Leaving Songs: tear down select mode + the body-mounted batch bar,
             // so an active multi-selection doesn't leave a floating bar (and
             // stale selection) visible on unrelated screens.
@@ -4561,6 +4769,7 @@
         // stayed on its pre-scan (e.g. empty, pre-DLC) state until an app
         // restart. Reload now if we're showing; otherwise mark dirty so the next
         // entry re-fetches instead of restoring the stale snapshot.
+        sm.on('library:pick-changed', onPickChanged);
         sm.on('library:changed', () => {
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') { _libraryDirty = false; reload(); }
