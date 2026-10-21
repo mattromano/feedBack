@@ -129,6 +129,7 @@ import {
 } from './js/section-practice.js';
 import { configureHost } from './js/host.js';
 import { formatTime } from './js/format.js';
+import { getDisplayTime } from './js/display-time.js';
 import { L } from './js/library-state.js';
 import {
     _LIB_FORMAT_KEY,
@@ -774,6 +775,8 @@ window.feedBack = Object.assign(_feedBackBus, {
         this.addEventListener(event, fn, options);
     },
     off(event, fn, options) { this.removeEventListener(event, fn, options); },
+    // Shared display clock: audio time, or the count-in rewind sweep position.
+    getDisplayTime: () => getDisplayTime(_audioTime),
     // Loop API — plugins should never reach for #btn-loop-* directly.
     // The script-scope `setLoop` and `clearLoop` are hoisted so these
     // method bodies resolve them lexically; `getLoop` reads the live

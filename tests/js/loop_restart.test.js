@@ -86,6 +86,10 @@ function buildSandbox() {
         // r.to for highway.setTime / lastAudioTime.
         _audioSeek: (s) => Promise.resolve({ completed: true, from: 20, to: s }),
         playClick: () => {},
+        // display-time.js seam (count-in.js imports these); the sweep clock is
+        // covered by display_time.test.js.
+        setSweepTime: () => {},
+        clearSweepTime: () => {},
         showCountOverlay: () => {},
         hideCountOverlay: () => {},
         // beginCount sizes the count to the bar at loop A; the wrap-path

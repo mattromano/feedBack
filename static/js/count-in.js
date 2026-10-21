@@ -23,6 +23,7 @@ import { audio } from './audio-el.js';
 import { _audioSeek, _songEventPayload, jucePlayer, setPlayButtonState, togglePlay } from './transport.js';
 import { loopA, loopB, setLoop } from './loops.js';
 import { S } from './player-state.js';
+import { setSweepTime, clearSweepTime } from './display-time.js';
 
 // ── Count-in click sound (Web Audio API) ────────────────────────────────
 let _audioCtx = null;
@@ -134,6 +135,7 @@ const _CREDITS_MAX_MS = 12000;
 export function _cancelCountIn() {
     _countInGen++;
     _countingIn = false;
+    clearSweepTime();
     hideCountOverlay();
     // The credits overlay rides the count-in lifecycle (and its no-count-in
     // hold timer), so a teardown — leaving the player, loading another song —
@@ -287,10 +289,13 @@ export async function startCountIn(opts = {}) {
         const eased = 1 - (1 - t) * (1 - t);
         const currentT = fromTime + (toTime - fromTime) * eased;
         window.highway.setTime(currentT);
+        setSweepTime(currentT);
+        window.feedBack.emit('count-in:sweep', { time: currentT });
         if (t < 1) {
             _countInRaf = requestAnimationFrame(rewindStep);
         } else {
             _countInRaf = 0;
+            clearSweepTime();
             // Rewind done — set final position and start count.
             // Await the JUCE seek so the engine has repositioned before
             // we start the click track (HTML5 path is synchronous).
@@ -314,6 +319,7 @@ export async function startCountIn(opts = {}) {
                     // isPlaying must reflect that and the button + plugin
                     // host must agree.
                     _countingIn = false;
+                    clearSweepTime();
                     if (S.isPlaying) {
                         S.isPlaying = false;
                         setPlayButtonState(false);
