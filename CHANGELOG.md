@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`drums_library.py --parts`** finds and joins real Clone Hero guitar / rhythm / bass
+  charts for a whole sloppak library (`--parts guitar,rhythm,bass`; default `drums`, the
+  drum run as before). Local charts first, then Chorus Encore; each part is aligned to
+  the song's stems (reusing the drum join's warp when the drums came from the same chart),
+  validated and written as a feedpak `five_fret` part. Its own state
+  (`five_fret_state.json`) and a CSV row per song and part.
 - **Five-fret parts (plastic-controller charts).** A feedpak can now carry
   Guitar Hero / Rock Band style five-fret parts as `type: five_fret`
   arrangement entries (`instrument` guitar, rhythm or bass, plus a `five_fret`
