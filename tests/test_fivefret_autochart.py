@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+import fivefret
 import fivefret_autochart as ac
+from fivefretchart import FretNote, five_fret_json
 from drumchart import TempoMap
 from song import Arrangement, Beat, Chord, Note
 
@@ -276,3 +278,117 @@ def test_distinguish_keeps_same_pitch_same_lane():
     out = [(1,), (1,), (2,), (2,)]
     assert ac.distinguish_lanes(groups, out) == out
     assert ac.distinguish_lanes([(40,)] * 3, [(0,)] * 3) == [(0,)] * 3
+
+
+# --- Task 3: Expert auto-chart ------------------------------------------------------------
+
+def _grid(n=40):
+    return ac.BeatGrid.from_beats(_beats(n))            # 120 bpm
+
+
+def _chart(notes, **kw):
+    return ac.autochart(_arr(notes, **kw), _grid(), "guitar")
+
+
+def test_hammer_on_becomes_hopo():
+    c = _chart([Note(time=1.0, string=0, fret=0), Note(time=2.0, string=0, fret=2, hammer_on=True)])
+    assert [n.hopo for n in c.notes] == [False, True]
+    assert c.source_format == "auto" and c.levels == {} and c.part == "guitar"
+
+
+def test_tap_carries():
+    c = _chart([Note(time=1.0, string=0, fret=0), Note(time=2.0, string=0, fret=2, tap=True)])
+    assert [n.tap for n in c.notes] == [False, True] and not c.notes[1].hopo
+
+
+def test_tap_then_hopo_becomes_tap():
+    c = _chart([Note(time=1.0, string=0, fret=0, tap=True),
+                Note(time=1.2, string=0, fret=2, hammer_on=True),
+                Note(time=1.4, string=0, fret=3, pull_off=True)])
+    assert [n.tap for n in c.notes] == [True, True, True]
+    assert not any(n.hopo for n in c.notes)
+
+
+def test_hopo_after_long_gap_before_tap_becomes_tap():
+    c = _chart([Note(time=1.0, string=0, fret=0),
+                Note(time=2.0, string=0, fret=2, hammer_on=True),
+                Note(time=2.2, string=0, fret=3, tap=True)])
+    assert [n.tap for n in c.notes] == [False, True, True]
+    short = _chart([Note(time=1.0, string=0, fret=0),
+                    Note(time=1.2, string=0, fret=2, hammer_on=True),
+                    Note(time=1.4, string=0, fret=3, tap=True)])
+    assert [n.tap for n in short.notes] == [False, False, True]
+    assert short.notes[1].hopo
+
+
+def test_fast_strum_becomes_hopo():
+    c = _chart([Note(time=1.0, string=0, fret=0), Note(time=1.08, string=0, fret=2)])
+    assert c.notes[0].frets != c.notes[1].frets
+    assert [n.hopo for n in c.notes] == [False, True]
+    slow = _chart([Note(time=1.0, string=0, fret=0), Note(time=1.2, string=0, fret=2)])
+    assert not any(n.hopo for n in slow.notes)
+
+
+def test_fast_strum_after_tap_or_into_open_stays_strum():
+    after_tap = _chart([Note(time=1.0, string=0, fret=0, tap=True), Note(time=1.08, string=0, fret=2)])
+    assert not after_tap.notes[1].hopo
+    into_open = _chart([Note(time=1.0, string=0, fret=0), Note(time=1.08, string=1, fret=2, mute=True)])
+    assert into_open.notes[1].frets == 0 and not into_open.notes[1].hopo
+
+
+def test_chord_keeps_hopo():
+    c = _chart([Note(time=1.0, string=0, fret=0),
+                Note(time=2.0, string=0, fret=2, hammer_on=True), Note(time=2.0, string=1, fret=2)])
+    assert bin(c.notes[1].frets).count("1") == 2 and c.notes[1].hopo
+
+
+def test_short_sustain_dropped_long_kept():
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=0.15),
+                Note(time=3.0, string=0, fret=2, sustain=0.5),
+                Note(time=5.0, string=0, fret=3)])
+    assert c.notes[0].length == 0.0
+    assert c.notes[1].length == pytest.approx(0.5)
+
+
+def test_sustain_trimmed_before_next():
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=1.0),
+                Note(time=1.5, string=0, fret=2)])
+    assert c.notes[0].length == pytest.approx(0.5 - 0.0625)       # 1/8 beat = 0.0625 s
+    assert c.notes[0].time + c.notes[0].length <= 1.5 - 0.0625 + 1e-9
+
+
+def test_bend_and_slide_keep_sustain():
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=0.15, bend=1.0),
+                Note(time=3.0, string=0, fret=2, sustain=0.15, slide_to=5),
+                Note(time=5.0, string=0, fret=3, sustain=0.15)])
+    assert c.notes[0].length == pytest.approx(0.15)
+    assert c.notes[1].length == pytest.approx(0.15)
+    assert c.notes[2].length == 0.0
+    trimmed = _chart([Note(time=1.0, string=0, fret=0, sustain=2.0, bend=1.0),
+                      Note(time=1.5, string=0, fret=2)])
+    assert trimmed.notes[0].length == pytest.approx(0.4375)
+
+
+def test_open_from_muted():
+    c = _chart([Note(time=1.0, string=0, fret=3), Note(time=2.0, string=1, fret=2, fret_hand_mute=True)])
+    assert c.notes[1].frets == 0 and c.notes[0].frets != 0
+
+
+def test_no_overdrive():
+    # Auto parts get synthesised star-power phrases from the five-fret session
+    # (Plan 3 ruling 5), not from the auto-charter.
+    c = _chart([Note(time=1.0, string=0, fret=0)])
+    assert c.star_power == []
+    assert "star_power" not in five_fret_json(c, {"kind": "auto"}, name="Guitar (auto)")
+
+
+def test_autochart_json_validates():
+    c = _chart([Note(time=1.0, string=0, fret=0, sustain=1.0),
+                Note(time=2.0, string=1, fret=2, hammer_on=True),
+                Note(time=3.0, string=0, fret=0, mute=True),
+                Note(time=4.0, string=0, fret=0), Note(time=4.0, string=1, fret=2),
+                Note(time=4.0, string=2, fret=2)])
+    data = five_fret_json(c, {"kind": "auto", "generator": ac.GENERATOR,
+                              "generator_version": ac.GENERATOR_VERSION,
+                              "from_arrangement": "lead"}, name="Guitar (auto)")
+    assert fivefret.validate_five_fret(data) == (True, "")

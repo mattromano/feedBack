@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 
 import song
 from drumchart import TempoMap
+from fivefretchart import FiveFretChart, FretNote
 
 GENERATOR = "feedback-fivefret-autochart"
 GENERATOR_VERSION = "1"
@@ -349,3 +350,84 @@ def distinguish_lanes(groups: list[tuple[int, ...]], out: list[tuple[int, ...]],
         for i in r:
             result[i] = tuple(sorted(lane_set))
     return result
+
+
+# --- Expert chart: sustains, HOPO / tap carry-over, assembly ----------------------------
+
+BLIP_BEATS = 3 / 8          # Guitar.hs standardBlipThreshold
+SUSTAIN_GAP_BEATS = 1 / 8   # Guitar.hs standardSustainGap
+_HST_LONG = 0.5             # Mode.hs adjustRocksmithHST timeLong (seconds)
+_HST_SHORT = 0.1            # ... timeShort
+_EPS = 1e-9
+
+
+def apply_sustains(notes: list[FretNote], grid: BeatGrid, keep: list[bool]) -> None:
+    """Onyx `noExtendedSustains'`: end each sustain at least 1/8 beat before the next note;
+    one then shorter than 3/8 beat becomes 0, unless `keep[i]` (a slide or bend), which is
+    only trimmed."""
+    if len(keep) != len(notes):
+        raise ValueError("notes and keep differ in length")
+    for i, n in enumerate(notes):
+        if n.length <= 0:
+            n.length = 0.0
+            continue
+        start = grid.beat_at(n.time)
+        length = grid.beat_at(n.time + n.length) - start
+        if i + 1 < len(notes):
+            gap = grid.beat_at(notes[i + 1].time) - start
+            length = min(length, max(gap - SUSTAIN_GAP_BEATS, 0.0))
+        if length <= _EPS or (length < BLIP_BEATS - _EPS and not keep[i]):
+            n.length = 0.0
+        else:
+            n.length = grid.time_at(start + length) - n.time
+
+
+def _is_single(n: FretNote) -> bool:
+    return bin(n.frets).count("1") <= 1
+
+
+def _sht(n: FretNote) -> str:
+    return "tap" if n.tap else "hopo" if n.hopo else "strum"
+
+
+def _set_sht(n: FretNote, sht: str) -> None:
+    n.tap, n.hopo = sht == "tap", sht == "hopo"
+
+
+def apply_hst(notes: list[FretNote]) -> None:
+    """Onyx `adjustRocksmithHST` (seconds, in order): a HOPO right after a tap becomes a
+    tap; so does a HOPO after a gap of 0.5 s or more that is followed by a tap; and a strummed
+    single note within 0.1 s of a single note of another colour becomes a HOPO when the
+    previous note is not a tap and this one is not open. The first note's gap runs from 0 s."""
+    for i in range(len(notes) - 1):
+        cur, nxt = notes[i], notes[i + 1]
+        prev_t = notes[i - 1].time if i > 0 else 0.0
+        if _sht(cur) == "tap" and _sht(nxt) == "hopo":
+            _set_sht(nxt, "tap")
+        elif _sht(cur) == "hopo" and cur.time - prev_t >= _HST_LONG \
+                and _sht(nxt) == "tap":
+            _set_sht(cur, "tap")
+        elif _is_single(cur) and _is_single(nxt) \
+                and _sht(nxt) == "strum" and nxt.time - cur.time <= _HST_SHORT \
+                and cur.frets != nxt.frets and _sht(cur) != "tap" and nxt.frets != 0:
+            _set_sht(nxt, "hopo")
+
+
+def autochart(arr, grid: BeatGrid, part: str) -> FiveFretChart:
+    """Expert-only 5-fret chart for an arrangement (`source_format == "auto"`, no levels)."""
+    events = arrangement_events(arr)
+    pitched = [e for e in events if e.pitches]
+    lanes = assign_lanes([e.pitches for e in pitched], [e.time for e in pitched], 5,
+                         grid=grid, power=[e.power for e in pitched])
+    lanes = distinguish_lanes([e.pitches for e in pitched], lanes, 5,
+                              power=[e.power for e in pitched])
+    lane_iter = iter(lanes)
+    notes = []
+    for e in events:
+        frets = sum(1 << lane for lane in next(lane_iter)) if e.pitches else 0
+        notes.append(FretNote(time=e.time, frets=frets, length=e.length,
+                              hopo=e.sht == "hopo", tap=e.sht == "tap"))
+    apply_sustains(notes, grid, [e.slide_or_bend for e in events])
+    apply_hst(notes)
+    return FiveFretChart(part=part, notes=notes, tempo=TempoMap(resolution=480),
+                         source_format="auto")
