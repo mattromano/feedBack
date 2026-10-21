@@ -329,6 +329,12 @@ function createHighway() {
         const v = parseFloat(localStorage.getItem('renderScale') || '1');
         return Number.isFinite(v) ? Math.max(0.25, Math.min(1, v)) : 1;
     })();
+    // Fret-number / note-label font multiplier (see labelFont in highway-draw.js).
+    // Independent of note size so a narrow lane (band mode) stays readable.
+    hwState._labelScale = (function () {
+        const v = parseFloat(localStorage.getItem('highwayLabelScale') || '1');
+        return Number.isFinite(v) ? Math.max(0.75, Math.min(2.5, v)) : 1;
+    })();
     // Load-adaptive render scale (feedBack#654). _renderScale is the
     // user's manual ceiling; _autoScale is an automatic multiplier the
     // draw loop lowers when the active renderer's per-frame cost blows
@@ -1921,6 +1927,33 @@ function createHighway() {
         },
 
         getRenderScale() { return hwState._renderScale; },
+
+        // Fret-number / note-label scale, 0.75–2.5. Drawn next frame; no resize needed.
+        setLabelScale(f) {
+            const v = Number(f);
+            if (!Number.isFinite(v)) return;
+            hwState._labelScale = Math.max(0.75, Math.min(2.5, v));
+            localStorage.setItem('highwayLabelScale', hwState._labelScale);
+        },
+
+        getLabelScale() { return hwState._labelScale; },
+
+        // Size the canvas to `el` instead of the viewport (band-mode lane slot).
+        // A ResizeObserver on `el` re-runs resize(); without ResizeObserver the
+        // window resize listener from init() is the only trigger. null restores
+        // viewport sizing.
+        setContainer(el) {
+            if (hwState._containerObserver) {
+                hwState._containerObserver.disconnect();
+                hwState._containerObserver = null;
+            }
+            hwState._resizeContainer = el || null;
+            if (el && typeof ResizeObserver !== 'undefined') {
+                hwState._containerObserver = new ResizeObserver(() => this.resize());
+                hwState._containerObserver.observe(el);
+            }
+            this.resize();
+        },
 
         /**
          * The render loop's own cost, for benchmarks and the perf HUD.

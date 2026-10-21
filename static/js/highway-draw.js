@@ -34,6 +34,12 @@ import {
     _LYRIC_MEASURE_INNER_MAX, _LYRIC_MEASURE_OUTER_MAX,
 } from './highway-constants.js';
 
+// Font for fret numbers and note labels. _labelScale lets a narrow lane (band
+// mode) enlarge the text without enlarging the note body (sz).
+export function labelFont(hwState, px) {
+    return `bold ${Math.round(px * (hwState._labelScale || 1))}px sans-serif`;
+}
+
 export function _measureLyricText(hwState, c, fontSize, text) {
     let inner = hwState._lyricMeasureCache.get(fontSize);
     if (inner === undefined) {
@@ -115,7 +121,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
         // "0" label
         const fontSize = Math.max(8, sz * 0.5) | 0;
         hwState.ctx.fillStyle = '#fff';
-        hwState.ctx.font = `bold ${fontSize}px sans-serif`;
+        hwState.ctx.font = labelFont(hwState, fontSize);
         hwState.ctx.textAlign = 'center';
         hwState.ctx.textBaseline = 'middle';
         fillTextReadable(hwState, '0', W/2, y);
@@ -131,7 +137,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
             if (hammerOn || pullOff || tap) {
                 const label = tap ? 'T' : (hammerOn ? 'H' : 'P');
                 hwState.ctx.fillStyle = '#fff';
-                hwState.ctx.font = `bold ${Math.max(9, sz * 0.3) | 0}px sans-serif`;
+                hwState.ctx.font = labelFont(hwState, Math.max(9, sz * 0.3) | 0);
                 hwState.ctx.textAlign = 'center';
                 hwState.ctx.textBaseline = 'bottom';
                 fillTextReadable(hwState, label, W/2, y - barH/2 - 4);
@@ -139,7 +145,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
             // PM below
             if (palmMute) {
                 hwState.ctx.fillStyle = '#aaa';
-                hwState.ctx.font = `bold ${Math.max(8, sz * 0.25) | 0}px sans-serif`;
+                hwState.ctx.font = labelFont(hwState, Math.max(8, sz * 0.25) | 0);
                 hwState.ctx.textAlign = 'center';
                 hwState.ctx.textBaseline = 'top';
                 fillTextReadable(hwState, 'PM', W/2, y + barH/2 + 2);
@@ -198,7 +204,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
         // PH label for pinch harmonics
         if (isPinchHarmonic && sz >= 14) {
             hwState.ctx.fillStyle = '#ff0';
-            hwState.ctx.font = `bold ${Math.max(8, sz * 0.25) | 0}px sans-serif`;
+            hwState.ctx.font = labelFont(hwState, Math.max(8, sz * 0.25) | 0);
             hwState.ctx.textAlign = 'center';
             hwState.ctx.textBaseline = 'top';
             fillTextReadable(hwState, 'PH', x, y + dh + 2);
@@ -222,7 +228,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
     // Fret number
     const fontSize = Math.max(10, sz * 0.5) | 0;
     hwState.ctx.fillStyle = '#fff';
-    hwState.ctx.font = `bold ${fontSize}px sans-serif`;
+    hwState.ctx.font = labelFont(hwState, fontSize);
     hwState.ctx.textAlign = 'center';
     hwState.ctx.textBaseline = 'middle';
     fillTextReadable(hwState, String(fret), x, y);
@@ -291,7 +297,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
         else label = bend.toFixed(1);
 
         hwState.ctx.fillStyle = '#fff';
-        hwState.ctx.font = `bold ${Math.max(9, sz * 0.28) | 0}px sans-serif`;
+        hwState.ctx.font = labelFont(hwState, Math.max(9, sz * 0.28) | 0);
         hwState.ctx.textAlign = 'center';
         hwState.ctx.textBaseline = 'bottom';
         fillTextReadable(hwState, label, x, labelTopY - 2);
@@ -307,7 +313,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
     const fgLabel = hwState._showFingerHints ? teachingFingerLabel(opts?.fg) : '';
     if (fgLabel) {
         hwState.ctx.fillStyle = '#7fd1ff';
-        hwState.ctx.font = `bold ${Math.max(8, sz * 0.26) | 0}px sans-serif`;
+        hwState.ctx.font = labelFont(hwState, Math.max(8, sz * 0.26) | 0);
         hwState.ctx.textAlign = 'left';
         hwState.ctx.textBaseline = 'middle';
         fillTextReadable(hwState, fgLabel, x + half + 2, y + half * 0.5);
@@ -316,7 +322,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
         const sdLabel = teachingDegreeLabel(opts?.sd);
         if (sdLabel) {
             hwState.ctx.fillStyle = '#ffcc66';
-            hwState.ctx.font = `bold ${Math.max(8, sz * 0.26) | 0}px sans-serif`;
+            hwState.ctx.font = labelFont(hwState, Math.max(8, sz * 0.26) | 0);
             hwState.ctx.textAlign = 'right';
             hwState.ctx.textBaseline = 'middle';
             fillTextReadable(hwState, sdLabel, x - half - 2, y + half * 0.5);
@@ -353,7 +359,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
         const label = tap ? 'T' : (hammerOn ? 'H' : 'P');
         const ly = y - half - (bend > 0 ? sz * 0.6 : 4);
         hwState.ctx.fillStyle = '#fff';
-        hwState.ctx.font = `bold ${Math.max(9, sz * 0.3) | 0}px sans-serif`;
+        hwState.ctx.font = labelFont(hwState, Math.max(9, sz * 0.3) | 0);
         hwState.ctx.textAlign = 'center';
         hwState.ctx.textBaseline = 'bottom';
         fillTextReadable(hwState, label, x, ly);
@@ -362,7 +368,7 @@ export function drawNote(hwState, W, H, x, y, scale, string, fret, opts, ns) {
     // Palm mute (PM below note)
     if (palmMute) {
         hwState.ctx.fillStyle = '#aaa';
-        hwState.ctx.font = `bold ${Math.max(8, sz * 0.25) | 0}px sans-serif`;
+        hwState.ctx.font = labelFont(hwState, Math.max(8, sz * 0.25) | 0);
         hwState.ctx.textAlign = 'center';
         hwState.ctx.textBaseline = 'top';
         fillTextReadable(hwState, 'PM', x, y + half + 2);
@@ -639,7 +645,7 @@ export function drawUnisonBends(hwState, W, H, drawnNotes) {
             // "U" label at midpoint
             const labelSz = Math.max(10, sz * 0.3) | 0;
             hwState.ctx.fillStyle = '#60d0ff';
-            hwState.ctx.font = `bold ${labelSz}px sans-serif`;
+            hwState.ctx.font = labelFont(hwState, labelSz);
             hwState.ctx.textAlign = 'center';
             hwState.ctx.textBaseline = 'middle';
             const cpX = (x1 + 2 * midX + x2) / 4;
@@ -778,7 +784,7 @@ export function drawChords(hwState, W, H) {
                     ? (fretX(hwState, frameLeftFret, p.scale, W) + fretX(hwState, frameRightFret, p.scale, W)) / 2
                     : fretX(hwState, sorted[0].f, p.scale, W));
             hwState.ctx.fillStyle = '#fff';
-            hwState.ctx.font = `bold ${Math.max(14, sz * 0.45) | 0}px sans-serif`;
+            hwState.ctx.font = labelFont(hwState, Math.max(14, sz * 0.45) | 0);
             hwState.ctx.textAlign = 'center';
             hwState.ctx.textBaseline = 'bottom';
             fillTextReadable(hwState, tmpl.name, labelX, labelY);
@@ -802,7 +808,7 @@ export function drawChords(hwState, W, H) {
                 const nameY = hasNonZero
                     ? (p.y * H - actualTotalH / 2 - sz * 0.7 - sz * 0.4)
                     : (p.y * H - sz * 0.8);
-                hwState.ctx.font = `bold ${Math.max(10, sz * 0.32) | 0}px sans-serif`;
+                hwState.ctx.font = labelFont(hwState, Math.max(10, sz * 0.32) | 0);
                 hwState.ctx.textAlign = 'center';
                 hwState.ctx.textBaseline = 'bottom';
                 let stackY = nameY - sz * 0.5;
@@ -863,7 +869,7 @@ export function drawChords(hwState, W, H) {
                 _paintGemGlow(hwState, (barLeft + barRight) / 2, ny, barH * 0.5, cn.s, cnNs);
                 const fontSize = Math.max(8, sz * 0.5) | 0;
                 hwState.ctx.fillStyle = '#fff';
-                hwState.ctx.font = `bold ${fontSize}px sans-serif`;
+                hwState.ctx.font = labelFont(hwState, fontSize);
                 hwState.ctx.textAlign = 'center';
                 hwState.ctx.textBaseline = 'middle';
                 fillTextReadable(hwState, '0', (barLeft + barRight) / 2, ny);
@@ -909,7 +915,7 @@ export function drawChords(hwState, W, H) {
 
                 const labelSz = Math.max(10, sz * 0.3) | 0;
                 hwState.ctx.fillStyle = '#60d0ff';
-                hwState.ctx.font = `bold ${labelSz}px sans-serif`;
+                hwState.ctx.font = labelFont(hwState, labelSz);
                 hwState.ctx.textAlign = 'center';
                 hwState.ctx.textBaseline = 'middle';
                 const cpX = (x1 + 2 * midX + x2) / 4;
@@ -1297,7 +1303,7 @@ export function _drawFretLineChordPreview(hwState, W, H) {
     // hardcoded 30px diameter / 24px font at H=900.
     const noteSize = Math.max(14, H * 0.033);
     const fontSize = Math.max(11, H * 0.027) | 0;
-    hwState.ctx.font = `bold ${fontSize}px sans-serif`;
+    hwState.ctx.font = labelFont(hwState, fontSize);
     hwState.ctx.textAlign = 'center';
     hwState.ctx.textBaseline = 'middle';
     for (const cn of hwState._chordFretLineNotes) {
