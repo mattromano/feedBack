@@ -1618,15 +1618,16 @@ def _role_tuning_for_meta(arrangements_manifest: list[dict], role: str) -> list[
     return None
 
 
-def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[str]:
-    """`"<instrument>:<kind>"` per `type: five_fret` manifest entry, for the
-    library index (kind = the part file's `source.kind`).
+def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[tuple[str, str]]:
+    """`("<instrument>:<kind>", display name)` per `type: five_fret` entry, for
+    the library index (kind = the part file's `source.kind`).
 
     Mirrors load_song()'s keep-rules for what the manifest declares (known
-    instrument, non-empty pointer) but reads only the tiny `source.kind` from
-    each part file — a missing/unreadable/odd file defaults to "chart" rather
-    than hiding a part the manifest declares. Never unpacks a zip."""
-    parts: list[str] = []
+    instrument, non-empty pointer) but reads only the tiny `source` / `name`
+    fields from each part file — a missing/unreadable/odd file defaults to
+    kind "chart" rather than hiding a part the manifest declares. Never
+    unpacks a zip."""
+    parts: list[tuple[str, str]] = []
     for entry in arr_list:
         if not (isinstance(entry, dict)
                 and str(entry.get("type") or "").strip().lower() == "five_fret"):
@@ -1636,6 +1637,7 @@ def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[str]:
         if instrument not in fivefret_mod.PARTS or not (isinstance(rel, str) and rel.strip()):
             continue
         kind = "chart"
+        file_name = None
         try:
             raw = read_member_bytes(path, rel)
             if raw is None:
@@ -1644,14 +1646,18 @@ def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[str]:
                 doc = parse_jsonc(raw.decode("utf-8"))
             else:
                 doc = json.loads(raw)
-            src = doc.get("source") if isinstance(doc, dict) else None
-            if isinstance(src, dict) and src.get("kind") == "auto":
-                kind = "auto"
-        except Exception:
-            pass
-        tag = f"{instrument}:{kind}"
-        if tag not in parts:
-            parts.append(tag)
+            if isinstance(doc, dict):
+                src = doc.get("source")
+                if isinstance(src, dict) and src.get("kind") == "auto":
+                    kind = "auto"
+                if isinstance(doc.get("name"), str):
+                    file_name = doc["name"]
+        except Exception as e:
+            log.debug("sloppak: five_fret meta: cannot read %r in %s (%s); assuming kind 'chart'",
+                      rel, path, e)
+        name = (str(entry.get("name") or "").strip()
+                or (file_name or "") or str(entry.get("id") or "").strip())
+        parts.append((f"{instrument}:{kind}", name))
     return parts
 
 
@@ -1663,6 +1669,10 @@ def extract_meta(path: Path) -> dict:
     arrangements = []
     drum_entries: set[int] = set()
     for i, entry in enumerate(arr_list):
+        # A five_fret entry is never a song arrangement (load_song routes it to
+        # `five_fret_parts`), so it must not occupy an index here either.
+        if isinstance(entry, dict) and str(entry.get("type") or "").strip().lower() == "five_fret":
+            continue
         arrangements.append(
             {
                 "index": i,
@@ -1679,6 +1689,8 @@ def extract_meta(path: Path) -> dict:
     for i, a in enumerate(arrangements):
         a["index"] = i
 
+    five_fret_parts = _five_fret_parts_for_meta(path, arr_list)
+
     has_lyrics = bool(manifest.get("lyrics"))
     # Mirrors what load_song() keeps: a drums-typed entry without a `drum_tab`
     # pointer is dropped there, so it is not a drum chart here either.
@@ -1688,6 +1700,11 @@ def extract_meta(path: Path) -> dict:
         and isinstance(e.get("drum_tab"), str)
         for e in arr_list
     )
+    # A pack whose only arrangements are five_fret parts gets one note-less
+    # placeholder named after the first part (load_song does the same), so
+    # arrangement index 0 stays valid and aligned.
+    if not arrangements and not has_drum_tab and five_fret_parts:
+        arrangements.append({"index": 0, "name": five_fret_parts[0][1], "notes": 0})
     tuning_offsets = _tuning_for_meta(arr_list)
     # Per-role tunings alongside the song-level one, so the library can answer
     # for whichever arrangement the player actually plays.
@@ -1740,7 +1757,7 @@ def extract_meta(path: Path) -> dict:
         "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
         "has_drum_tab": has_drum_tab,
         # ["guitar:chart", "bass:auto", ...] — the library's five_fret filter.
-        "five_fret_parts": _five_fret_parts_for_meta(path, arr_list),
+        "five_fret_parts": list(dict.fromkeys(tag for tag, _name in five_fret_parts)),
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,

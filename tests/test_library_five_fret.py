@@ -175,16 +175,99 @@ def test_filter_in_grouped_mode(client):
     assert {s.get("title") for s in rows} == {"both.sloppak", "realbass.sloppak", "rhythm.sloppak"}
 
 
-def test_rescan_updates(tmp_path, client):
-    """Index a pack with no parts, add one to the pack, rescan -> it matches."""
-    import server
-    from scan_worker import _extract_meta_sloppak
+@pytest.fixture()
+def scan_env(tmp_path, monkeypatch, reset_scan_state):
+    """Server + the real scanner (thread pool instead of spawn) over a dlc dir."""
+    import concurrent.futures
+    import scan as scan_mod
 
-    pak = _write_pak(tmp_path / "pk", [])
-    server.meta_db.put("pk.sloppak", 1.0, 1, _extract_meta_sloppak(pak))
-    assert "pk.sloppak" not in _files(client, five_fret="bass")
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("DLC_DIR", raising=False)
+    (tmp_path / "config.json").write_text(json.dumps({"dlc_dir": str(dlc)}))
+    sys.modules.pop("server", None)
+    mod = importlib.import_module("server")
+    monkeypatch.setattr(scan_mod, "_make_scan_executor",
+                        lambda: concurrent.futures.ThreadPoolExecutor(max_workers=2))
+    c = TestClient(mod.app)
+    try:
+        yield dlc, scan_mod, c
+    finally:
+        c.close()
+        getattr(mod, "_join_background_db_threads", lambda: None)()
+        mod.meta_db.conn.close()
 
-    _write_pak(tmp_path / "pk2", [("bass", "chart")])
-    rescanned = _extract_meta_sloppak(tmp_path / "pk2" / "pk2.sloppak")
-    server.meta_db.put("pk.sloppak", 2.0, 1, rescanned)
-    assert "pk.sloppak" in _files(client, five_fret="bass:chart")
+
+def test_rescan_updates(scan_env):
+    """Add a part to the SAME pack (new mtime) and rescan -> the song matches."""
+    import os
+
+    dlc, scan_mod, client = scan_env
+    pak = _write_pak(dlc / "song", [])
+    scan_mod.background_scan(force=True)
+    assert _files(client, five_fret="bass:chart") == set()
+    assert _files(client)  # the pack itself is indexed
+
+    # Edit the pack in place: add a bass part, bump mtime.
+    (pak / "five_fret_bass.json").write_text(json.dumps({"source": {"kind": "chart"}, "notes": []}))
+    man = yaml.safe_load((pak / "manifest.yaml").read_text())
+    man["arrangements"].append({"id": "ff_bass", "name": "Bass", "type": "five_fret",
+                                "instrument": "bass", "five_fret": "five_fret_bass.json"})
+    (pak / "manifest.yaml").write_text(yaml.safe_dump(man))
+    future = pak.stat().st_mtime + 100
+    for f in (pak, pak / "manifest.yaml"):
+        os.utime(f, (future, future))
+    scan_mod.background_scan(force=True)
+    assert len(_files(client, five_fret="bass:chart")) == 1
+
+
+# ── arrangement indexes stay aligned with load_song ─────────────────────────
+
+def _pack(root: Path, entries: list[dict]) -> Path:
+    """entries: manifest arrangement dicts; fretted ones get a file written."""
+    pak = root / f"{root.name}.sloppak"
+    (pak / "arrangements").mkdir(parents=True)
+    for e in entries:
+        t = e.get("type")
+        if t == "five_fret":
+            (pak / e["five_fret"]).write_text(json.dumps({
+                "version": 1, "source": {"kind": "chart"}, "notes": [], "name": e.get("name", "")}))
+        elif t in ("drums", "drum"):
+            (pak / e["drum_tab"]).write_text(json.dumps({
+                "version": 1, "name": "Drums", "kit": [{"id": "kick", "name": "Kick"}],
+                "hits": [{"t": 1.0, "p": "kick", "v": 100}]}))
+        else:
+            (pak / e["file"]).write_text(json.dumps({
+                "name": e["name"], "tuning": [0] * 6, "capo": 0, "notes": [], "chords": [],
+                "anchors": [], "handshapes": [], "templates": [], "beats": [], "sections": []}))
+    (pak / "manifest.yaml").write_text(yaml.safe_dump(
+        {"title": "T", "artist": "A", "album": "", "duration": 1.0, "arrangements": entries}))
+    return pak
+
+
+def _fretted(name):
+    return {"id": name.lower(), "name": name, "file": f"arrangements/{name.lower()}.json"}
+
+
+def _ff(inst, name):
+    return {"id": f"ff_{inst}", "name": name, "type": "five_fret",
+            "instrument": inst, "five_fret": f"ff_{inst}.json"}
+
+
+@pytest.mark.parametrize("entries", [
+    pytest.param([_fretted("Lead"), _ff("bass", "Bass"), _fretted("Solo")], id="five_fret_before_fretted"),
+    pytest.param([_ff("guitar", "Plastic Guitar"), _ff("bass", "Plastic Bass")], id="five_fret_only"),
+    pytest.param([{"id": "d", "name": "Drums", "type": "drums", "drum_tab": "d.json"},
+                  _ff("rhythm", "Rhythm"), _fretted("Lead"), _fretted("Bass")], id="drums_five_fret_fretted"),
+])
+def test_meta_arrangements_align_with_load_song(tmp_path, entries):
+    pak = _pack(tmp_path / "p", entries)
+    meta_names = [a["name"] for a in sloppak_mod.extract_meta(pak)["arrangements"]]
+    loaded = sloppak_mod.load_song(pak.name, pak.parent, tmp_path / "cache")
+    loaded_names = [a.name for a in loaded.song.arrangements]
+    # Drums entries are listed LAST by design (pre-existing contract), so every
+    # loadable arrangement keeps the index the highway uses; nothing else extra.
+    assert meta_names[:len(loaded_names)] == loaded_names
+    assert all(n == "Drums" for n in meta_names[len(loaded_names):])
+    assert [a["index"] for a in sloppak_mod.extract_meta(pak)["arrangements"]] == list(range(len(meta_names)))
