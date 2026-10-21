@@ -64,3 +64,29 @@ test('cancelling a count-in reports it as not completed', () => {
     const hides = events.filter((e) => e.n === 'count-in:hide');
     assert.deepEqual(hides.map((h) => h.d), [{ completed: false }]);
 });
+
+// Source shape: both count-in paths (startCountIn, startSongCountIn) end with a
+// completed hide and announce every tick with the total.
+const fs = require('node:fs');
+const COUNT_IN_SRC = fs.readFileSync(path.join(JS, 'count-in.js'), 'utf8');
+const CONTROLS_SRC = fs.readFileSync(path.join(JS, 'player-controls.js'), 'utf8');
+
+test('both completion branches hide with completed=true; both tick sites pass the total', () => {
+    const branches = COUNT_IN_SRC.split('if (count > clicks) {').slice(1);
+    assert.equal(branches.length, 2, 'two count-in completion branches');
+    for (const b of branches) {
+        assert.match(b.slice(0, 120), /^\s*hideCountOverlay\(true\);/, 'the branch opens with hideCountOverlay(true)');
+    }
+    const ticks = COUNT_IN_SRC.match(/showCountOverlay\(count(?:, clicks)?\)/g) || [];
+    assert.deepEqual(ticks, ['showCountOverlay(count, clicks)', 'showCountOverlay(count, clicks)']);
+});
+
+test('the song count-in doc comment sits directly above _wantSongCountIn', () => {
+    const at = CONTROLS_SRC.indexOf('export function _wantSongCountIn()');
+    assert.ok(at > 0);
+    const before = CONTROLS_SRC.slice(0, at).trimEnd().split('\n');
+    const comment = [];
+    while (before.length && before[before.length - 1].trim().startsWith('//')) comment.unshift(before.pop());
+    assert.match(comment.join('\n'), /Should the song-start path count in\?/);
+    assert.ok(!/setSongCountInOverride/.test(comment.join('\n')), 'the override has its own comment');
+});

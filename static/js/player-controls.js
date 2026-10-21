@@ -66,10 +66,6 @@ export function _firstChartNoteTime() {
     return t;
 }
 
-// Should the song-start path count in? The Countdown setting, minus a queue
-// moving on to its next song (a queue plays back to back), minus songs whose
-// first note is far enough in when Auto is on. A chart with no fretted notes
-// (drums, keys) still counts in: there's nothing to judge the intro by.
 // A host (the band stage) can force the song count-in on or off regardless of
 // the user's setting. true/false win over everything; null clears it.
 let _songCountInOverride = null;
@@ -79,6 +75,10 @@ export function setSongCountInOverride(v) {
     return true;
 }
 
+// Should the song-start path count in? The Countdown setting, minus a queue
+// moving on to its next song (a queue plays back to back), minus songs whose
+// first note is far enough in when Auto is on. A chart with no fretted notes
+// (drums, keys) still counts in: there's nothing to judge the intro by.
 export function _wantSongCountIn() {
     if (typeof _songCountInOverride === 'boolean') return _songCountInOverride;
     if (!_countdownBeforeSongEnabled()) return false;
