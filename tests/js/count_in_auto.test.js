@@ -30,6 +30,7 @@ before(async () => {
 
 beforeEach(() => {
     store.clear();
+    pc.setSongCountInOverride(null);
     store.set('countdownBeforeSong', '1');
     notes = [];
     chords = [];
@@ -75,4 +76,26 @@ test('the song-start autoplay path asks _wantSongCountIn', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'js', 'session.js'), 'utf8');
     assert.match(src, /if \(_wantSongCountIn\(\)\) \{\s*Promise\.resolve\(startSongCountIn\(\)\)/);
     assert.doesNotMatch(src, /_countdownBeforeSongEnabled\(\)/);
+});
+
+test('override true counts in even with the setting off', () => {
+    store.set('countdownBeforeSong', '0');
+    assert.equal(pc.setSongCountInOverride(true), true);
+    assert.equal(pc._wantSongCountIn(), true);
+});
+
+test('override false never counts in', () => {
+    store.set('countdownBeforeSong', '1');
+    notes = [{ t: 0.5 }];
+    assert.equal(pc.setSongCountInOverride(false), true);
+    assert.equal(pc._wantSongCountIn(), false);
+});
+
+test('null clears the override; junk is refused', () => {
+    store.set('countdownBeforeSong', '0');
+    pc.setSongCountInOverride(true);
+    assert.equal(pc.setSongCountInOverride('yes'), false);
+    assert.equal(pc._wantSongCountIn(), true, 'junk changed nothing');
+    assert.equal(pc.setSongCountInOverride(null), true);
+    assert.equal(pc._wantSongCountIn(), false, 'plain setting rules again');
 });

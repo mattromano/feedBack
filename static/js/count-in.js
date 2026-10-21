@@ -174,17 +174,25 @@ export function _cancelCountIn() {
     if (_countInRaf) { cancelAnimationFrame(_countInRaf); _countInRaf = 0; }
 }
 
-export function showCountOverlay(n) {
+export function showCountOverlay(n, total) {
     if (!_countOverlay) {
         _countOverlay = document.createElement('div');
+        _countOverlay.id = 'count-in-overlay';
         _countOverlay.className = 'fixed inset-0 z-[100] flex items-center justify-center pointer-events-none';
         document.body.appendChild(_countOverlay);
     }
     _countOverlay.innerHTML = `<span class="text-9xl font-black text-white/30">${n}</span>`;
+    // Announced so a host (e.g. a band stage) can draw its own countdown.
+    try { window.feedBack.emit('count-in:tick', { n, total }); } catch (_) { /* no bus */ }
 }
 
-export function hideCountOverlay() {
-    if (_countOverlay) { _countOverlay.remove(); _countOverlay = null; }
+// `completed` is true when the count ran out and playback is starting, false
+// for a teardown/cancel. Emits only when an overlay actually existed.
+export function hideCountOverlay(completed = false) {
+    if (!_countOverlay) return;
+    _countOverlay.remove();
+    _countOverlay = null;
+    try { window.feedBack.emit('count-in:hide', { completed }); } catch (_) { /* no bus */ }
 }
 
 // Map a feedpak author `role` to a friendly "<verb> by" credit line. The
@@ -402,7 +410,7 @@ export async function startCountIn(opts = {}) {
             if (gen !== _countInGen) return; // teardown mid-count
             count++;
             if (count > clicks) {
-                hideCountOverlay();
+                hideCountOverlay(true);
                 _countingIn = false;
                 if (window._juceMode) {
                     jucePlayer.play().then((started) => {
@@ -435,7 +443,7 @@ export async function startCountIn(opts = {}) {
                 }
                 return;
             }
-            showCountOverlay(count);
+            showCountOverlay(count, clicks);
             playClick(count === 1);
             _countInTimer = setTimeout(tick, beatInterval * 1000);
         }
@@ -473,7 +481,7 @@ export async function startSongCountIn() {
         if (gen !== _countInGen) return; // teardown mid-count
         count++;
         if (count > clicks) {
-            hideCountOverlay();
+            hideCountOverlay(true);
             // _countingIn MUST be cleared before togglePlay(): togglePlay emits
             // 'transport:interrupt' (it is the user play/pause path), and the
             // listener would otherwise treat this handoff as a user pressing
@@ -484,7 +492,7 @@ export async function startSongCountIn() {
             Promise.resolve(togglePlay()).catch((err) => console.warn('[app] play after count-in failed:', err));
             return;
         }
-        showCountOverlay(count);
+        showCountOverlay(count, clicks);
         playClick(count === 1);
         _countInTimer = setTimeout(tick, beatInterval * 1000);
     }

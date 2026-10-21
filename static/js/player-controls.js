@@ -70,7 +70,17 @@ export function _firstChartNoteTime() {
 // moving on to its next song (a queue plays back to back), minus songs whose
 // first note is far enough in when Auto is on. A chart with no fretted notes
 // (drums, keys) still counts in: there's nothing to judge the intro by.
+// A host (the band stage) can force the song count-in on or off regardless of
+// the user's setting. true/false win over everything; null clears it.
+let _songCountInOverride = null;
+export function setSongCountInOverride(v) {
+    if (v !== null && typeof v !== 'boolean') return false;
+    _songCountInOverride = v;
+    return true;
+}
+
 export function _wantSongCountIn() {
+    if (typeof _songCountInOverride === 'boolean') return _songCountInOverride;
     if (!_countdownBeforeSongEnabled()) return false;
     try {
         const q = window.feedBack && window.feedBack.playQueue;

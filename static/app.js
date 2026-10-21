@@ -66,6 +66,7 @@ import {
     _wireSpeedPresetsOnce,
     applySpeedPreset,
     setMastery,
+    setSongCountInOverride,
     setSpeed,
 } from './js/player-controls.js';
 
@@ -1045,6 +1046,8 @@ window.setAutoplayExit = function (on) {
 Object.defineProperty(window.feedBack, 'autoplayExit', {
     get: _autoplayExitEnabled, configurable: true,
 });
+// Lets a host (the band stage) force the song count-in on/off; null clears.
+window.feedBack.setSongCountInOverride = setSongCountInOverride;
 
 // Settings checkbox setter (onchange="setShowUpNext(this.checked)").
 window.setShowUpNext = function (on) {
