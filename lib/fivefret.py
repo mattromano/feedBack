@@ -23,10 +23,16 @@ _SOURCE_STRINGS = ("md5", "charter", "generator", "generator_version", "from_arr
 
 
 def _num(v: object) -> float | None:
-    """Finite JSON number (bool excluded) as float, else None."""
+    """Finite JSON number (bool excluded) as float, else None.
+
+    An int too large for a float (json parses a 400-digit literal as one) is
+    None too, never an OverflowError."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:
+        return None
     return f if math.isfinite(f) else None
 
 
@@ -40,8 +46,7 @@ def _note_error(n: object) -> str:
     if t is None or t < 0:
         return "t must be a number >= 0"
     f = n["f"]
-    if isinstance(f, bool) or not isinstance(f, (int, float)) or not math.isfinite(f) \
-            or f != int(f) or not 0 <= f <= 31:
+    if _num(f) is None or f != int(f) or not 0 <= f <= 31:
         return "f must be an integer 0-31"
     if "l" in n:
         ln = _num(n["l"])

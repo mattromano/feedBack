@@ -175,3 +175,31 @@ def test_drum_parts_unchanged(tmp_path):
     assert [p["id"] for p in loaded.drum_parts] == ["drums"]
     assert len(loaded.five_fret_parts) == 1
     assert [a.name for a in loaded.song.arrangements] == ["Lead"]
+
+
+def test_huge_int_file_disables_part_only(tmp_path, caplog):
+    huge = '{"version": 1, "source": {"kind": "chart"}, "notes": [{"t": 1' + "0" * 400 + ', "f": 1}]}'
+    pak = _write_pak(
+        tmp_path / "h",
+        {"arrangements": [LEAD, _ff_entry("huge", path="huge.json"),
+                          _ff_entry("good", path="good.json")]},
+        {**_lead_files(), "huge.json": huge, "good.json": _chart()},
+    )
+    with caplog.at_level(logging.WARNING):
+        loaded = _load(pak, tmp_path)
+    assert [p["id"] for p in loaded.five_fret_parts] == ["good"]
+    assert any("huge.json" in r.getMessage() and "failed validation" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_raising_validator_disables_part_only(tmp_path, caplog, monkeypatch):
+    def boom(raw):
+        raise RuntimeError("validator bug")
+    monkeypatch.setattr(sloppak_mod.fivefret_mod, "validate_five_fret", boom)
+    pak = _write_pak(tmp_path / "r", {"arrangements": [LEAD, _ff_entry()]},
+                     {**_lead_files(), "five_fret_bass.json": _chart()})
+    with caplog.at_level(logging.WARNING):
+        loaded = _load(pak, tmp_path)
+    assert loaded.five_fret_parts is None
+    assert [a.name for a in loaded.song.arrangements] == ["Lead"]
+    assert any("validator bug" in r.getMessage() for r in caplog.records)

@@ -58,6 +58,7 @@ import yaml  # noqa: E402
 import audio  # noqa: E402
 import drumchart  # noqa: E402
 import drumchart_gen  # noqa: E402
+import fivefret  # noqa: E402
 import fivefretchart  # noqa: E402
 import sngfile  # noqa: E402
 import vocalchart  # noqa: E402
@@ -206,9 +207,12 @@ def convert(src: Path, out: Path, title=None, artist=None, album=None, year=None
         if md5 and src.is_file() and src.suffix.lower() == ".sng":
             source["md5"] = md5
         for part, ff in parts.items():
-            (work / f"five_fret_{part}.json").write_text(
-                json.dumps(fivefretchart.five_fret_json(ff, source, five_fret_name(part)), separators=(",", ":")),
-                encoding="utf-8")
+            name = f"five_fret_{part}.json"
+            data = fivefretchart.five_fret_json(ff, source, five_fret_name(part))
+            ok, why = fivefret.validate_five_fret(data)
+            if not ok:
+                raise ValueError(f"{folder.name}: {name} failed validation: {why}")
+            (work / name).write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
         end_tick = max((n.tick for c in parts.values() for n in c.notes), default=0)
         (work / "song_timeline.json").write_text(json.dumps(drumchart.song_timeline(timeline, end_tick),
                                                             separators=(",", ":")), encoding="utf-8")

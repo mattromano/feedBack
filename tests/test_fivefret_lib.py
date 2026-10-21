@@ -117,3 +117,24 @@ def test_notes_to_wire_sorts_and_drops():
 def test_ranges_reused_from_drums():
     import drums
     assert fivefret.ranges_to_wire is drums.ranges_to_wire
+
+
+_HUGE = 10 ** 400                               # json parses a 400-digit literal as this int
+
+
+def test_non_finite_and_huge_numbers_rejected():
+    """NaN / inf / a too-big int in t, f or l is (False, reason), never an exception."""
+    for key in ("t", "f", "l"):
+        for v in (float("nan"), float("inf"), float("-inf"), _HUGE, -_HUGE):
+            d = _minimal()
+            d["notes"] = [{"t": 0.5, "f": 1, key: v}]
+            ok, why = fivefret.validate_five_fret(d)
+            assert ok is False and why, (key, v)
+            assert fivefret.notes_to_wire(d["notes"]) == []
+
+
+def test_huge_range_bound_rejected():
+    d = _minimal()
+    d["star_power"] = [{"start_time": 0, "end_time": _HUGE}]
+    ok, why = fivefret.validate_five_fret(d)
+    assert ok is False and "star_power" in why

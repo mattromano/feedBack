@@ -49,6 +49,9 @@ Rules implemented (YARG behaviour in brackets):
   sustain. An open plus frets keeps the frets, but still counts as a chord
   (open bit included) when working out HOPOs, as in YARG.
 - ``song.ini`` ``delay`` (ms; .chart ``Offset`` as fallback) is added to every time.
+  A negative one can push notes before 0: those are dropped (with a warning), and
+  star-power / solo ranges are clamped to start at 0 (dropped if they end by 0), so
+  every payload keeps the schema's ``t >= 0``.
 
 Where these differ from the original plan (task 3 brief), YARG wins:
 - .mid ``hopo_frequency`` gets +1 like the default; .chart's default is
@@ -65,6 +68,7 @@ note snapping, or coda / Big Rock Ending flags.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,6 +77,8 @@ import fivefret
 from drumchart import (DIFF_START, LOWER_LEVELS, TempoMap, chart_sections, chart_song_section,
                        chart_tempo, find_chart_file, ini_bool, ini_delay_seconds, load_song_ini,
                        normalize_text, read_mid, track_events)
+
+log = logging.getLogger("feedBack.lib.fivefretchart")
 
 PARTS = fivefret.PARTS
 PART_NAMES = {"guitar": "Guitar", "rhythm": "Rhythm", "bass": "Bass"}
@@ -198,9 +204,16 @@ def _build(part, raw, resolve, tempo: TempoMap, offset, threshold, cutoff, midi_
                               hopo=hopo, tap=tap, tick=tick))
         prev = (tick, mask)
 
+    early = sum(n.time < 0 for n in notes)
+    if early:
+        log.warning("fivefretchart: %s (%s): dropped %d note(s) before 0 s (negative delay / Offset)",
+                    part, fmt, early)
+        notes = [n for n in notes if n.time >= 0]
+
     def span(rng):
-        return sorted({(round(tempo.tick_to_time(a) + offset, 4), round(tempo.tick_to_time(b) + offset, 4))
-                       for a, b in rng})
+        spans = ((round(tempo.tick_to_time(a) + offset, 4), round(tempo.tick_to_time(b) + offset, 4))
+                 for a, b in rng)
+        return sorted({(max(a, 0.0), b) for a, b in spans if b > 0})
     return FiveFretChart(part=part, notes=notes, tempo=tempo, offset=offset, star_power=span(sp),
                          solos=span(solos), source_format=fmt)
 

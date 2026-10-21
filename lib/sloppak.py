@@ -801,7 +801,10 @@ def _load_side_json(source_dir: Path, rel: str, label: str, validator) -> dict |
     except Exception as e:
         log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
         return None
-    ok, reason = validator(raw)
+    try:
+        ok, reason = validator(raw)
+    except Exception as e:  # a validator bug still only disables this part
+        ok, reason = False, f"validator raised {type(e).__name__}: {e}"
     if not ok:
         log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
         return None

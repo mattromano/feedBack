@@ -175,6 +175,32 @@ def test_delay_applied(tmp_path):
     assert ini["name"] == "S"
 
 
+def test_negative_delay_drops_early_notes(tmp_path, caplog):
+    """A negative delay pushes early notes before 0: they are dropped (with a warning),
+    ranges are clamped to start at 0 or dropped, and the payload still validates."""
+    _mid(tmp_path / "notes.mid", [(0, G, 10), (480, R, 10), (960, Y, 10), (1440, B, 480),
+                                  (0, 116, 1440), (0, 103, 480), (960, 103, 480)])
+    write_ini(tmp_path / "song.ini", name="S", artist="A", delay=-750)
+    with caplog.at_level("WARNING", logger="feedBack.lib.fivefretchart"):
+        parts, _ = fivefretchart.load_song_folder(tmp_path)
+    c = parts["guitar"]
+    assert _tf(c) == [(0.25, 0b00100), (0.75, 0b01000)]               # later notes intact
+    assert c.notes[1].length == pytest.approx(0.5)
+    assert c.star_power == [(0.0, 0.75)]                               # clamped to 0
+    assert c.solos == [(0.25, 0.75)]                                   # the pre-roll solo is dropped
+    assert any("2 note(s)" in r.getMessage() for r in caplog.records)
+    fivefretchart.ensure_levels(c)
+    data = fivefretchart.five_fret_json(c, {"kind": "chart"})
+    assert fivefret.validate_five_fret(data) == (True, "")
+
+
+def test_negative_chart_offset_drops_early_notes(tmp_path):
+    write_chart(tmp_path / "notes.chart", [(0, "N", 0, 0), (192, "N", 1, 0), (384, "N", 2, 0)],
+                section="ExpertSingle", offset=-0.6)
+    parts, _ = fivefretchart.load_song_folder(tmp_path)
+    assert _tf(parts["guitar"]) == [(0.4, 0b00100)]
+
+
 def test_missing_part_raises(tmp_path):
     p = _mid(tmp_path / "n.mid", [(0, G, 10)])
     with pytest.raises(ValueError):

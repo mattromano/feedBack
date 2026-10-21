@@ -125,6 +125,31 @@ def test_neither_raises(tmp_path):
     assert not (tmp_path / "n.sloppak").exists()
 
 
+def test_negative_delay_converts_valid(tmp_path):
+    folder = _folder(tmp_path, guitar=False)
+    write_ini(folder / "song.ini", name="Five", artist="Band", delay=-1250)     # first 3 bass notes < 0
+    pack = tmp_path / "neg.sloppak"
+    s = ch_to_sloppak.convert(folder, pack)
+    assert s["five_fret"] == {"bass": 13}
+    bass = _pack_json(pack, "five_fret_bass.json")
+    assert fivefret.validate_five_fret(bass) == (True, "")
+    assert bass["notes"][0]["t"] == pytest.approx(0.25)
+
+
+def test_invalid_five_fret_payload_raises(tmp_path, monkeypatch):
+    real = fivefretchart.five_fret_json
+
+    def broken(*a, **kw):
+        data = real(*a, **kw)
+        data["notes"][0]["t"] = -1.0
+        return data
+    monkeypatch.setattr(fivefretchart, "five_fret_json", broken)
+    out = tmp_path / "bad.sloppak"
+    with pytest.raises(ValueError, match=r"five_fret_bass\.json.*t must be a number >= 0"):
+        ch_to_sloppak.convert(_folder(tmp_path, guitar=False), out)
+    assert not out.exists()
+
+
 def test_manifest_entries_and_version(tmp_path):
     pack = tmp_path / "m.sloppak"
     ch_to_sloppak.convert(_folder(tmp_path), pack)
