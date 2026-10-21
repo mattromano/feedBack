@@ -292,9 +292,11 @@
     const pickApi = () => (sm && sm.library && sm.library.pickState) || null;
     function pickOn() { const p = pickApi(); return !!(p && p.session()); }
     function pickSelectedKey() { const p = pickApi(); const s = p && p.session(); return (s && s.selected && s.selected.filename) || ''; }
-    // Is this row the pick's selection? An empty key means nothing is selected,
-    // so it never matches (an unsynced remote row's local filename is '' too).
-    function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song); }
+    // Is this row the pick's selection? A grouped card shows (and plays) its
+    // display_chart, so that's the chart it's keyed on. An empty key means
+    // nothing is selected, so it never matches (an unsynced remote row's local
+    // filename is '' too).
+    function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song.display_chart ? Object.assign({}, song, song.display_chart) : song); }
 
     function queryParams(extra, opts) {
         const f = state.filters;
@@ -1685,15 +1687,16 @@
     }
 
     // A card click while picking: select it, or use it when it's already the
-    // selection. The row carries the display_chart the card shows (as
-    // wireCards' playTarget) under the local filename; a remote song that
-    // isn't on this machine can't be picked.
+    // selection. The pick is the chart the card shows and plays (wireCards'
+    // playTarget: the display_chart when a filter attached one), so both the
+    // key and the item carry that chart's local filename and facts; a remote
+    // song that isn't on this machine can't be picked.
     function pickCard(cardEl) {
         const fn = cardEl.getAttribute('data-fn');
         const song = state.songsById[fn];
         if (!song) return;
         const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
-        const lf = localFilename(song);
+        const lf = localFilename(playTarget);
         if (!lf) { renderPickBar('Only songs on this machine can be picked'); return; }
         if (pickSelectedKey() === lf) { pickApi().confirm(); return; }
         pickApi().select(Object.assign({}, playTarget, { filename: lf }));

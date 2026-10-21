@@ -129,7 +129,7 @@ function pickHarness(api, songsById, localFilename) {
         const song = state.songsById[fn];
         if (!song) return;
         const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
-        const lf = localFilename(song);
+        const lf = localFilename(playTarget);
         if (!lf) { renderPickBar('Only songs on this machine can be picked'); return; }
         if (pickSelectedKey() === lf) { pickApi().confirm(); return; }
         pickApi().select(Object.assign({}, playTarget, { filename: lf }));
@@ -160,7 +160,7 @@ const host = { contains: () => true };
 
 test('pickCard: an unselected local card selects with display_chart merged', () => {
     const api = makePickApi(null);
-    const songs = { 'a.sloppak': { filename: 'a.sloppak', title: 'A', display_chart: { arrangements: ['x'] } } };
+    const songs = { 'a.sloppak': { filename: 'a.sloppak', title: 'A', display_chart: { filename: 'a.sloppak', arrangements: ['x'] } } };
     const h = pickHarness(api, songs, (s) => s.filename || '');
     const ev = fakeEvent(fakeCard('a.sloppak'));
     h.guardClick(host, ev);
@@ -200,8 +200,43 @@ test('the guard passes clicks through without a pick session', () => {
     assert.equal(ev.stopped, false);
 });
 
+// A grouped card whose display_chart is another member: the card shows and
+// plays b.sloppak, so the pick is keyed on (and hands back) b.sloppak.
+const GROUPED = { 'a.sloppak': { filename: 'a.sloppak', title: 'A', has_drum_tab: false, display_chart: { filename: 'b.sloppak', has_drum_tab: true } } };
+
+test('pickCard: a grouped card picks its display_chart, not the representative', () => {
+    const api = makePickApi(null);
+    const h = pickHarness(api, GROUPED, (s) => s.filename || '');
+    h.guardClick(host, fakeEvent(fakeCard('a.sloppak')));
+    assert.equal(api.calls.length, 1);
+    assert.equal(api.calls[0][0], 'select');
+    assert.equal(api.calls[0][1].filename, 'b.sloppak');
+    assert.equal(api.calls[0][1].has_drum_tab, true);
+    // a second click on the now-selected card confirms
+    h.guardClick(host, fakeEvent(fakeCard('a.sloppak')));
+    assert.deepEqual(api.calls[1], ['confirm']);
+});
+
+test('pickIsSelected and _cardSig: a grouped card is selected by its display_chart', () => {
+    const state = { songs: [GROUPED['a.sloppak']], selectMode: false };
+    let session = { selected: { filename: 'b.sloppak' } };
+    const pickOn = () => !!session;
+    const pickSelectedKey = () => (session && session.selected && session.selected.filename) || '';
+    const localFilename = (s) => s.filename || '';
+    // eslint-disable-next-line no-eval
+    const pickIsSelected = eval('(' + IS_SELECTED + ')');
+    assert.equal(pickIsSelected(GROUPED['a.sloppak']), true);
+    // eslint-disable-next-line no-eval
+    const sig = (i) => (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0') + eval(SIG_PICK);
+    assert.equal(sig(0), 'r0P');
+    session = { selected: { filename: 'a.sloppak' } };
+    assert.equal(pickIsSelected(GROUPED['a.sloppak']), false, 'the representative is not what the card shows');
+    assert.equal(sig(0), 'r0p');
+});
+
 test('pickCard mirror matches the source', () => {
     const body = fnBody('pickCard');
+    assert.match(body, /const lf = localFilename\(playTarget\);/);
     assert.match(body, /if \(!lf\) \{ renderPickBar\('Only songs on this machine can be picked'\); return; \}/);
     assert.match(body, /if \(pickSelectedKey\(\) === lf\) \{ pickApi\(\)\.confirm\(\); return; \}/);
     assert.match(body, /pickApi\(\)\.select\(Object\.assign\(\{\}, playTarget, \{ filename: lf \}\)\)/);
@@ -210,7 +245,7 @@ test('pickCard mirror matches the source', () => {
 // ── Mirror: _cardSig ─────────────────────────────────────────────────────────
 
 const SIG_PICK = "(pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '')";
-const IS_SELECTED = "function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song); }";
+const IS_SELECTED = "function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song.display_chart ? Object.assign({}, song, song.display_chart) : song); }";
 
 test('pickIsSelected mirror matches the source, and songCard uses it', () => {
     assert.ok(src.includes(IS_SELECTED), 'pickIsSelected drifted from the mirror');
