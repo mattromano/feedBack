@@ -1251,8 +1251,20 @@ def load_song(
     # highway just shows an empty board) and, when the manifest omits a
     # duration, derives a song length from the last drum hit so the timeline
     # isn't zero-length.
-    if not song.arrangements and drum_tab_data is not None:
-        if song.song_length <= 0:
+    #
+    # A pack whose only arrangements are `five_fret` entries gets the same
+    # placeholder for the same reason (five-fret parts never become fretted
+    # Arrangements), so the five-fret stream can reach a client.
+    if not song.arrangements and (drum_tab_data is not None or five_fret_parts):
+        if song.song_length <= 0 and drum_tab_data is None:
+            _max_t = 0.0
+            for _p in five_fret_parts:
+                for _n in _p["five_fret"].get("notes") or []:
+                    if isinstance(_n, dict) and isinstance(_n.get("t"), (int, float)):
+                        _max_t = max(_max_t, float(_n["t"]))
+            if _max_t > 0:
+                song.song_length = _max_t + 2.0
+        elif song.song_length <= 0:
             # validate_drum_tab() intentionally does NOT type-check individual
             # hits (they're sanitized at WS-stream time), so a hit may carry a
             # non-numeric "t". Skip anything that won't convert rather than let
@@ -1267,7 +1279,9 @@ def load_song(
                     continue
             if _max_t > 0:
                 song.song_length = _max_t + 2.0
-        song.arrangements.append(Arrangement(name="Drums"))
+        song.arrangements.append(
+            Arrangement(name="Drums" if drum_tab_data is not None else five_fret_parts[0]["name"])
+        )
         arrangement_ids_acc.append(None)
 
     # Optional song_timeline.json — top-level manifest key per sloppak-spec §5.3.

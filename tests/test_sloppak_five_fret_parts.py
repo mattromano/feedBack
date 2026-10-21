@@ -108,7 +108,10 @@ def test_only_five_fret_pack_loads(tmp_path):
                      {"five_fret_bass.json": _chart()})
     loaded = _load(pak, tmp_path)
     assert len(loaded.five_fret_parts) == 1
-    assert loaded.song.arrangements == []
+    # Like a drum-only pack, a five-fret-only pack gets one note-less
+    # placeholder arrangement so the highway WS proceeds past its
+    # empty-arrangements guard; the part itself never becomes an Arrangement.
+    assert [(a.name, len(a.notes)) for a in loaded.song.arrangements] == [("Bass 5", 0)]
 
 
 def test_no_parts_is_none(tmp_path):
