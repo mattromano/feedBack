@@ -83,6 +83,26 @@ def _perspective_is_inferred_sql(alias: str, perspective: str) -> str:
     return f"(CASE WHEN COALESCE({alias}.{persp.column('name')}, '') = '' THEN 1 ELSE 0 END)"
 
 
+# A drum chart a song carries as a named arrangement (legacy packs encode the
+# kit as notes under a "Drums" part). LIKE approximations of the drums
+# plugin's \b(drums|percussion|drum\s*kit)\b, matched on the lowercased name.
+_DRUMS_NAME_LIKES = (
+    "drums", "drums %", "% drums", "% drums %",
+    "percussion", "percussion %", "% percussion", "% percussion %",
+    "%drum kit%", "%drumkit%",
+)
+
+
+def _has_drums_sql(alias: str) -> tuple[str, list]:
+    """SQL that is true when the song has a drum chart: a `drum_tab`
+    (has_drum_tab = 1) or an arrangement named like drums. `has_drums=0` is
+    its exact negation, so the two always partition the library."""
+    likes = " OR ".join(["lower(json_extract(value, '$.name')) LIKE ?"] * len(_DRUMS_NAME_LIKES))
+    sql = (f"(IFNULL({alias}.has_drum_tab, 0) = 1 OR EXISTS (SELECT 1 FROM "
+           f"json_each(IFNULL({alias}.arrangements, '[]')) WHERE {likes}))")
+    return sql, list(_DRUMS_NAME_LIKES)
+
+
 # ── The custom-tuning group key ──────────────────────────────────────────────
 #
 # Named tunings group by NAME, which is already serialization-agnostic. Custom
@@ -3967,10 +3987,10 @@ class MetadataDB:
         elif has_lyrics == LYRICS_WITH_PITCH:
             # Karaoke-ready: lyrics the singing mode can score (spec §7.2 pitch).
             where += f" AND {alias}.has_lyrics = 1 AND {alias}.has_vocal_pitch = 1"
-        if has_drums == 1:
-            where += f" AND {alias}.has_drum_tab = 1"
-        elif has_drums == 0:
-            where += f" AND IFNULL({alias}.has_drum_tab, 0) = 0"
+        if has_drums in (0, 1):
+            drums_sql, drums_params = _has_drums_sql(alias)
+            where += f" AND {drums_sql}" if has_drums == 1 else f" AND NOT {drums_sql}"
+            params += drums_params
         if tunings:
             # Keep the input cap conservative (32) so a hostile caller
             # can't blow out the parameter list. Real tuning sets in the

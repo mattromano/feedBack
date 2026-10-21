@@ -158,3 +158,49 @@ def test_parse_has_drums():
     assert _parse_has_drums("0") == 0
     assert _parse_has_drums("") is None
     assert _parse_has_drums("yes") is None
+
+
+# ── has_drums also matches a Drums-named arrangement (legacy packs) ─────────
+
+_NAMED = (
+    # filename, arrangement names
+    ("named.sloppak", ["Lead", "Drums"]),
+    ("perc.sloppak", ["Lead", "Percussion 2"]),
+    ("kitname.sloppak", ["Bass", "Drum Kit"]),
+    ("sticks.sloppak", ["Lead", "Drumsticks"]),
+)
+
+
+def _put_named(client):
+    import server
+    for fn, names in _NAMED:
+        server.meta_db.put(fn, 1.0, 1, {
+            "title": fn, "artist": "N", "album": "Album N", "format": "sloppak",
+            "has_drum_tab": False,
+            "arrangements": [{"index": i, "name": n} for i, n in enumerate(names)]})
+
+
+def test_has_drums_matches_drums_named_arrangement(client):
+    _put_named(client)
+    hits = _files(client, has_drums="1")
+    assert {"kit.sloppak", "named.sloppak", "perc.sloppak", "kitname.sloppak"} <= hits
+    assert "sticks.sloppak" not in hits
+    assert "gtr.sloppak" not in hits
+
+
+def test_has_drums_zero_is_the_complement(client):
+    _put_named(client)
+    everything = _files(client)
+    yes = _files(client, has_drums="1")
+    no = _files(client, has_drums="0")
+    assert yes | no == everything
+    assert not (yes & no)
+    assert "sticks.sloppak" in no
+
+
+def test_has_drums_named_arrangement_in_grouped_mode(client):
+    _put_named(client)
+    rows = client.get("/api/library", params={"has_drums": "1", "group": 1}).json()["songs"]
+    titles = {s.get("title") for s in rows}
+    assert "named.sloppak" in titles
+    assert "sticks.sloppak" not in titles

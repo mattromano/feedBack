@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Library drum-chart filter.** `/api/library` songs now report `has_drum_tab` and `has_vocal_pitch`, and every library endpoint accepts `has_drums=1` (only songs with a drum chart) or `has_drums=0` (only songs without one).
+- **Library drum-chart filter.** `/api/library` songs now report `has_drum_tab` and `has_vocal_pitch`, and every library endpoint accepts `has_drums=1` (only songs with a drum chart: a `drum_tab`, or an arrangement named Drums, Percussion or Drum Kit) or `has_drums=0` (only songs without one).
 - **Karaoke library filter.** The Filters drawer has a one-click
   **Karaoke-ready** button that shows the songs you can sing: synced lyrics with
   per-syllable vocal pitch (`has_lyrics=pitch`) and a separated vocals stem, so
