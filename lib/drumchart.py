@@ -244,9 +244,13 @@ class _RawNote:
     dyn: str | None = None
 
 
-def _normalize_text(text: str) -> str:
+def normalize_text(text: str) -> str:
+    """A chart text event without its [brackets], stripped. Shared with lib/fivefretchart.py."""
     m = re.search(r"\[(.*?)\]", text)
     return (m.group(1) if m else text).strip()
+
+
+_normalize_text = normalize_text
 
 
 def _section_name(text: str) -> str | None:
@@ -426,7 +430,8 @@ def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -
 _CHART_SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
 
-def _chart_sections(text: str) -> dict[str, list[str]]:
+def chart_sections(text: str) -> dict[str, list[str]]:
+    """A notes.chart as {section name: [body lines]}. Shared with lib/fivefretchart.py."""
     out, cur, body = {}, None, None
     for line in text.splitlines():
         m = _CHART_SECTION.match(line)
@@ -445,12 +450,17 @@ def _chart_sections(text: str) -> dict[str, list[str]]:
     return out
 
 
-def _chart_song_section(secs: dict) -> dict:
+def chart_song_section(secs: dict) -> dict:
+    """The [Song] section of chart_sections() output as {key: unquoted value}."""
     song = {}
     for line in secs.get("Song", []):
         k, _, v = line.partition("=")
         song[k.strip()] = v.strip().strip('"')
     return song
+
+
+_chart_sections = chart_sections
+_chart_song_section = chart_song_section
 
 
 def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
