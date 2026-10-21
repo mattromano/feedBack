@@ -1606,16 +1606,40 @@ if (window.feedBack) window.feedBack.requestExitSong = requestExitSong;
 // (_openExitConfirm below): pause cancels any count-in and pauses a playing
 // song; resume plays only what was playing, only on the same song
 // (audioSeekGen) and only on the player, through the song count-in when the
-// song wants one.
+// song wants one (the same rule as a song start, Auto mode included).
+//
+// Browser <audio>: togglePlay's pause sets S.isPlaying = false before the
+// element's 'pause' event, whose listener then returns early, so
+// feedBack.isPlaying and song:pause are set here (once). The resume needs
+// nothing extra: the 'play' listener sets them. JUCE: togglePlay sets them
+// itself, but only once the async pause IPC settles; a resume that lands
+// before then waits for it instead of failing the !S.isPlaying check.
+let _overlayPauseInFlight = null;
 function pauseForOverlay() {
     const wasPlaying = S.isPlaying || isCountingIn();
     _cancelCountIn();
-    if (S.isPlaying) Promise.resolve(togglePlay()).catch(() => {});
+    if (S.isPlaying) {
+        const paused = Promise.resolve(togglePlay()).catch(() => {});
+        if (window._juceMode) {
+            const settled = paused.then(() => {
+                if (_overlayPauseInFlight === settled) _overlayPauseInFlight = null;
+            });
+            _overlayPauseInFlight = settled;
+        } else {
+            window.feedBack.isPlaying = false;
+            window.feedBack.emit('song:pause', _songEventPayload());
+        }
+    }
     return { wasPlaying, gen: audioSeekGen() };
 }
 
 function resumeAfterOverlay(token) {
     if (!(token && token.wasPlaying)) return false;
+    if (_overlayPauseInFlight) {
+        if (audioSeekGen() !== token.gen) return false;
+        _overlayPauseInFlight.then(() => resumeAfterOverlay(token));
+        return true;
+    }
     if (S.isPlaying || isCountingIn()) return false;
     if (audioSeekGen() !== token.gen) return false;
     if (document.querySelector('.screen.active')?.id !== 'player') return false;

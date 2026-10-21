@@ -16,17 +16,34 @@ const { extractFunction } = require('./test_utils');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
 const SRC = fs.readFileSync(APP_JS, 'utf8');
 
-function load({ isPlaying = false, countingIn = false, gen = 7, wantCountIn = false, activeId = 'player' } = {}) {
+function load({ isPlaying = false, countingIn = false, gen = 7, wantCountIn = false, activeId = 'player', juce = false } = {}) {
     const pauseSrc = extractFunction(SRC, 'function pauseForOverlay(');
     const resumeSrc = extractFunction(SRC, 'function resumeAfterOverlay(');
     const sb = {
         calls: { togglePlay: 0, cancel: 0, songCountIn: 0 },
         state: { countingIn, gen, wantCountIn, activeId },
+        emits: [],
+        // JUCE mode: togglePlay's pause awaits this gate (the async IPC).
+        gate: null,
     };
     vm.createContext(sb);
     vm.runInContext(`
         var S = { isPlaying: ${isPlaying} };
-        function togglePlay() { calls.togglePlay++; S.isPlaying = !S.isPlaying; }
+        var window = {
+            _juceMode: ${juce},
+            feedBack: { isPlaying: ${isPlaying}, emit(name, payload) { emits.push({ name, payload }); } },
+        };
+        let _overlayPauseInFlight = null;
+        function _songEventPayload() { return { audioT: 1 }; }
+        function togglePlay() {
+            calls.togglePlay++;
+            if (window._juceMode && S.isPlaying) {
+                let release;
+                globalThis.gate = { promise: new Promise((r) => { release = r; }), release: () => release() };
+                return globalThis.gate.promise.then(() => { S.isPlaying = false; window.feedBack.isPlaying = false; });
+            }
+            S.isPlaying = !S.isPlaying;
+        }
         function _cancelCountIn() { calls.cancel++; }
         function isCountingIn() { return state.countingIn; }
         function audioSeekGen() { return state.gen; }
@@ -38,6 +55,7 @@ function load({ isPlaying = false, countingIn = false, gen = 7, wantCountIn = fa
         globalThis.pause = pauseForOverlay;
         globalThis.resume = resumeAfterOverlay;
         globalThis.getS = () => S;
+        globalThis.getFb = () => window.feedBack;
     `, sb);
     return sb;
 }
@@ -112,4 +130,41 @@ test('resume is refused after a song change, while playing, while counting in, o
 test('both are published on window.feedBack', () => {
     assert.match(SRC, /window\.feedBack\.pauseForOverlay\s*=\s*pauseForOverlay/);
     assert.match(SRC, /window\.feedBack\.resumeAfterOverlay\s*=\s*resumeAfterOverlay/);
+});
+
+test('a browser-audio pause clears feedBack.isPlaying and emits song:pause', () => {
+    const sb = load({ isPlaying: true, juce: false });
+    sb.pause();
+    assert.equal(sb.getFb().isPlaying, false);
+    assert.deepEqual(sb.emits.map((e) => e.name), ['song:pause']);
+    assert.deepEqual({ ...sb.emits[0].payload }, { audioT: 1 });
+});
+
+test('a JUCE pause leaves the isPlaying and song:pause emit to togglePlay', () => {
+    const sb = load({ isPlaying: true, juce: true });
+    sb.pause();
+    assert.deepEqual(sb.emits, []);
+});
+
+test('a resume during an in-flight JUCE pause waits for it, then plays', async () => {
+    const sb = load({ isPlaying: true, juce: true, wantCountIn: false });
+    const token = sb.pause();
+    assert.equal(sb.getS().isPlaying, true, 'pause still in flight');
+    assert.equal(sb.resume(token), true);
+    assert.equal(sb.calls.togglePlay, 1, 'nothing resumes before the pause settles');
+    sb.gate.release();
+    for (let i = 0; i < 5; i++) await null;
+    assert.equal(sb.calls.togglePlay, 2);
+    assert.equal(sb.getS().isPlaying, true, 'the song ends up playing');
+});
+
+test('a resume queued behind an in-flight pause still honours the song check', async () => {
+    const sb = load({ isPlaying: true, juce: true });
+    const token = sb.pause();
+    sb.state.gen = 8;   // song changed behind the overlay
+    assert.equal(sb.resume(token), false);
+    sb.gate.release();
+    for (let i = 0; i < 5; i++) await null;
+    assert.equal(sb.calls.togglePlay, 1);
+    assert.equal(sb.getS().isPlaying, false);
 });
