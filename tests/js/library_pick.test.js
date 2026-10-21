@@ -122,6 +122,31 @@ test('leaving the songs screen resolves left without navigating', async () => {
     assert.deepStrictEqual(shows, ['v3-songs']);
 });
 
+test('a stale screen:changed while Songs is still active keeps the session', async () => {
+    const shows = [];
+    const api = createLibraryPick({ showScreen: (id) => shows.push(id), activeScreen: () => 'v3-songs' });
+    const p = api.pick({ filters: [CHIP], returnTo: 'plugin-x' });
+    api.onScreenChanged('plugin-x');
+    assert.notStrictEqual(api.session(), null);
+    assert.strictEqual(await settled(p), false);
+    assert.deepStrictEqual(shows, ['v3-songs']);
+});
+
+test('screen:changed with another screen really active resolves left', async () => {
+    const shows = [];
+    const api = createLibraryPick({ showScreen: (id) => shows.push(id), activeScreen: () => 'v3-home' });
+    const p = api.pick({ filters: [CHIP], returnTo: 'plugin-x' });
+    api.onScreenChanged('v3-home');
+    assert.strictEqual((await p).reason, 'left');
+    assert.strictEqual(api.session(), null);
+    assert.deepStrictEqual(shows, ['v3-songs']);
+});
+
+test('the bootstrap passes the active screen to the pick session', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'v3', 'library-pick.js'), 'utf8');
+    assert.match(src, /activeScreen: \(\) => \{ const a = root\.document\.querySelector\('\.screen\.active'\); return a \? a\.id : undefined; \}/);
+});
+
 test('a second pick replaces the first', async () => {
     const { api } = setup();
     const first = api.pick({ title: 'one' });

@@ -64,7 +64,7 @@
             }));
     }
 
-    function createLibraryPick({ emit, showScreen, songsScreen = SONGS_SCREEN } = {}) {
+    function createLibraryPick({ emit, showScreen, songsScreen = SONGS_SCREEN, activeScreen } = {}) {
         let current = null;
 
         function fire(active) {
@@ -159,8 +159,12 @@
             return finish('back');
         }
 
+        // A late screen:changed from an overlapping showScreen can name another
+        // screen after Songs became active; end only when Songs really isn't.
         function onScreenChanged(id) {
-            if (current && id !== songsScreen) end('left');
+            if (!current || id === songsScreen) return;
+            if (typeof activeScreen === 'function' && activeScreen() === songsScreen) return;
+            end('left');
         }
 
         function handleKey(e, doc) {
@@ -182,6 +186,7 @@
         const inst = createLibraryPick({
             emit: (t, d) => root.feedBack.emit(t, d),
             showScreen: (id) => root.showScreen && root.showScreen(id),
+            activeScreen: () => { const a = root.document.querySelector('.screen.active'); return a ? a.id : undefined; },
         });
         root.feedBack.library = Object.assign(root.feedBack.library || {}, { pick: inst.pick, pickState: inst });
         root.feedBack.on('screen:changed', (e) => inst.onScreenChanged(e && e.detail && e.detail.id));
