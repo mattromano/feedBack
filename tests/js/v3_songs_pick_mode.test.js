@@ -265,3 +265,23 @@ test('_cardSig: moving the selection changes only the two cards involved', () =>
     const changed = before.map((s, i) => (s !== after[i] ? i : -1)).filter((i) => i >= 0);
     assert.deepEqual(changed, [1, 4]);
 });
+
+// ── First-visit prefs fix pins (Task 2 M8 / M9) ──────────────────────────────
+
+test('render restores the saved view state before loading providers', () => {
+    // the module-level async render() (nested views have their own render())
+    const at = src.indexOf('\n    async function render() {');
+    assert.ok(at >= 0, 'async render not found');
+    const body = src.slice(at, src.indexOf('\n    function ', at + 10));
+    const restore = body.indexOf('_restoreViewState();');
+    const providers = body.indexOf('await loadProviders()');
+    assert.ok(restore >= 0, 'render must call _restoreViewState()');
+    assert.ok(providers >= 0);
+    assert.ok(restore < providers, '_restoreViewState() must run before loadProviders()');
+});
+
+test('saveLibraryPrefs never writes before the saved prefs were restored', () => {
+    const body = fnBody('saveLibraryPrefs');
+    const first = body.slice(body.indexOf('{') + 1).trim();
+    assert.ok(first.startsWith('if (!_prefsRestored) return;'), 'the first statement must be the _prefsRestored guard');
+});
