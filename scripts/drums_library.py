@@ -31,9 +31,14 @@ auto-generated one (--upgrade: a real chart with < 3 hand-charted lower levels, 
 one with more). Candidates are the --local charts (top 2 by name), then Chorus Encore results with
 any wanted part; each one is aligned and validated per part (the drum join's warp is reused when
 the song's drums came from the same chart, and only the chart is downloaded then), the passing
-parts are written and the rest tried on the next candidate. The state defaults to
-five_fret_state.json, and the CSV has one row per song and part. drums can't be mixed with the
-five-fret parts in one run.
+parts are written and the rest tried on the next candidate (a candidate that fails outright, e.g.
+a download, is logged and the next one tried; parts already written stay). A song is backed up
+only just before its first actual write. The state defaults to five_fret_state.json, and the CSV
+has one row per song and part. drums can't be mixed with the five-fret parts in one run.
+The state is per --parts selection: a song it lists as finished is skipped whatever parts a later
+run asks for, so a run with different parts needs its own --state (or --redo). --redo replaces a
+song's state entry with that run's parts; --retry STATUS also matches per-part statuses (e.g.
+--retry flagged reruns a song whose guitar joined but bass flagged, for the bass only).
 """
 from __future__ import annotations
 
@@ -389,66 +394,83 @@ def process_five_fret(path_str: str) -> dict:
                      any(c["part_levels"].get(x, 0) > min_levels[x] for x in wanted)][:a.max_candidates + 2]
         remaining, tried, passed = list(wanted), [], {}
         backed_up = False
-        for c in cands[:a.max_candidates + 2]:
-            if not remaining:
-                break
-            if c["kind"] == "online":
-                have = [x for x in remaining if x in c["parts_have"]]
-                cache = CACHE / "chorus" / c["md5"]
-                label = f"chorus:{c['md5']} {c['artist']} - {c['name']} ({c.get('charter')})"
-                ids = fivefretjoin.chart_ids(label=label, folder=cache)
-                source = {"kind": "chart", "origin": "chorus", "md5": c["md5"], "charter": c.get("charter")}
-            else:
-                path = Path(c["path"])
-                try:
-                    charts, _ = fivefretchart.load_song_folder(drumjoin.chart_folder(path))
-                except Exception as e:
-                    log(f"   {path}: unreadable chart: {e}")
-                    continue
-                have = [x for x in remaining if x in charts]
-                label = f"local:{path}"
-                ids = fivefretjoin.chart_ids(label=label, folder=path)
-                source = {"kind": "chart", "origin": "local"}
-                if path.suffix.lower() == ".sng":
-                    source["md5"] = hashlib.md5(path.read_bytes()).hexdigest()
-            if not have:
-                continue
-            reuse = fivefretjoin.reusable_warp(view, ids)
-            if c["kind"] == "online":       # a reused warp needs no audio: chart + song.ini only
-                folder = chorus.fetch(c["md5"], cache, roles=() if reuse else _stem_roles(have, c["has_rhythm"]))
-            else:
-                folder = path
 
-            def join(parts):
-                nonlocal backed_up
-                if a.write and not backed_up:      # once per song, before its first write
-                    ensure_backup(p, Path(a.backup_dir))
-                    backed_up = True
-                return fivefretjoin.join_parts(
-                    p, folder, parts, source=source, reuse=reuse,
-                    min_levels={x: min_levels[x] for x in parts} if min_levels else None,
-                    dry_run=not a.write, backup_dir=None, log=lambda *x: None)
-            rep = join(have)
-            got = dict(rep["parts"])
-            failed = [x for x, r in got.items() if not r.get("ok")]
-            if c["kind"] == "online" and reuse and failed:
-                # the reused warp didn't do for these: a fresh alignment needs the chart's stems
-                chorus.fetch(c["md5"], cache, roles=_stem_roles(failed, c["has_rhythm"]))
-                got.update(join(failed)["parts"])
+        def backup():       # join_parts' before_write: once per song, just before its first write
+            nonlocal backed_up
+            if not backed_up:
+                ensure_backup(p, Path(a.backup_dir))
+                backed_up = True
+
+        def record(got, label, pending):
             for part, r in got.items():
                 t = {"part": part, "chart": label, **{k: r.get(k) for k in _PART_FIELDS if k != "chart"},
                      "ok": bool(r.get("ok")), "levels": r.get("levels"),
                      "error": "; ".join(r.get("reasons") or []) or r.get("error")}
                 tried.append(t)
+                pending.discard(part)
                 if t["ok"] and part in remaining:
                     remaining.remove(part)
                     passed[part] = t
+
+        for c in cands[:a.max_candidates + 2]:
+            if not remaining:
+                break
+            label = (f"chorus:{c['md5']} {c['artist']} - {c['name']} ({c.get('charter')})" if c["kind"] == "online"
+                     else f"local:{c['path']}")
+            pending = set(remaining)
+            try:        # one failing candidate (download, unreadable chart, ...) doesn't stop the song
+                if c["kind"] == "online":
+                    have = [x for x in remaining if x in c["parts_have"]]
+                    cache = CACHE / "chorus" / c["md5"]
+                    ids = fivefretjoin.chart_ids(label=label, folder=cache)
+                    source = {"kind": "chart", "origin": "chorus", "md5": c["md5"], "charter": c.get("charter")}
+                else:
+                    path = Path(c["path"])
+                    try:
+                        charts, _ = fivefretchart.load_song_folder(drumjoin.chart_folder(path))
+                    except Exception as e:
+                        log(f"   {path}: unreadable chart: {e}")
+                        continue
+                    have = [x for x in remaining if x in charts]
+                    ids = fivefretjoin.chart_ids(label=label, folder=path)
+                    source = {"kind": "chart", "origin": "local"}
+                    if path.suffix.lower() == ".sng":
+                        source["md5"] = hashlib.md5(path.read_bytes()).hexdigest()
+                if not have:
+                    continue
+                pending = set(have)
+                reuse = fivefretjoin.reusable_warp(view, ids)
+                if c["kind"] == "online":       # a reused warp needs no audio: chart + song.ini only
+                    folder = chorus.fetch(c["md5"], cache, roles=() if reuse else _stem_roles(have, c["has_rhythm"]))
+                else:
+                    folder = path
+
+                def join(parts):
+                    return fivefretjoin.join_parts(
+                        p, folder, parts, source=source, reuse=reuse,
+                        min_levels={x: min_levels[x] for x in parts} if min_levels else None,
+                        dry_run=not a.write, before_write=backup if a.write else None, log=lambda *x: None)
+                got = join(have)["parts"]
+                record(got, label, pending)
+                failed = [x for x, r in got.items() if not r.get("ok")]
+                if c["kind"] == "online" and reuse and failed:
+                    # the reused warp didn't do for these: a fresh alignment needs the chart's stems
+                    pending = set(failed)
+                    chorus.fetch(c["md5"], cache, roles=_stem_roles(failed, c["has_rhythm"]))
+                    record(join(failed)["parts"], label, pending)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                log(f"   {p.name}: {label}: {err}")
+                for part in sorted(pending, key=wanted.index):
+                    tried.append({"part": part, "chart": label, **{k: None for k in _PART_FIELDS if k != "chart"},
+                                  "ok": False, "levels": None, "error": err, "exception": True})
         word = ("upgraded" if a.write else "would-upgrade") if a.upgrade else ("joined" if a.write else "would-join")
         none = "no-better" if a.upgrade else "no-chart"
         res["parts"] = {}
         for part in wanted:
             pr = {"levels_before": min_levels[part]} if a.upgrade else {}
-            mine = [t for t in tried if t["part"] == part]
+            mine = [t for t in tried if t["part"] == part and not t.get("exception")]
+            errs = [t for t in tried if t["part"] == part and t.get("exception")]
             if part in passed:
                 pr.update(status=word, **{k: passed[part][k] for k in _PART_FIELDS})
                 if a.upgrade:
@@ -456,10 +478,14 @@ def process_five_fret(path_str: str) -> dict:
             elif mine:
                 best = max(mine, key=lambda t: t.get("within_30ms") or 0)
                 pr.update(status="flagged", error=best["error"], **{k: best[k] for k in _PART_FIELDS})
+            elif errs:      # only candidates that failed outright (download, unreadable chart, ...)
+                pr.update(status="error", error="; ".join(dict.fromkeys(t["error"] for t in errs)),
+                          chart=errs[0]["chart"])
             else:
                 pr["status"] = none
             res["parts"][part] = pr
-        res["status"] = word if passed else ("flagged" if tried else none)
+        flagged = any(not t.get("exception") for t in tried)
+        res["status"] = word if passed else ("flagged" if flagged else ("error" if tried else none))
         if passed:
             res["chart"] = next(iter(passed.values()))["chart"]
         res["tried"] = tried
@@ -560,6 +586,31 @@ def parse_args(argv=None):
     return a
 
 
+def _retrying(prev, retry) -> bool:
+    """The song's state status, or any of its per-part statuses, is one of ``retry``."""
+    if not prev:
+        return False
+    return prev.get("status") in retry or any(
+        isinstance(pr, dict) and pr.get("status") in retry for pr in (prev.get("parts") or {}).values())
+
+
+DONE_PART = ("joined", "upgraded")
+
+
+def _keep_earlier_parts(prev, r) -> dict:
+    """A retried five-fret song keeps the per-part results of the parts this run didn't look at
+    (e.g. the part joined last time), and stays joined / upgraded when one of them is."""
+    old = (prev or {}).get("parts") or {}
+    new = r.get("parts")
+    if not old or new is None:
+        return r
+    r["parts"] = {k: new.get(k, old.get(k)) for k in dict.fromkeys(list(old) + list(new))}
+    done = [pr["status"] for pr in r["parts"].values() if isinstance(pr, dict) and pr.get("status") in DONE_PART]
+    if done and r.get("status") not in DONE_PART and r.get("status") != "error":
+        r["status"] = done[0]
+    return r
+
+
 def main(argv=None):
     a = parse_args(argv)
     ff = a.parts != ["drums"]
@@ -581,7 +632,7 @@ def main(argv=None):
         prev = state.get(p.name)
         retry = {x.strip() for x in a.retry.split(",") if x.strip()}
         if a.upgrade and ff:
-            if prev and prev.get("status") not in retry and not a.redo:
+            if prev and not _retrying(prev, retry) and not a.redo:
                 continue
             if a.only and not re.search(a.only, p.name, re.I):
                 continue
@@ -592,7 +643,7 @@ def main(argv=None):
                 pass
             continue
         if a.upgrade:
-            if prev and prev.get("status") not in retry and not a.redo:
+            if prev and not _retrying(prev, retry) and not a.redo:
                 continue
             if a.only and not re.search(a.only, p.name, re.I):
                 continue
@@ -603,7 +654,7 @@ def main(argv=None):
             if 0 <= lv < 3:
                 todo.append(p)
             continue
-        if prev and not a.redo and prev.get("status") not in retry:
+        if prev and not a.redo and not _retrying(prev, retry):
             if not (prev.get("status") == "would-join" and a.write):
                 continue
         if a.only and not re.search(a.only, p.name, re.I):
@@ -613,14 +664,14 @@ def main(argv=None):
                     continue
             except Exception:
                 continue
-        if ff and not a.redo and not (prev and prev.get("status") in retry):
+        if ff and not a.redo and not _retrying(prev, retry):
             try:
                 if not wanted_parts(PackView(p), a.parts, False)[0]:
                     state[p.name] = {"file": p.name, "status": "has-parts"}
                     continue
             except Exception:
                 pass
-        elif not a.redo and not (prev and prev.get("status") in retry):
+        elif not a.redo and not _retrying(prev, retry):
             try:
                 if has_drums(manifest_of(p)):
                     state[p.name] = {"file": p.name, "status": "has-drums"}
@@ -641,6 +692,8 @@ def main(argv=None):
         futs = {ex.submit(process, str(p)): p for p in todo}
         for f in as_completed(futs):
             r = f.result()
+            if ff and not a.redo:       # --redo replaces the entry with this run's parts
+                r = _keep_earlier_parts(state.get(r["file"]), r)
             state[r["file"]] = r
             done += 1
             counts[r["status"]] = counts.get(r["status"], 0) + 1

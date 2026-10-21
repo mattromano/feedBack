@@ -397,3 +397,67 @@ def test_source_charter_falls_back_to_frets(tmp_path):
     _, docs = _read(pack)
     assert docs["five_fret_guitar.json"]["source"] == {"kind": "chart", "origin": "chorus", "md5": "c" * 32,
                                                        "charter": "Fretter"}
+
+
+# ── safety: before_write hook, bad reused warps, invalid payloads ───────────
+
+def test_before_write_hook_once_before_the_pack_changes(tmp_path):
+    folder, charts = _chart(tmp_path)
+    sh = lambda t: t + 1.5  # noqa: E731
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, sh), _tf(charts["bass"].notes, sh))
+    before = pack.read_bytes()
+    seen = []
+    reuse = {"folder": str(folder), "warp": {"offset": 1.5}}
+    r = _join(pack, folder, parts=("guitar", "bass"), reuse=reuse, dry_run=False,
+              before_write=lambda: seen.append(pack.read_bytes()))
+    assert r["written"] == ["guitar", "bass"]
+    assert seen == [before], "called exactly once, while the pack was untouched"
+    assert pack.read_bytes() != before
+    # dry run: never called
+    seen.clear()
+    _join(pack, folder, parts=("guitar",), reuse=reuse, before_write=lambda: seen.append(1))
+    assert seen == []
+
+
+def test_before_write_hook_not_called_when_every_part_flags(tmp_path):
+    folder, _ = _chart(tmp_path)
+    other = fivefretchart.parse_mid(write_mid(tmp_path / "x.mid", five_fret_notes(N_MEASURES, seed=42),
+                                              track_name="PART GUITAR"))
+    pack = _ours(tmp_path, _tf(other.notes, lambda t: t + 0.4))
+    seen = []
+    r = _join(pack, folder, dry_run=False, before_write=lambda: seen.append(1))
+    assert not r["parts"]["guitar"]["ok"] and r["written"] == []
+    assert seen == []
+
+
+@pytest.mark.parametrize("warp", [{"foo": 1}, [1, 2, 3], [[0.0, "x"], [1.0]]])
+def test_malformed_reused_warp_falls_back_to_fresh(tmp_path, warp):
+    folder, charts = _chart(tmp_path)
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, lambda t: t + 1.5))
+    logs = []
+    r = _join(pack, folder, reuse={"folder": str(folder), "warp": warp}, log=logs.append)["parts"]["guitar"]
+    assert r["ok"] and not r["reused_drums"], r
+    assert r["offset"] == pytest.approx(1.5, abs=0.01)
+    assert "error" not in r
+    assert any("reused drum warp" in str(x) and "unusable" in str(x) for x in logs), logs
+
+
+def test_invalid_payload_dropped_others_written(tmp_path, monkeypatch):
+    folder, charts = _chart(tmp_path)
+    sh = lambda t: t + 1.5  # noqa: E731
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, sh), _tf(charts["bass"].notes, sh))
+    real = fivefret.validate_five_fret
+
+    def picky(data):
+        if isinstance(data, dict) and data.get("instrument") == "bass":
+            return False, "bad bass payload"
+        return real(data)
+    monkeypatch.setattr(fivefret, "validate_five_fret", picky)
+    r = _join(pack, folder, parts=("guitar", "bass"), reuse={"folder": str(folder), "warp": {"offset": 1.5}},
+              dry_run=False)
+    assert r["written"] == ["guitar"]
+    assert r["parts"]["guitar"]["ok"]
+    b = r["parts"]["bass"]
+    assert not b["ok"] and any("bad bass payload" in x for x in b["reasons"]), b
+    _, docs = _read(pack)
+    assert set(docs) == {"five_fret_guitar.json"}

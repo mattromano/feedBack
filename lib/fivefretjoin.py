@@ -159,26 +159,58 @@ def warp_fn(spec) -> Callable[[float], float]:
     return drumalign._pw_linear(xs, ys)
 
 
-def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dict[str, dict],
-                    backup_dir=None) -> None:
-    """Write ``parts`` (``{part: five_fret payload}``) into the pack, replacing the same instrument's
-    existing part (and its file) only, and merge ``info`` into ``five_fret_join.json``.
+def _pack_file(sp: drumjoin.SloppakFiles, rel) -> Path | None:
+    """``sp.dir / rel`` resolved, when it is a path inside the pack (else None)."""
+    if not (isinstance(rel, str) and rel):
+        return None
+    root = sp.dir.resolve()
+    try:
+        p = (sp.dir / rel).resolve()
+    except (OSError, ValueError):
+        return None
+    return p if root in p.parents else None
 
-    Raises ValueError, writing nothing, when a payload fails ``validate_five_fret``."""
+
+def _referenced_files(sp: drumjoin.SloppakFiles, entries) -> set[Path]:
+    """Pack files the kept arrangement entries and the stems point at."""
+    refs = set()
+    for e in list(entries) + list(sp.manifest.get("stems") or []):
+        if isinstance(e, dict):
+            for v in e.values():
+                p = _pack_file(sp, v)
+                if p is not None:
+                    refs.add(p)
+    return refs
+
+
+def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dict[str, dict],
+                    backup_dir=None, *, before_write: Callable[[], None] | None = None) -> None:
+    """Write ``parts`` (``{part: five_fret payload}``) into the pack, replacing the same instrument's
+    existing part (and its file, when that file is inside the pack and nothing kept uses it) only,
+    and merge ``info`` into ``five_fret_join.json``.
+
+    Raises ValueError, writing nothing, when a payload fails ``validate_five_fret``. ``before_write``
+    (e.g. a backup) runs once, after validation and before the pack's first change; if it raises,
+    nothing is written."""
     for part, payload in parts.items():
         if part not in fivefret.PARTS:
             raise ValueError(f"unknown five-fret part {part!r}")
         ok, why = fivefret.validate_five_fret(payload)
         if not ok:
             raise ValueError(f"{part}: {why}")
-    keep = []
+    keep, old = [], []
     for e in sp.manifest.get("arrangements") or []:
         if _is_part_entry(e) and e["instrument"] in parts:
-            rel = e.get("five_fret")
-            if isinstance(rel, str) and rel and (sp.dir / rel).is_file():
-                (sp.dir / rel).unlink()
+            old.append(e.get("five_fret"))
             continue
         keep.append(e)
+    if before_write is not None:
+        before_write()
+    refs = _referenced_files(sp, keep)
+    for rel in old:
+        f = _pack_file(sp, rel)
+        if f is not None and f not in refs and f.is_file():
+            f.unlink()
     for part, payload in parts.items():
         rel = f"five_fret_{part}.json"
         (sp.dir / rel).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
@@ -389,6 +421,8 @@ def validate_part(times, onsets, beat: float, thresholds: dict) -> drumalign.Val
     minus the best within_30ms of the notes moved one beat either way (``pads["beat_margin"]``).
     A steady strum one beat off can pass the onset check; it can't beat its own shifted copy."""
     v = drumalign.validate(times, onsets, thresholds)
+    # drumalign words its onset check for drums; these are guitar / bass onsets
+    v.reasons = [r.replace("of a drum onset", "of an onset") for r in v.reasons]
     nt = np.unique(np.round(np.asarray(times, float), 3))
     margin = 0.0
     if len(nt) and len(onsets):
@@ -455,12 +489,15 @@ def _source_with_charter(source: dict, ini: dict) -> dict:
 
 def join_parts(sloppak: Path, chart_folder: Path, parts: list[str], *, source: dict, reuse: dict | None = None,
                min_levels: dict[str, int] | None = None, thresholds: dict | None = None, dry_run: bool = True,
-               backup_dir=None, log=print) -> dict:
+               before_write: Callable[[], None] | None = None, log=print) -> dict:
     """Place, validate and (unless ``dry_run``) write the chart's ``parts`` into the pack.
 
-    Per part: the reused drum warp (``reuse = {"folder", "warp"}``) first, then a fresh
-    alignment; the first that validates is kept. Only parts the chart has are considered, and
-    with ``min_levels`` only those with more hand-charted lower levels than ``min_levels[part]``."""
+    Per part: the reused drum warp (``reuse = {"folder", "warp"}``) first (a warp that can't be
+    used at all counts as failing), then a fresh alignment; the first that validates is kept. Only
+    parts the chart has are considered, and with ``min_levels`` only those with more hand-charted
+    lower levels than ``min_levels[part]``. A passing part whose payload fails
+    ``validate_five_fret`` is dropped (not ok) and the others are still written.
+    ``before_write`` goes to ``write_five_fret``: it runs only when something is written."""
     folder = drumjoin.chart_folder(Path(chart_folder))
     charts, ini = fivefretchart.load_song_folder(folder)
     report: dict = {"parts": {}, "written": []}
@@ -500,10 +537,14 @@ def join_parts(sloppak: Path, chart_folder: Path, parts: list[str], *, source: d
                 beat = _beat(chart)
                 got = None
                 if reuse and reuse.get("warp"):
-                    placed, det, v, ok = _reuse_part(folder, chart, reuse["warp"], onsets, beat, th, log)
-                    log(f"  {part}: reused drum warp -> {'OK' if ok else 'FLAGGED: ' + '; '.join(v.reasons)}")
-                    if ok:
-                        got = (placed, det, v, True)
+                    try:
+                        placed, det, v, ok = _reuse_part(folder, chart, reuse["warp"], onsets, beat, th, log)
+                    except Exception as e:      # a malformed warp: align afresh
+                        log(f"  {part}: reused drum warp unusable ({type(e).__name__}: {e}); aligning afresh")
+                    else:
+                        log(f"  {part}: reused drum warp -> {'OK' if ok else 'FLAGGED: ' + '; '.join(v.reasons)}")
+                        if ok:
+                            got = (placed, det, v, True)
                 if got is None:
                     placed, det = align_part(folder, sp, chart, part, ref_y=ref_y, ref_kind=ref_kind, onsets=onsets,
                                              chart_parts=set(charts), log=log)
@@ -528,14 +569,25 @@ def join_parts(sloppak: Path, chart_folder: Path, parts: list[str], *, source: d
             src = _source_with_charter(source, ini)
             payloads, info = {}, {}
             for part, (placed, det, v, reused) in passed.items():
-                fivefretchart.ensure_levels(placed)
-                payloads[part] = fivefretchart.five_fret_json(placed, src, f"{fivefretchart.PART_NAMES[part]} (5-fret)")
+                res = report["parts"][part]
+                try:
+                    fivefretchart.ensure_levels(placed)
+                    payload = fivefretchart.five_fret_json(placed, src, f"{fivefretchart.PART_NAMES[part]} (5-fret)")
+                    ok, why = fivefret.validate_five_fret(payload)
+                except Exception as e:
+                    ok, why = False, f"{type(e).__name__}: {e}"
+                if not ok:      # drop this part only; the others are still written
+                    log(f"  {part}: invalid five_fret payload, not written: {why}")
+                    res.update(ok=False, reasons=res["reasons"] + [f"invalid five_fret payload: {why}"])
+                    continue
+                payloads[part] = payload
                 info[part] = {"tool": "fivefretjoin", "folder": str(Path(folder).resolve()), "source": src,
                               "reused_drums": reused, "detail": det, "validation": v.summary(),
                               "joined": time.strftime("%Y-%m-%d %H:%M")}
-            write_five_fret(sp, payloads, info, backup_dir)
-            report["written"] = list(payloads)
-            log(f"  wrote {', '.join(payloads)}")
+            if payloads:
+                write_five_fret(sp, payloads, info, before_write=before_write)
+                report["written"] = list(payloads)
+                log(f"  wrote {', '.join(payloads)}")
     finally:
         sp.close()
     return report

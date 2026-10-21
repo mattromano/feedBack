@@ -145,18 +145,19 @@ def _doc(pack, rel):
 
 class FakeJoin:
     """join_parts stand-in: ``decide(folder, part, call_no)`` says which parts pass; passing parts
-    are written (unless dry_run) through the real write_five_fret."""
+    are written (unless dry_run) through the real write_five_fret, which calls ``before_write``
+    (drums_library's backup) just before the pack changes."""
 
     def __init__(self, decide=None):
         self.calls = []
         self.decide = decide or (lambda folder, part, n: True)
 
     def __call__(self, sloppak, chart_folder, parts, *, source, reuse=None, min_levels=None, thresholds=None,
-                 dry_run=True, backup_dir=None, log=print):
+                 dry_run=True, before_write=None, log=print):
         n = len(self.calls)
         self.calls.append({"sloppak": Path(sloppak), "folder": Path(chart_folder), "parts": list(parts),
                            "source": dict(source), "reuse": reuse, "min_levels": min_levels,
-                           "dry_run": dry_run, "backup_dir": backup_dir})
+                           "dry_run": dry_run, "before_write": before_write})
         rep = {"parts": {}, "written": []}
         passed = {}
         for p in parts:
@@ -171,7 +172,8 @@ class FakeJoin:
         if passed and not dry_run:
             sp = drumjoin.SloppakFiles(Path(sloppak))
             try:
-                fivefretjoin.write_five_fret(sp, passed, {p: {"tool": "fake"} for p in passed}, backup_dir)
+                fivefretjoin.write_five_fret(sp, passed, {p: {"tool": "fake"} for p in passed},
+                                             before_write=before_write)
             finally:
                 sp.close()
             rep["written"] = list(passed)
@@ -287,6 +289,7 @@ def test_has_parts_skipped_and_auto_replaced(env, tmp_path, monkeypatch):
              str(tmp_path / "charts"), "--no-online", "--write", "--redo")
     assert s["a.sloppak"]["status"] == "has-parts" and s["b.sloppak"]["status"] == "has-parts"
     assert len(fake.calls) == 1 and b.read_bytes() == b_bytes
+    assert sorted(x.name for x in bd.iterdir()) == ["a.sloppak", "placeholder"], "no backup on --redo either"
 
 
 def test_dry_run_writes_nothing_then_write_backs_up(env, tmp_path, monkeypatch):
@@ -299,13 +302,13 @@ def test_dry_run_writes_nothing_then_write_backs_up(env, tmp_path, monkeypatch):
     args = ("--parts", "guitar,bass", "--local", str(tmp_path / "charts"), "--no-online")
     s = _run(monkeypatch, lib, bd, tmp_path / "st.json", *args)
     assert s["song.sloppak"]["status"] == "would-join"
-    assert fake.calls[-1]["dry_run"] is True
+    assert fake.calls[-1]["dry_run"] is True and fake.calls[-1]["before_write"] is None
     assert p.read_bytes() == before
     assert sorted(x.name for x in bd.iterdir()) == ["placeholder"]
     s = _run(monkeypatch, lib, bd, tmp_path / "st.json", *args, "--write")
     assert s["song.sloppak"]["status"] == "joined"
     assert len(fake.calls) == 2 and fake.calls[-1]["dry_run"] is False
-    assert fake.calls[-1]["backup_dir"] is None, "drums_library backs up, join_parts doesn't"
+    assert callable(fake.calls[-1]["before_write"]), "drums_library backs up through join_parts' hook"
     assert (bd / "song.sloppak").read_bytes() == before
     assert {"five_fret_guitar.json", "five_fret_bass.json"} <= _members(p)
     src = _doc(p, "five_fret_guitar.json")["source"]
@@ -445,6 +448,67 @@ def test_backup_once_per_song(env, tmp_path, monkeypatch, online):
         ("guitar", "joined", f"chorus:{MD5_A}"), ("bass", "joined", f"chorus:{MD5_B}")]
 
 
+def test_no_backup_when_every_part_flags(env, tmp_path, monkeypatch):
+    lib, bd = env
+    _local_chart(tmp_path / "charts")
+    p = _pack(lib / "song.sloppak")
+    before = p.read_bytes()
+    monkeypatch.setattr(fivefretjoin, "join_parts", FakeJoin(lambda folder, part, n: False))
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", "--parts", "guitar,bass", "--local",
+             str(tmp_path / "charts"), "--no-online", "--write")
+    assert s["song.sloppak"]["status"] == "flagged"
+    assert sorted(x.name for x in bd.iterdir()) == ["placeholder"], "nothing written, nothing backed up"
+    assert p.read_bytes() == before
+
+
+def test_redo_with_remaining_part_flagging_makes_no_dated_copy(env, tmp_path, monkeypatch):
+    lib, bd = env
+    _local_chart(tmp_path / "charts")
+    _pack(bd / "song.sloppak")                      # the pre-join original, already backed up
+    p = _pack(lib / "song.sloppak", existing={"guitar": _ff("guitar")})
+    assert p.read_bytes() != (bd / "song.sloppak").read_bytes()
+    before = p.read_bytes()
+    fake = FakeJoin(lambda folder, part, n: False)
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", "--parts", "guitar,bass", "--local",
+             str(tmp_path / "charts"), "--no-online", "--write", "--redo")
+    assert [c["parts"] for c in fake.calls] == [["bass"]]
+    assert s["song.sloppak"]["parts"]["bass"]["status"] == "flagged"
+    assert sorted(x.name for x in bd.iterdir()) == ["placeholder", "song.sloppak"], "no dated copy"
+    assert p.read_bytes() == before
+
+
+def test_failing_candidate_doesnt_stop_the_song(env, tmp_path, monkeypatch, online):
+    lib, bd = env
+    p = _pack(lib / "song.sloppak")
+    md5_c = "c" * 32
+    fake = FakeJoin()
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    fc = online([_result(MD5_A, parts=("guitar",)), _result(MD5_B, parts=("bass",)),
+                 _result(md5_c, parts=("rhythm",))])
+    real_fetch = fc.fetch
+
+    def fetch(md5, out_dir, roles=("drums",)):
+        if md5 == MD5_B:
+            raise ConnectionError("download failed")
+        return real_fetch(md5, out_dir, roles)
+    monkeypatch.setattr(chorus, "fetch", fetch)
+    st = tmp_path / "st.json"
+    s = _run(monkeypatch, lib, bd, st, "--parts", "guitar,rhythm,bass", "--write")
+    r = s["song.sloppak"]
+    assert r["status"] == "joined", r
+    assert [(c["folder"].name, c["parts"]) for c in fake.calls] == [(MD5_A, ["guitar"]), (md5_c, ["rhythm"])], \
+        "the candidate after the failing one is still tried"
+    assert r["parts"]["guitar"]["status"] == "joined" and r["parts"]["rhythm"]["status"] == "joined"
+    assert r["parts"]["bass"]["status"] == "error"
+    assert "download failed" in r["parts"]["bass"]["error"]
+    assert any(t["part"] == "bass" and "download failed" in (t["error"] or "") for t in r["tried"])
+    assert {"five_fret_guitar.json", "five_fret_rhythm.json"} <= _members(p)
+    rows = {x["part"]: x for x in _rows(st)}
+    assert rows["bass"]["status"] == "error" and "download failed" in rows["bass"]["error"]
+    assert sorted(x.name for x in bd.iterdir()) == ["placeholder", "song.sloppak"]
+
+
 # ── resume ──────────────────────────────────────────────────────────────────
 
 def test_resume_skips_finished(env, tmp_path, monkeypatch):
@@ -525,3 +589,27 @@ def test_library_run_end_to_end(env, tmp_path, monkeypatch):
     assert sorted((x["file"], x["part"], x["status"]) for x in rows) == [
         ("nomatch.sloppak", "bass", "no-chart"), ("nomatch.sloppak", "guitar", "no-chart"),
         ("song.sloppak", "bass", "joined"), ("song.sloppak", "guitar", "joined")]
+
+
+def test_retry_reaches_partly_joined_songs(env, tmp_path, monkeypatch):
+    lib, bd = env
+    _local_chart(tmp_path / "charts")
+    p = _pack(lib / "song.sloppak")
+    fake = FakeJoin(lambda folder, part, n: part == "guitar" or n >= 1)
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    st = tmp_path / "st.json"
+    args = ("--parts", "guitar,bass", "--local", str(tmp_path / "charts"), "--no-online", "--write")
+    s = _run(monkeypatch, lib, bd, st, *args)
+    assert s["song.sloppak"]["status"] == "joined"
+    assert s["song.sloppak"]["parts"]["bass"]["status"] == "flagged"
+    _run(monkeypatch, lib, bd, st, *args)
+    assert len(fake.calls) == 1, "the default retry (error) leaves it alone"
+    s = _run(monkeypatch, lib, bd, st, *args, "--retry", "flagged")
+    assert [c["parts"] for c in fake.calls[1:]] == [["bass"]], "a flagged part brings the song back"
+    r = s["song.sloppak"]
+    assert r["status"] == "joined"
+    assert r["parts"]["guitar"]["status"] == "joined", "the earlier part's result is kept"
+    assert r["parts"]["bass"]["status"] == "joined"
+    assert {"five_fret_guitar.json", "five_fret_bass.json"} <= _members(p)
+    _run(monkeypatch, lib, bd, st, *args, "--retry", "flagged")
+    assert len(fake.calls) == 2, "nothing flagged any more"

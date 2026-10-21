@@ -202,3 +202,87 @@ def test_write_rejects_invalid_payload(sp_factory, tmp_path):
     with pytest.raises(ValueError):
         fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", notes=[{"t": -1, "f": 1}])}, {})
     assert sp.path.read_bytes() == before
+
+
+# ── before_write hook, safe unlink, directory form ──────────────────────────
+
+def test_before_write_called_once_before_any_change(sp_factory, tmp_path):
+    sp = sp_factory({"arrangements": [_entry("bass")]}, {"five_fret_bass.json": _payload("bass", "auto")},
+                    zip_form=False)
+    seen = []
+
+    def hook():
+        seen.append({"manifest": (sp.path / "manifest.yaml").read_bytes(),
+                     "bass": (sp.path / "five_fret_bass.json").exists()})
+    before = (sp.path / "manifest.yaml").read_bytes()
+    fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", "chart")}, {}, before_write=hook)
+    assert seen == [{"manifest": before, "bass": True}], "once, before the old part goes"
+    assert json.loads((sp.path / "five_fret_bass.json").read_text())["source"]["kind"] == "chart"
+
+
+def test_before_write_raising_writes_nothing(sp_factory, tmp_path):
+    sp = sp_factory({"arrangements": [_entry("bass")]}, {"five_fret_bass.json": _payload("bass", "auto")},
+                    zip_form=False)
+    snap = {f.name: f.read_bytes() for f in sp.path.iterdir()}
+
+    def hook():
+        raise OSError("backup failed")
+    with pytest.raises(OSError):
+        fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", "chart")}, {"bass": {}}, before_write=hook)
+    assert {f.name: f.read_bytes() for f in sp.path.iterdir()} == snap
+
+
+def test_before_write_not_called_for_invalid_payload(sp_factory, tmp_path):
+    sp = _bass_pack(sp_factory, tmp_path)
+    calls = []
+    with pytest.raises(ValueError):
+        fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", notes=[{"t": -1, "f": 1}])}, {},
+                                     before_write=lambda: calls.append(1))
+    assert calls == []
+
+
+@pytest.mark.parametrize("where", ["relative", "absolute"])
+def test_replace_never_deletes_outside_the_pack(sp_factory, tmp_path, where):
+    outside = tmp_path / "outside.json"
+    outside.write_text("keep me")
+    rel = "../outside.json" if where == "relative" else str(outside)
+    ent = {**_entry("bass"), "five_fret": rel}
+    sp = sp_factory({"arrangements": [ent]}, {}, zip_form=False)
+    fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", "chart")}, {})
+    assert outside.read_text() == "keep me"
+    m = yaml.safe_load((sp.path / "manifest.yaml").read_text())
+    ff = [e for e in m["arrangements"] if e.get("type") == "five_fret"]
+    assert [e["five_fret"] for e in ff] == ["five_fret_bass.json"], "the entry is still replaced"
+
+
+def test_replace_keeps_a_file_another_entry_uses(sp_factory, tmp_path):
+    lead = {"id": "lead", "name": "Lead", "file": "arrangements/lead.json"}
+    ent = {**_entry("bass"), "five_fret": "arrangements/lead.json"}
+    sp = sp_factory({"arrangements": [lead, ent]}, {"arrangements/lead.json": {"name": "Lead"}}, zip_form=False)
+    fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", "chart")}, {})
+    assert (sp.path / "arrangements" / "lead.json").exists()
+
+
+def test_write_and_replace_directory_form(sp_factory, tmp_path):
+    sp = sp_factory({"arrangements": [{"id": "lead", "name": "Lead"}, _entry("bass")]},
+                    {"five_fret_bass.json": _payload("bass", "auto")}, zip_form=False)
+    fivefretjoin.write_five_fret(sp, {"guitar": _payload("guitar"), "bass": _payload("bass", "chart")},
+                                 {"guitar": {"tool": "t"}, "bass": {"tool": "t"}})
+    p = sp.path
+    assert p.is_dir()
+    m = yaml.safe_load((p / "manifest.yaml").read_text())
+    ff = {e["instrument"]: e for e in m["arrangements"] if e.get("type") == "five_fret"}
+    assert set(ff) == {"guitar", "bass"} and ff["guitar"]["pairs_with"] == "lead"
+    assert json.loads((p / "five_fret_bass.json").read_text())["source"]["kind"] == "chart"
+    assert json.loads((p / "five_fret_guitar.json").read_text())["instrument"] == "guitar"
+    assert set(json.loads((p / fivefretjoin.JOIN_INFO).read_text())) == {"guitar", "bass"}
+    assert sorted(sloppak.extract_meta(p)["five_fret_parts"]) == ["bass:chart", "guitar:chart"]
+
+
+def test_validate_part_reasons_name_onsets_not_drums():
+    import numpy as np
+    times = np.arange(1.0, 41.0, 0.5)
+    v = fivefretjoin.validate_part(times, times + 0.2, 0.5, fivefretjoin.part_thresholds("guitar"))
+    assert not v.ok
+    assert any("within 30 ms of an onset" in r for r in v.reasons), v.reasons
+    assert not any("drum" in r for r in v.reasons), v.reasons
