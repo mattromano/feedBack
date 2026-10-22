@@ -335,3 +335,27 @@ def test_drumchart_public_helpers():
     assert drumchart.chart_sections is drumchart._chart_sections
     assert drumchart.chart_song_section is drumchart._chart_song_section
     assert drumchart.normalize_text is drumchart._normalize_text
+
+
+def test_ensure_levels_reducer_switch(tmp_path):
+    simple, _ = _level_folder(tmp_path)
+    explicit, _ = _level_folder(tmp_path)
+    fivefretchart.ensure_levels(simple["guitar"])
+    fivefretchart.ensure_levels(explicit["guitar"], reducer="simple")
+    src = {"kind": "chart", "origin": "local"}
+    assert fivefretchart.DEFAULT_REDUCER == "simple"
+    assert fivefretchart.five_fret_json(simple["guitar"], src) == \
+        fivefretchart.five_fret_json(explicit["guitar"], src)
+
+    parts, _ = _level_folder(tmp_path)
+    c = parts["guitar"]
+    fivefretchart.ensure_levels(c, reducer="onyx")
+    assert sorted(c.levels_generated) == ["easy", "medium"]
+    assert [n.frets for n in c.levels["hard"]] == [0b00001, 0b00100]    # the chart's own Hard is kept
+    assert c.levels["medium"] and c.levels["easy"]
+    data = fivefretchart.five_fret_json(c, src)
+    assert fivefret.validate_five_fret(data) == (True, "")
+    assert all(n["f"] & ~0b00111 == 0 for n in data["levels"]["easy"]["notes"])
+
+    with pytest.raises(ValueError):
+        fivefretchart.ensure_levels(c, reducer="nope")
