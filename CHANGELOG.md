@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **5-fret library join: guitar beat check on dense strums.** A guitar / rhythm part whose one-beat
+  margin is positive but under 0.05 now joins when the notes the check can tell apart (those whose
+  copy a beat away lands in a gap of the chart) favour the placement: two-proportion z >= 3.5, or
+  >= 2.0 for a fresh whole-song audio offset, over at least 30 such notes. Bass is unchanged. On the
+  library run's 468 margin-only guitar flags it would have joined 152, with no one-beat-shifted good
+  placement (0/460) or wrong-song chart (0/450) gaining a pass. `--retry` with five-fret `--parts`
+  matches only those parts' results, so `--parts guitar --retry flagged` leaves bass-only flags alone.
 - **`drums_library.py --from-drums`** (with five-fret `--parts`): a fast, offline pass that
   tries only each song's own drum chart from the local cache (`~/.cache/slopsmith-drums/chorus|sng`,
   Windows source paths remapped by folder name) with the drum join's warp; no search, no

@@ -8,7 +8,7 @@ pack: which parts exist already, which arrangement a part pairs with, the drum j
 warp (reused when the same chart is used), and the writer; and the audio side: placing a chart on
 our audio (the reused drum warp, clamped to the drummed span, else a fresh alignment that mirrors
 ``drumjoin.align_chart`` like with like), validating it against our part stem's onsets (plus a
-one-beat-shift margin), and ``join_parts``. The audio side needs librosa / scipy (offline tool).
+one-beat-shift margin, and for guitar its significance test ``beat_z``), and ``join_parts``. The audio side needs librosa / scipy (offline tool).
 """
 from __future__ import annotations
 
@@ -247,8 +247,13 @@ def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dic
 
 # Per-part validation thresholds (rhythm uses guitar's). From a trial on 21 real songs (Plan 4 Task 4):
 # the lowest cuts that pass no one-beat-shifted or wrong-chart placement; median / drift kept (they don't separate).
+# Guitar also passes a beat margin under the floor when the notes the beat check can tell apart say
+# so (``beat_z``): min_beat_z, or min_beat_z_confident for a fresh whole-song audio offset. Set on a
+# re-evaluation of the library run's flagged guitar parts: 0 of 460 one-beat-shifted good placements
+# and 0 of 450 wrong-song charts gained a pass; 152 of 468 margin-only flags would have joined.
 THRESHOLDS = {
-    "guitar": {"min_within_30ms": 0.35, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.05},
+    "guitar": {"min_within_30ms": 0.35, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.05,
+               "min_beat_z": 3.5, "min_beat_z_confident": 2.0, "min_beat_notes": 30},
     "bass": {"min_within_30ms": 0.45, "max_abs_median_ms": 25.0, "max_drift_span_ms": 40.0, "min_beat_margin": 0.05},
 }
 MIN_INTRO_NOTES = 8     # notes before the first drum hit that get validated on their own (reuse)
@@ -424,10 +429,45 @@ def _rate_scan_lag(ref_env, src_env, min_gain: float = 1.5):
     return float(lag + (r - 1.0) * mid)
 
 
-def validate_part(times, onsets, beat: float, thresholds: dict) -> drumalign.Validation:
+def _near(x, ref, win=0.03) -> np.ndarray:
+    """Per value of ``x``: is a value of sorted ``ref`` within ``win``?"""
+    x, ref = np.asarray(x, float), np.asarray(ref, float)
+    if not len(x) or not len(ref):
+        return np.zeros(len(x), bool)
+    i = np.clip(np.searchsorted(ref, x), 1, max(1, len(ref) - 1))
+    return np.minimum(np.abs(ref[i - 1] - x), np.abs(ref[np.minimum(i, len(ref) - 1)] - x)) <= win
+
+
+def beat_z(nt, onsets, beat: float) -> tuple[float, int]:
+    """The beat check on the notes it can tell apart -> (z, n), the worse of the two shifts.
+
+    On a dense strum most notes moved a beat land on other notes, so both copies score the same
+    there and the beat margin shrinks to the few notes that don't (a song-long margin of 0.03 can
+    be 60 notes against 60). Compared are the notes whose shifted copy lands in a gap of the chart
+    with those shifted copies: z is their two-proportion statistic (onset within 30 ms), n the
+    smaller count."""
+    nt, on = np.sort(np.asarray(nt, float)), np.sort(np.asarray(onsets, float))
+    worst = None
+    for s in (beat, -beat):
+        a = nt[~_near(nt - s, nt)]          # notes no shifted note lands on
+        b = (nt + s)[~_near(nt + s, nt)]    # shifted notes that land in a gap
+        if not len(a) or not len(b):
+            return 0.0, 0
+        pa, pb = float(np.mean(_near(a, on))), float(np.mean(_near(b, on)))
+        p = (pa * len(a) + pb * len(b)) / (len(a) + len(b))
+        z = (pa - pb) / max(np.sqrt(p * (1 - p) * (1 / len(a) + 1 / len(b))), 1e-9)
+        if worst is None or z < worst[0]:
+            worst = (float(z), min(len(a), len(b)))
+    return worst
+
+
+def validate_part(times, onsets, beat: float, thresholds: dict, confident: bool = False) -> drumalign.Validation:
     """``drumalign.validate`` (no pad check) plus the beat-shift margin: within_30ms of the notes
     minus the best within_30ms of the notes moved one beat either way (``pads["beat_margin"]``).
-    A steady strum one beat off can pass the onset check; it can't beat its own shifted copy."""
+    A steady strum one beat off can pass the onset check; it can't beat its own shifted copy.
+    A positive margin under the floor still passes when ``beat_z`` (``pads["beat_z"]``) reaches
+    min_beat_z (min_beat_z_confident when ``confident``: a fresh whole-song audio offset) over at
+    least min_beat_notes notes; parts without those thresholds (bass) keep the floor alone."""
     v = drumalign.validate(times, onsets, thresholds)
     # drumalign words its onset check for drums; these are guitar / bass onsets
     v.reasons = [r.replace("of a drum onset", "of an onset") for r in v.reasons]
@@ -439,7 +479,15 @@ def validate_part(times, onsets, beat: float, thresholds: dict) -> drumalign.Val
     v.pads["beat_margin"] = margin
     floor = thresholds.get("min_beat_margin")
     if floor is not None and margin < floor:
-        v.reasons.append(f"one beat off? margin {margin:.2f} < {floor:.2f}")
+        zmin = thresholds.get("min_beat_z_confident" if confident else "min_beat_z")
+        why = f"one beat off? margin {margin:.2f} < {floor:.2f}"
+        if zmin is not None and margin > 0:
+            z, n = beat_z(nt, onsets, beat)
+            v.pads["beat_z"] = z
+            if z >= zmin and n >= thresholds.get("min_beat_notes", 0):
+                return v
+            why += f", beat z {z:.1f} < {zmin:.1f}" if z < zmin else f", only {n} notes tell the beat apart"
+        v.reasons.append(why)
         v.ok = False
     return v
 
@@ -556,7 +604,8 @@ def join_parts(sloppak: Path, chart_folder: Path, parts: list[str], *, source: d
                 if got is None:
                     placed, det = align_part(folder, sp, chart, part, ref_y=ref_y, ref_kind=ref_kind, onsets=onsets,
                                              chart_parts=set(charts), log=log)
-                    v = validate_part([n.time for n in placed.notes], onsets, beat, th)
+                    v = validate_part([n.time for n in placed.notes], onsets, beat, th,
+                                      confident=det["alignment"]["method"] == "offset")
                     got = (placed, det, v, False)
                 placed, det, v, reused = got
                 res.update(ok=v.ok, reused_drums=reused, method=det["alignment"]["method"],

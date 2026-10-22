@@ -613,3 +613,26 @@ def test_retry_reaches_partly_joined_songs(env, tmp_path, monkeypatch):
     assert {"five_fret_guitar.json", "five_fret_bass.json"} <= _members(p)
     _run(monkeypatch, lib, bd, st, *args, "--retry", "flagged")
     assert len(fake.calls) == 2, "nothing flagged any more"
+
+
+@pytest.mark.parametrize("flagged", ["guitar", "bass"])
+def test_retry_matches_only_the_parts_asked_for(env, tmp_path, monkeypatch, flagged):
+    lib, bd = env
+    _local_chart(tmp_path / "charts")
+    p = _pack(lib / "song.sloppak")
+    fake = FakeJoin(lambda folder, part, n: part != flagged or n >= 1)
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    st = tmp_path / "st.json"
+    args = ("--local", str(tmp_path / "charts"), "--no-online", "--write")
+    before = _run(monkeypatch, lib, bd, st, "--parts", "guitar,bass", *args)["song.sloppak"]
+    assert before["parts"][flagged]["status"] == "flagged"
+    s = _run(monkeypatch, lib, bd, st, "--parts", "guitar", *args, "--retry", "flagged")
+    r = s["song.sloppak"]
+    if flagged == "bass":
+        assert len(fake.calls) == 1, "only the bass is flagged: --parts guitar leaves the song"
+        assert r == before
+    else:
+        assert [c["parts"] for c in fake.calls[1:]] == [["guitar"]]
+        assert r["parts"]["guitar"]["status"] == "joined"
+        assert r["parts"]["bass"] == before["parts"]["bass"], "the bass result is kept"
+        assert "five_fret_guitar.json" in _members(p)

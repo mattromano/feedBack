@@ -338,6 +338,18 @@ def test_one_beat_off_flagged(tmp_path):
     assert off.pads["beat_margin"] < 0.1
 
 
+@pytest.mark.parametrize("warp, confident", [(lambda t: t + 1.5, True), (lambda t: 0.7 + 1.02 * t, False)])
+def test_only_a_fresh_audio_offset_counts_as_confident(tmp_path, monkeypatch, warp, confident):
+    folder, charts = _chart(tmp_path)
+    pack = _ours(tmp_path, _tf(charts["guitar"].notes, warp))
+    seen, real = [], fivefretjoin.validate_part
+    monkeypatch.setattr(fivefretjoin, "validate_part",
+                        lambda *a, confident=False, **k: seen.append(confident) or real(*a, confident=confident, **k))
+    r = _join(pack, folder, reuse={"folder": str(folder), "warp": {"offset": 9.0}})["parts"]["guitar"]
+    assert r["method"] == ("offset" if confident else "warp") and not r["reused_drums"], r
+    assert seen == [False, confident], "the reused drum warp is never confident"
+
+
 def test_wrong_song_flagged_not_written(tmp_path):
     folder, _ = _chart(tmp_path)
     other = fivefretchart.parse_mid(write_mid(tmp_path / "x.mid", five_fret_notes(N_MEASURES, seed=42),

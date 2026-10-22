@@ -38,7 +38,8 @@ has one row per song and part. drums can't be mixed with the five-fret parts in 
 The state is per --parts selection: a song it lists as finished is skipped whatever parts a later
 run asks for, so a run with different parts needs its own --state (or --redo). --redo replaces a
 song's state entry with that run's parts; --retry STATUS also matches per-part statuses (e.g.
---retry flagged reruns a song whose guitar joined but bass flagged, for the bass only).
+--retry flagged reruns a song whose guitar joined but bass flagged, for the bass only; per-part results
+are matched only for the parts this run asks for, so --parts guitar --retry flagged skips that song).
 
 --auto (with five-fret --parts only, not --upgrade): a wanted part that got no real chart in this run
 (none found, all flagged, or --no-online with nothing local) gets an auto chart instead, made from the
@@ -739,14 +740,19 @@ def parse_args(argv=None):
     return a
 
 
-def _retrying(prev, retry) -> bool:
+def _retrying(prev, retry, parts=None) -> bool:
     """The song's state status, or any of its per-part statuses (or, for an --auto part, what the
-    real-chart search found: ``real_status``), is one of ``retry``."""
+    real-chart search found: ``real_status``), is one of ``retry``. With ``parts`` (the run's
+    five-fret --parts), a song with per-part results for any of them is judged on those alone:
+    --parts guitar --retry flagged leaves a song whose only flagged part is the bass."""
     if not prev:
         return False
-    return prev.get("status") in retry or any(
-        isinstance(pr, dict) and (pr.get("status") in retry or pr.get("real_status") in retry)
-        for pr in (prev.get("parts") or {}).values())
+    per_part = {k: pr for k, pr in (prev.get("parts") or {}).items() if isinstance(pr, dict)}
+    if parts and any(k in per_part for k in parts):
+        per_part = {k: pr for k, pr in per_part.items() if k in parts}
+    elif prev.get("status") in retry:
+        return True
+    return any(pr.get("status") in retry or pr.get("real_status") in retry for pr in per_part.values())
 
 
 DONE_PART = ("joined", "upgraded", "auto")     # best first
@@ -788,8 +794,9 @@ def main(argv=None):
     for p in songs:
         prev = state.get(p.name)
         retry = {x.strip() for x in a.retry.split(",") if x.strip()}
+        sel = a.parts if ff else None
         if a.upgrade and ff:
-            if prev and not _retrying(prev, retry) and not a.redo:
+            if prev and not _retrying(prev, retry, sel) and not a.redo:
                 continue
             if a.only and not re.search(a.only, p.name, re.I):
                 continue
@@ -800,7 +807,7 @@ def main(argv=None):
                 pass
             continue
         if a.upgrade:
-            if prev and not _retrying(prev, retry) and not a.redo:
+            if prev and not _retrying(prev, retry, sel) and not a.redo:
                 continue
             if a.only and not re.search(a.only, p.name, re.I):
                 continue
@@ -811,7 +818,7 @@ def main(argv=None):
             if 0 <= lv < 3:
                 todo.append(p)
             continue
-        if prev and not a.redo and not _retrying(prev, retry):
+        if prev and not a.redo and not _retrying(prev, retry, sel):
             if not (prev.get("status") in ("would-join", "would-auto") and a.write):
                 continue
         if a.only and not re.search(a.only, p.name, re.I):
@@ -821,14 +828,14 @@ def main(argv=None):
                     continue
             except Exception:
                 continue
-        if ff and not a.redo and not _retrying(prev, retry):
+        if ff and not a.redo and not _retrying(prev, retry, sel):
             try:
                 if not wanted_parts(PackView(p), a.parts, False)[0]:
                     state[p.name] = {"file": p.name, "status": "has-parts"}
                     continue
             except Exception:
                 pass
-        elif not a.redo and not _retrying(prev, retry):
+        elif not a.redo and not _retrying(prev, retry, sel):
             try:
                 if has_drums(manifest_of(p)):
                     state[p.name] = {"file": p.name, "status": "has-drums"}

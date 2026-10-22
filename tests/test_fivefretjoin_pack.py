@@ -306,3 +306,69 @@ def test_validate_part_reasons_name_onsets_not_drums():
     assert not v.ok
     assert any("within 30 ms of an onset" in r for r in v.reasons), v.reasons
     assert not any("drum" in r for r in v.reasons), v.reasons
+
+
+def _strum(hit=50, rest_hits=10, blocks=25, eighths=32):
+    """A dense eighth-note strum at 120 BPM (beat 0.5 s) with one rested beat per block (``eighths``
+    long, 8 s by default), and
+    its onsets: every note has one except the notes either side of the rests (``hit`` of each 50
+    get one) and ``rest_hits`` of the 50 rest positions have one (a strum ringing into the rest).
+    Moved a beat, most notes land on notes, so the song-long beat margin stays under 0.05."""
+    import numpy as np
+    times, onsets, rests, edges = [], [], [], []
+    for b in range(blocks):
+        for i in range(eighths):
+            t = round((b * eighths + i) * 0.25, 3)
+            if i >= eighths - 2:
+                rests.append(t)
+                continue
+            times.append(t)
+            (edges if i in (0, 1, eighths - 4, eighths - 3) else onsets).append(t)
+    edges = sorted(edges, key=lambda t: (t * 37) % 1)          # a fixed shuffle
+    k = len(edges) * hit // 50
+    onsets += edges[:k] + rests[:len(rests) * rest_hits // 50]
+    return np.array(times), np.array(sorted(onsets))
+
+
+def test_beat_z_passes_a_dense_strum_the_margin_cannot_tell():
+    times, onsets = _strum(hit=45)
+    th = fivefretjoin.part_thresholds("guitar")
+    v = fivefretjoin.validate_part(times, onsets, 0.5, th)
+    assert 0 < v.pads["beat_margin"] < th["min_beat_margin"]
+    assert v.pads["beat_z"] >= th["min_beat_z"]
+    assert v.ok, v.reasons
+    z, n = fivefretjoin.beat_z(times, onsets, 0.5)
+    assert n >= 50 and z == v.pads["beat_z"]
+
+
+def test_beat_z_does_not_pass_one_beat_off_or_bass():
+    times, onsets = _strum(hit=45)
+    for shift in (0.5, -0.5):
+        for confident in (False, True):
+            v = fivefretjoin.validate_part(times + shift, onsets, 0.5, fivefretjoin.part_thresholds("guitar"),
+                                           confident=confident)
+            assert not v.ok
+            assert any(r.startswith("one beat off? margin") for r in v.reasons), v.reasons
+    v = fivefretjoin.validate_part(times, onsets, 0.5, fivefretjoin.part_thresholds("bass"))
+    assert not v.ok and "beat_z" not in v.pads
+    assert v.reasons == [f"one beat off? margin {v.pads['beat_margin']:.2f} < 0.05"]
+
+
+def test_beat_z_confident_threshold_only_for_a_confident_offset():
+    times, onsets = _strum(hit=25)
+    th = fivefretjoin.part_thresholds("guitar")
+    plain = fivefretjoin.validate_part(times, onsets, 0.5, th)
+    assert th["min_beat_z_confident"] <= plain.pads["beat_z"] < th["min_beat_z"]
+    assert not plain.ok
+    assert any("beat z" in r for r in plain.reasons), plain.reasons
+    assert fivefretjoin.validate_part(times, onsets, 0.5, th, confident=True).ok
+
+
+def test_beat_z_needs_enough_notes_that_tell_the_beat_apart():
+    times, onsets = _strum(hit=50, rest_hits=0, blocks=8, eighths=64)
+    th = fivefretjoin.part_thresholds("guitar")
+    z, n = fivefretjoin.beat_z(times, onsets, 0.5)
+    assert z >= th["min_beat_z"] and n < th["min_beat_notes"]
+    v = fivefretjoin.validate_part(times, onsets, 0.5, th, confident=True)
+    assert not v.ok
+    assert any(f"only {n} notes tell the beat apart" in r for r in v.reasons), v.reasons
