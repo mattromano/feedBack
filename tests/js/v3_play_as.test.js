@@ -23,6 +23,7 @@ test('menuRows: play-as actions only, one row per variant, default flagged', () 
     reg.register({ id: 'ff', label: '5-Fret', group: 'Controller', hint: 'controller', placement: 'play-as', order: 40,
         variants: () => [{ key: 'guitar', label: '5-Fret Guitar' }, { key: 'bass', label: '5-Fret Bass', enabled: false }], run() {} });
     const rows = pa.menuRows(reg.list({ filename: 'a' }));
+    assert.deepEqual(rows.map((r) => r.choices), [null, null, null]);
     assert.deepEqual(rows.map((r) => [r.id, r.variant, r.label, r.group, r.hint, r.enabled, r.isDefault]), [
         ['core.play-as.play', null, 'Play', '', '', true, true],
         ['ff', 'guitar', '5-Fret Guitar', 'Controller', 'controller', true, false],
@@ -90,4 +91,13 @@ test('a plain play keeps the viewer\'s view; a real-instrument play puts a non-g
     const hw = keeper('highway_3d');
     hw.k.beforePlay('a', null, true);
     assert.deepEqual(hw.st.calls, []);
+});
+
+test('menuRows carries a row\'s choices (the difficulty step)', () => {
+    const c = { title: 'Difficulty', default: 'expert', items: [{ key: 'expert', label: 'Expert', hint: '' }] };
+    const rows = pa.menuRows([
+        { id: 'dr', label: 'Drums', placement: 'play-as', enabled: true, choices: c },
+        { id: 'ff', label: '5-Fret', placement: 'play-as', enabled: true, variants: [{ key: 'guitar', label: 'G', enabled: true, choices: c }, { key: 'bass', label: 'B', enabled: true }] },
+    ]);
+    assert.deepEqual(rows.map((r) => r.choices), [c, c, null]);
 });

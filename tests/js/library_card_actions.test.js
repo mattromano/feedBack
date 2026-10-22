@@ -110,3 +110,28 @@ test('run() passes the chosen variant and refuses one the song does not offer', 
     assert.strictEqual((await reg.run('ff', {}, { variant: 'bass' })).outcome, 'disabled');
     assert.strictEqual((await reg.run('ff', {}, {})).outcome, 'not-applicable');
 });
+
+test('choices: per variant (or per action) second step, validated in run()', async () => {
+    freshIds();
+    let got = null;
+    const diffs = { title: 'Difficulty', default: 'hard', items: [{ key: 'easy', label: 'Easy' }, { key: 'hard', label: 'Hard' }] };
+    reg.register({
+        id: 'ff', label: '5-Fret', placement: 'play-as',
+        variants: () => [{ key: 'guitar', label: 'G' }, { key: 'bass', label: 'B' }],
+        choices: (song, v) => (v === 'guitar' ? diffs : null),
+        run: (song, ctx) => { got = [ctx.variant, ctx.choice]; },
+    });
+    reg.register({
+        id: 'dr', label: 'Drums', placement: 'play-as',
+        choices: () => ({ title: 'Difficulty', default: 'nope', items: [{ key: 'expert', label: 'Expert' }, { key: 'expert', label: 'dup' }] }),
+        run() {},
+    });
+    const [ff, dr] = reg.list({ filename: 'x' });
+    assert.deepStrictEqual(ff.variants[0].choices, { title: 'Difficulty', default: 'hard', items: [{ key: 'easy', label: 'Easy', hint: '' }, { key: 'hard', label: 'Hard', hint: '' }] });
+    assert.strictEqual(ff.variants[1].choices, undefined);
+    assert.deepStrictEqual(dr.choices, { title: 'Difficulty', default: 'expert', items: [{ key: 'expert', label: 'Expert', hint: '' }] });
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'guitar', choice: 'easy' })).outcome, 'handled');
+    assert.deepStrictEqual(got, ['guitar', 'easy']);
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'guitar', choice: 'medium' })).outcome, 'not-applicable');
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'bass', choice: 'whatever' })).outcome, 'handled');   // no choices: ignored
+});

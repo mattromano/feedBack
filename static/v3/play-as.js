@@ -43,7 +43,8 @@
 
     /**
      * The menu rows for list(song)'s play-as actions, in order:
-     * [{ id, variant, label, hint, group, enabled, isDefault }].
+     * [{ id, variant, label, hint, group, enabled, isDefault, choices }] — `choices`
+     * ({ title, default, items }) or null: a second step (e.g. the difficulty).
      */
     function menuRows(actions) {
         const rows = [];
@@ -52,9 +53,10 @@
             if (Array.isArray(a.variants)) {
                 a.variants.forEach((v) => rows.push(Object.assign({}, base, {
                     variant: v.key, label: v.label, hint: v.hint || a.hint || '', enabled: a.enabled !== false && v.enabled !== false,
+                    choices: v.choices || null,
                 })));
             } else {
-                rows.push(Object.assign({}, base, { variant: null, label: a.label, hint: a.hint || '', enabled: a.enabled !== false }));
+                rows.push(Object.assign({}, base, { variant: null, label: a.label, hint: a.hint || '', enabled: a.enabled !== false, choices: a.choices || null }));
             }
         });
         return rows;
@@ -193,18 +195,34 @@
         el.setAttribute('role', 'dialog');
         el.setAttribute('aria-modal', 'true');
         el.setAttribute('aria-label', 'Play as');
-        let html = '<div class="v3-play-as-title">Play <span class="text-fb-text">' + esc(song.title || song.filename)
-            + '</span>' + (song.artist ? ' · ' + esc(song.artist) : '') + ' as</div>';
-        let group = '';
-        rows.forEach((r, i) => {
-            if (r.group && r.group !== group) html += '<div class="v3-play-as-group">' + esc(r.group) + '</div>';
-            group = r.group || group;
-            html += '<button type="button" data-row="' + i + '"' + (r.isDefault ? ' data-default' : '')
-                + (r.enabled ? '' : ' disabled') + '>' + esc(r.label)
-                + (r.hint ? '<span class="v3-play-as-hint">' + esc(r.hint) + '</span>' : '')
-                + (r.isDefault ? '<span class="v3-play-as-hint">Enter</span>' : '') + '</button>';
-        });
-        el.innerHTML = html;
+        const songLine = '<span class="text-fb-text">' + esc(song.title || song.filename) + '</span>'
+            + (song.artist ? ' · ' + esc(song.artist) : '');
+        let step = null;   // the row whose choices are showing, or null for the main list
+        function mainHtml() {
+            let html = '<div class="v3-play-as-title">Play ' + songLine + ' as</div>';
+            let group = '';
+            rows.forEach((r, i) => {
+                if (r.group && r.group !== group) html += '<div class="v3-play-as-group">' + esc(r.group) + '</div>';
+                group = r.group || group;
+                html += '<button type="button" data-row="' + i + '"' + (r.isDefault ? ' data-default' : '')
+                    + (r.enabled ? '' : ' disabled') + '>' + esc(r.label)
+                    + (r.hint ? '<span class="v3-play-as-hint">' + esc(r.hint) + '</span>' : '')
+                    + (r.isDefault ? '<span class="v3-play-as-hint">Enter</span>' : '')
+                    + (r.choices ? '<span class="v3-play-as-hint">▸</span>' : '') + '</button>';
+            });
+            return html;
+        }
+        // The second step: one row's choices (e.g. the difficulty), the saved one first in focus.
+        function choicesHtml(row) {
+            const c = row.choices;
+            return '<div class="v3-play-as-title">' + esc(row.label) + ' · ' + songLine + '</div>'
+                + '<div class="v3-play-as-group">' + esc(c.title || 'Choose') + '</div>'
+                + c.items.map((it) => '<button type="button" data-choice="' + esc(it.key) + '"'
+                    + (it.key === c.default ? ' data-default' : '') + '>' + esc(it.label)
+                    + (it.hint ? '<span class="v3-play-as-hint">' + esc(it.hint) + '</span>' : '')
+                    + (it.key === c.default ? '<span class="v3-play-as-hint">current</span>' : '') + '</button>').join('')
+                + '<button type="button" data-back>‹ Back</button>';
+        }
         doc.body.appendChild(el);
 
         // Place at the pointer, else under the anchor; kept on screen.
@@ -213,9 +231,18 @@
         // the row (it closes the menu and the row's dblclick plays).
         if (o.pos && Number.isFinite(o.pos.x)) { x = o.pos.x + 8; y = o.pos.y + 8; }
         else if (o.anchor && o.anchor.getBoundingClientRect) { const b = o.anchor.getBoundingClientRect(); x = b.left + 24; y = b.bottom; }
-        const vw = w.innerWidth, vh = w.innerHeight;
-        el.style.left = Math.max(8, Math.min(x, vw - el.offsetWidth - 8)) + 'px';
-        el.style.top = Math.max(8, Math.min(y, vh - el.offsetHeight - 8)) + 'px';
+        function place() {
+            const vw = w.innerWidth, vh = w.innerHeight;
+            el.style.left = Math.max(8, Math.min(x, vw - el.offsetWidth - 8)) + 'px';
+            el.style.top = Math.max(8, Math.min(y, vh - el.offsetHeight - 8)) + 'px';
+        }
+        function show(row) {
+            step = row;
+            el.innerHTML = row ? choicesHtml(row) : mainHtml();
+            place();
+            const def = el.querySelector('button[data-default]:not([disabled])');
+            if (def) def.focus(); else focusAt(0);
+        }
 
         const buttons = () => Array.from(el.querySelectorAll('button:not([disabled])'));
         const focusAt = (i) => { const b = buttons(); if (b.length) b[(i + b.length) % b.length].focus(); };
@@ -227,7 +254,7 @@
             const at = b.indexOf(doc.activeElement);
             if (e.key === 'Escape') {
                 e.preventDefault(); e.stopPropagation();
-                finish(true);
+                if (step) show(null); else finish(true);
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault(); e.stopPropagation();
                 focusAt(at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1));
@@ -265,15 +292,19 @@
             if (refocus && returnTo && returnTo.isConnected && typeof returnTo.focus === 'function') returnTo.focus();
         }
         el.addEventListener('click', (e) => {
+            if (e.target.closest('button[data-back]')) { show(null); return; }
+            const pick = e.target.closest('button[data-choice]');
             const btn = e.target.closest('button[data-row]');
-            if (!btn || btn.disabled) return;
-            const row = rows[Number(btn.getAttribute('data-row'))];
+            if ((!btn || btn.disabled) && !(pick && step)) return;
+            const row = pick ? step : rows[Number(btn.getAttribute('data-row'))];
+            if (!pick && row.choices) { show(row); return; }
             finish(false);
             if (typeof o.beforeRun === 'function') { try { o.beforeRun(row); } catch (_) { /* */ } }
             const r = sm.libraryCardActions;
             if (!r) return;
             const ctx = { source: 'v3-play-as' };
             if (row.variant != null) ctx.variant = row.variant;
+            if (pick) ctx.choice = pick.getAttribute('data-choice');
             Promise.resolve(r.run(row.id, song, ctx)).then((res) => {
                 if (res && !res.ok) console.warn('[play-as]', row.id, res.outcome, res.error || '');
             });
@@ -283,7 +314,7 @@
         w.addEventListener('resize', close);
         el.addEventListener('focusout', onFocusOut);
         openMenu = { el, close: () => finish(false) };
-        focusAt(0);
+        show(null);
         return el;
     }
 
