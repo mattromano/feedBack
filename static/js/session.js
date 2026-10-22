@@ -236,6 +236,9 @@ export async function showScreen(id) {
         // Reloading any song later should get a fresh JUCE routing attempt.
         window._clearJuceRerouteMemo?.();
         S.isPlaying = false;
+        // Browser <audio>: its 'pause' listener returns early once S.isPlaying is
+        // false, so the bus flag is cleared here or it stays true off the player.
+        if (window.feedBack) window.feedBack.isPlaying = false;
         setPlayButtonState(false);
     }
     window.scrollTo(0, 0);

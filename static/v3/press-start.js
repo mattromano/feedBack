@@ -79,35 +79,39 @@
         return { sync, onWatch, watching: () => !!unwatch };
     }
 
-    const api = { START_BUTTON, COOLDOWN_MS, isStartEligible, songLoaded, anyVisibleModal, createPressStart };
+    /** The page wiring: env from the DOM, resync on the bus. Returns the instance. */
+    function install({ fb, gi, pms, doc, root, now }) {
+        const activeId = () => {
+            const el = doc.querySelector('.screen.active');
+            return el ? el.id : '';
+        };
+        const inst = createPressStart({
+            gamepadInput: gi,
+            emit: (t, d) => fb.emit(t, d),
+            env: () => {
+                const id = activeId();
+                return {
+                    activeId: id,
+                    songLoaded: songLoaded(doc, root, id),
+                    modalOpen: anyVisibleModal(doc, root),
+                    claimCount: gi.claimCount(),
+                    picking: !!(fb.library && fb.library.pickState && fb.library.pickState.session()),
+                };
+            },
+            now,
+        });
+        const resync = () => inst.sync(pms.startPressWanted() && !songLoaded(doc, root, activeId()));
+        ['ui:play-modes-changed', 'screen:changed', 'song:stop', 'song:ended'].forEach((t) => fb.on(t, resync));
+        fb.on('song:loading', () => inst.sync(false));
+        resync();
+        return inst;
+    }
+
+    const api = { START_BUTTON, COOLDOWN_MS, isStartEligible, songLoaded, anyVisibleModal, createPressStart, install };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
 
     const fb = root && root.feedBack;
     const gi = fb && fb.gamepadInput;
     const pms = fb && fb.ui && fb.ui.playModeState;
-    if (!gi || !pms) return;
-
-    const activeId = () => {
-        const el = document.querySelector('.screen.active');
-        return el ? el.id : '';
-    };
-    const inst = createPressStart({
-        gamepadInput: gi,
-        emit: (t, d) => fb.emit(t, d),
-        env: () => {
-            const id = activeId();
-            return {
-                activeId: id,
-                songLoaded: songLoaded(document, root, id),
-                modalOpen: anyVisibleModal(document, root),
-                claimCount: gi.claimCount(),
-                picking: !!(fb.library && fb.library.pickState && fb.library.pickState.session()),
-            };
-        },
-        now: () => performance.now(),
-    });
-    const resync = () => inst.sync(pms.startPressWanted() && !songLoaded(document, root, activeId()));
-    ['ui:play-modes-changed', 'screen:changed', 'song:stop', 'song:ended'].forEach((t) => fb.on(t, resync));
-    fb.on('song:loading', () => inst.sync(false));
-    resync();
+    if (gi && pms) install({ fb, gi, pms, doc: document, root, now: () => performance.now() });
 })(typeof window !== 'undefined' ? window : null);

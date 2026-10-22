@@ -193,3 +193,86 @@ test('index.html loads press-start.js after play-modes.js and after gamepad-inpu
     assert.ok(ps > at('/static/capabilities/gamepad-input.js'));
     assert.ok(at('/static/capabilities/gamepad-input.js') > 0);
 });
+
+// ── install: the browser wiring, dependency-injected ────────────────────────
+const { install } = require('../../static/v3/press-start.js');
+
+function page() {
+    const handlers = {};
+    const emits = [];
+    let watchers = 0;
+    const st = { screen: 'player', src: '/a.ogg', wanted: true };
+    const fb = {
+        isPlaying: true,
+        on: (t, fn) => { (handlers[t] = handlers[t] || []).push(fn); },
+        emit: (t, d) => emits.push({ type: t, detail: d }),
+    };
+    const gi = {
+        list: () => [{ index: 0, id: 'X', mapping: 'standard', connected: true, claimedBy: null, controllerKey: 'X#1' }],
+        watch: () => { watchers += 1; return () => { watchers -= 1; }; },
+        claimCount: () => 0,
+    };
+    const pms = { startPressWanted: () => st.wanted };
+    const doc = {
+        querySelector: (sel) => (sel === '.screen.active' ? { id: st.screen } : null),
+        getElementById: (id) => (id === 'audio' ? { getAttribute: (n) => (n === 'src' ? st.src : null) } : null),
+        querySelectorAll: () => [],
+    };
+    const root = { feedBack: fb, getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) };
+    const fire = (t, detail) => (handlers[t] || []).forEach((fn) => fn({ detail }));
+    return { fb, gi, pms, doc, root, handlers, emits, st, fire, watchers: () => watchers };
+}
+
+test('install wires the resync events and song:loading', () => {
+    const p = page();
+    const inst = install({ fb: p.fb, gi: p.gi, pms: p.pms, doc: p.doc, root: p.root, now: () => 0 });
+    for (const t of ['ui:play-modes-changed', 'screen:changed', 'song:stop', 'song:ended', 'song:loading']) {
+        assert.strictEqual((p.handlers[t] || []).length, 1, t);
+    }
+    // On the player with a song: not watching.
+    assert.strictEqual(inst.watching(), false);
+    // Off the player, nothing loaded: each resync event arms the watch.
+    p.st.screen = 'v3-home'; p.st.src = ''; p.fb.isPlaying = false;
+    for (const t of ['ui:play-modes-changed', 'screen:changed', 'song:stop', 'song:ended']) {
+        p.fire('song:loading');
+        assert.strictEqual(inst.watching(), false, 'song:loading unwatches');
+        p.fire(t);
+        assert.strictEqual(inst.watching(), true, t);
+    }
+    assert.strictEqual(p.watchers(), 1);
+    // No mode wants Press Start: a resync unwatches.
+    p.st.wanted = false;
+    p.fire('ui:play-modes-changed');
+    assert.strictEqual(inst.watching(), false);
+    assert.strictEqual(p.watchers(), 0);
+});
+
+test('install re-arms after leaving a song: song:stop then screen:changed', () => {
+    const p = page();
+    const inst = install({ fb: p.fb, gi: p.gi, pms: p.pms, doc: p.doc, root: p.root, now: () => 5000 });
+    assert.strictEqual(inst.watching(), false);
+    // session.js emits song:stop before clearing the audio src: still loaded.
+    p.st.screen = 'v3-home';
+    p.fire('song:stop');
+    assert.strictEqual(inst.watching(), false);
+    // Then the teardown clears src and isPlaying, and screen:changed follows.
+    p.st.src = ''; p.fb.isPlaying = false;
+    p.fire('screen:changed', { id: 'v3-home' });
+    assert.strictEqual(inst.watching(), true);
+    inst.onWatch({ pad: 0, type: 'button', index: 9, value: 1, pressed: true, t: 0 });
+    assert.deepStrictEqual(p.emits, [
+        { type: 'gamepad:start-pressed', detail: { pad: 0, id: 'X', controllerKey: 'X#1' } },
+    ]);
+});
+
+test('session.js leaving the player clears feedBack.isPlaying beside S.isPlaying', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../static/js/session.js'), 'utf8');
+    const start = src.indexOf("if (id !== 'player') {");
+    assert.ok(start > 0);
+    const block = src.slice(start, src.indexOf('window.scrollTo(0, 0);', start));
+    const s = block.lastIndexOf('S.isPlaying = false;');
+    assert.ok(s > 0);
+    // After the JUCE branch, i.e. in the teardown every mode runs.
+    assert.ok(s > block.indexOf("window._juceAudioUrl = null;"));
+    assert.match(block.slice(s), /^S\.isPlaying = false;[\s\S]*?if \(window\.feedBack\) window\.feedBack\.isPlaying = false;\s*setPlayButtonState\(false\);/);
+});
