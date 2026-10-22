@@ -305,7 +305,8 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
 TABLE_MAX_ROWS = 20000
 TABLE_COLS = ["filename", "play_filename", "artist", "title", "album", "year", "duration",
               "tuning", "arrangements", "format", "plays", "best_accuracy", "full_combos",
-              "last_played", "seconds"]
+              "last_played", "seconds", "arr_index", "has_drum_tab", "has_vocal_pitch",
+              "five_fret_parts", "five_fret_only", "stem_ids"]
 
 
 @router.get("/api/library/table")
@@ -358,14 +359,22 @@ async def library_table(q: str = "", favorites: int = 0, format: str = "",
         fn = s.get("filename") or ""
         shown = s.get("display_chart") or {}
         plays, best, fcs, last, secs = stats.get(fn) or (0, None, 0, None, 0.0)
+        # What the row plays as (the table's "Play as" menu and Parts pills):
+        # the displayed chart's parts and flags when a grouped row shows a member.
+        part_src = {**s, **shown}
+        arrs = [a for a in (part_src.get("arrangements") or []) if isinstance(a, dict)]
         rows.append([
             fn, shown.get("filename") or fn,
             s.get("artist") or "", s.get("title") or "", s.get("album") or "",
             s.get("year") or "", round(float(s.get("duration") or 0)),
             shown.get("tuning_name") or s.get("tuning_name") or "",
-            [a.get("name") or "" for a in (s.get("arrangements") or []) if isinstance(a, dict)],
+            [a.get("name") or "" for a in arrs],
             s.get("format") or "",
             plays, best, fcs, last, round(secs),
+            [a.get("index", i) for i, a in enumerate(arrs)],
+            bool(part_src.get("has_drum_tab")), bool(part_src.get("has_vocal_pitch")),
+            list(part_src.get("five_fret_parts") or []), bool(part_src.get("five_fret_only")),
+            list(part_src.get("stem_ids") or []),
         ])
     return {"cols": TABLE_COLS, "rows": rows, "total": total,
             "truncated": total > len(rows)}

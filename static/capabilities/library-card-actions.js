@@ -11,10 +11,22 @@
  *
  * Public API: window.feedBack.libraryCardActions
  *   register(spec) -> unregister()    spec: { id, pluginId, label, icon?,
- *       placement?('menu'|'inline'|'overlay'), order?, destructive?,
+ *       placement?('menu'|'inline'|'overlay'|'play-as'), order?, destructive?,
+ *       group?, hint?, variants?(song)->[{ key, label, hint?, enabled? }],
+ *       choices?(song, variantKey|null)->{ title, default?, items: [{ key, label, hint? }] }|null,
  *       applies?(song)->bool, enabled?(song)->bool, run(song, ctx) }
  *   list(song) -> [actionSummary]      applicable actions, sorted
  *   run(id, song, ctx) -> Promise<{ ok, outcome, result?|error? }>
+ *
+ * 'play-as' actions are the ways to play a song (the Songs table's "Play as"
+ * menu, the card ⋮ "Play as…"; static/v3/play-as.js): `group` heads a section
+ * of the menu ("Real instrument", "Controller", ...), `hint` is a short note
+ * beside the label. An action with `variants` shows one row per variant (e.g.
+ * one per arrangement); run() then gets the chosen one as ctx.variant and
+ * refuses a key the song doesn't offer. An action whose variants() returns
+ * nothing is not listed. `choices` is a second step for a row (e.g. the
+ * difficulty): the menu asks for one, run() gets it as ctx.choice and
+ * refuses a key not offered (a row without choices ignores ctx.choice).
  *   snapshot() -> redaction-safe registry snapshot
  */
 (function () {
@@ -24,7 +36,7 @@
     if (w.feedBack.libraryCardActions && w.feedBack.libraryCardActions.version === 1) return;
     const capabilities = w.feedBack.capabilities;
     const DOMAIN = 'ui.library-card-injection';
-    const PLACEMENTS = ['menu', 'inline', 'overlay'];
+    const PLACEMENTS = ['menu', 'inline', 'overlay', 'play-as'];
 
     const actions = new Map(); // id -> normalized spec
 
@@ -44,6 +56,10 @@
             placement: PLACEMENTS.includes(spec.placement) ? spec.placement : 'menu',
             order: Number.isFinite(spec.order) ? spec.order : 100,
             destructive: !!spec.destructive,
+            group: typeof spec.group === 'string' ? spec.group : '',
+            hint: typeof spec.hint === 'string' ? spec.hint : '',
+            variants: typeof spec.variants === 'function' ? spec.variants : null,
+            choices: typeof spec.choices === 'function' ? spec.choices : null,
             applies: typeof spec.applies === 'function' ? spec.applies : () => true,
             enabled: typeof spec.enabled === 'function' ? spec.enabled : () => true,
             run: spec.run,
@@ -79,15 +95,65 @@
         _emit('action-unregistered', { id: key, pluginId: a ? a.pluginId : undefined });
     }
 
+    // An action's variants for a song: [{ key, label, hint, enabled }] (keys
+    // unique strings), or null for an action without variants. A throwing
+    // variants() offers nothing.
+    function _variants(a, song) {
+        if (!a.variants) return null;
+        let raw;
+        try { raw = a.variants(song); } catch (e) { raw = null; }
+        const out = [];
+        const seen = new Set();
+        for (const v of Array.isArray(raw) ? raw : []) {
+            if (!v || v.key == null) continue;
+            const key = String(v.key);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ key, label: String(v.label || key), hint: typeof v.hint === 'string' ? v.hint : '', enabled: v.enabled !== false });
+        }
+        return out;
+    }
+
+    // A row's second step: { title, default, items: [{ key, label, hint }] },
+    // or null (no choices, none offered, or choices() threw).
+    function _choices(a, song, variantKey) {
+        if (!a.choices) return null;
+        let raw;
+        try { raw = a.choices(song, variantKey); } catch (e) { raw = null; }
+        if (!raw || !Array.isArray(raw.items)) return null;
+        const items = [];
+        const seen = new Set();
+        for (const c of raw.items) {
+            if (!c || c.key == null || seen.has(String(c.key))) continue;
+            seen.add(String(c.key));
+            items.push({ key: String(c.key), label: String(c.label || c.key), hint: typeof c.hint === 'string' ? c.hint : '' });
+        }
+        if (!items.length) return null;
+        const def = raw.default != null && seen.has(String(raw.default)) ? String(raw.default) : items[0].key;
+        return { title: String(raw.title || ''), default: def, items };
+    }
+
     function list(song) {
         const out = [];
         for (const a of actions.values()) {
             let applicable = true;
             try { applicable = a.applies(song) !== false; } catch (e) { applicable = false; }
             if (!applicable) continue;
+            const variants = _variants(a, song);
+            if (variants && !variants.length) continue;
             let enabled = true;
             try { enabled = a.enabled(song) !== false; } catch (e) { enabled = true; }
-            out.push({ id: a.id, pluginId: a.pluginId, label: a.label, icon: a.icon, placement: a.placement, order: a.order, destructive: a.destructive, enabled });
+            const item = { id: a.id, pluginId: a.pluginId, label: a.label, icon: a.icon, placement: a.placement, order: a.order, destructive: a.destructive, enabled };
+            if (a.group) item.group = a.group;
+            if (a.hint) item.hint = a.hint;
+            if (variants) {
+                variants.forEach((v) => { const c = _choices(a, song, v.key); if (c) v.choices = c; });
+                item.variants = variants;
+            } else {
+                const c = _choices(a, song, null);
+                if (c) item.choices = c;
+            }
+            out.push(item);
         }
         out.sort((x, y) => (x.order - y.order) || x.label.localeCompare(y.label));
         return out;
@@ -105,6 +171,18 @@
         let enabled = true;
         try { enabled = a.enabled(song) !== false; } catch (e) { enabled = true; }
         if (!enabled) return { ok: false, outcome: 'disabled' };
+        let variantKey = null;
+        if (a.variants) {
+            const want = ctx && ctx.variant != null ? String(ctx.variant) : null;
+            const v = (_variants(a, song) || []).find((x) => x.key === want);
+            if (!v) return { ok: false, outcome: 'not-applicable' };
+            if (!v.enabled) return { ok: false, outcome: 'disabled' };
+            variantKey = v.key;
+        }
+        if (ctx && ctx.choice != null) {
+            const c = _choices(a, song, variantKey);
+            if (c && !c.items.some((x) => x.key === String(ctx.choice))) return { ok: false, outcome: 'not-applicable' };
+        }
         try {
             const result = await a.run(song, ctx || {});
             _emit('action-result', { id: a.id, pluginId: a.pluginId, outcome: 'handled' });

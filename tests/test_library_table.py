@@ -111,3 +111,25 @@ def test_grouped_table_aggregates_a_works_charts(client, server):
 
 def test_unknown_provider_is_404(client):
     assert client.get("/api/library/table", params={"provider": "nope"}).status_code == 404
+
+
+def test_table_rows_carry_play_as_facts(client, server):
+    """The table's Parts pills and "Play as" menu need each row's arrangement
+    indices, drum chart, vocal pitch and 5-fret parts."""
+    server.meta_db.put("ff.sloppak", 0, 0, {
+        "title": "Full Band", "artist": "X", "duration": 200, "tuning_name": "E Standard",
+        "arrangements": [{"name": "Lead", "index": 0}, {"name": "Bass", "index": 1}],
+        "has_drum_tab": True, "has_vocal_pitch": True,
+        "five_fret_parts": ["guitar:chart", "bass:auto"], "stem_ids": ["drums", "vocals"],
+    })
+    _put(server, "plain.sloppak", "Plain", "X", arrangements=("Lead", "Rhythm"))
+    _, rows = _table(client)
+    ff = rows["ff.sloppak"]
+    assert ff["arr_index"] == [0, 1]
+    assert ff["has_drum_tab"] is True and ff["has_vocal_pitch"] is True
+    assert ff["five_fret_parts"] == ["guitar:chart", "bass:auto"]
+    assert ff["five_fret_only"] is False and ff["stem_ids"] == ["drums", "vocals"]
+    plain = rows["plain.sloppak"]
+    assert plain["arr_index"] == [0, 1]
+    assert plain["has_drum_tab"] is False and plain["has_vocal_pitch"] is False
+    assert plain["five_fret_parts"] == [] and plain["stem_ids"] == []

@@ -93,3 +93,57 @@ test('songs.js wires the table view (button, host, loader, persisted view)', () 
     assert.match(SONGS_SRC, /'\/api\/library\/table\?'/);
     assert.match(SONGS_SRC, /\['grid', 'tree', 'folder', 'albums', 'table'\]\.includes\(saved\.view\)/);
 });
+
+const FCOLS = COLS.concat(['arr_index', 'has_drum_tab', 'has_vocal_pitch', 'five_fret_parts', 'five_fret_only', 'stem_ids']);
+const frow = (o) => FCOLS.map((c) => (c in o ? o[c] : (['arrangements', 'arr_index', 'five_fret_parts', 'stem_ids'].includes(c) ? [] : null)));
+
+test('drum chart and vocal pitch add D and V; a 5-fret-only placeholder adds nothing', () => {
+    const { parts } = load()._internals;
+    assert.equal(parts(['Lead', 'Bass'], { drums: true }), 'LBD');
+    assert.equal(parts(['Lead'], { vocals: true }), 'LV');
+    assert.equal(parts(['Lead Guitar'], { fiveFretOnly: true }), '');
+});
+
+test('5-fret pills: G R B order, chart beats auto, auto only when shown', () => {
+    const { fiveFretPills } = load()._internals;
+    const tags = ['bass:auto', 'guitar:chart', 'rhythm:auto', 'rhythm:chart', 'keys:chart'];
+    const letters = (list) => list.map((p) => p.letter + (p.auto ? '*' : '')).join(' ');
+    assert.equal(letters(fiveFretPills(tags, false)), 'G R');
+    assert.equal(letters(fiveFretPills(tags, true)), 'G R B*');
+    assert.equal(fiveFretPills(undefined, true).length, 0);
+});
+
+test('toRows builds the play-as song item and sorts parts with pills', () => {
+    const t = load();
+    const data = {
+        cols: FCOLS,
+        rows: [
+            frow({ filename: 'x', play_filename: 'x2', title: 'X', arrangements: ['Lead', 'Bass'], arr_index: [0, 1],
+                has_drum_tab: true, has_vocal_pitch: true, five_fret_parts: ['guitar:chart', 'bass:auto'], stem_ids: ['drums'] }),
+            frow({ filename: 'y', title: 'Y', arrangements: ['Lead', 'Bass'] }),
+        ],
+    };
+    const [x, y] = t._internals.toRows(data, false);
+    assert.equal(x.song.filename, 'x2');                      // the displayed chart plays
+    assert.deepEqual(JSON.parse(JSON.stringify(x.song.arrangements)), [{ index: 0, name: 'Lead' }, { index: 1, name: 'Bass' }]);
+    assert.equal(x.song.has_drum_tab, true);
+    assert.equal(x.song.has_vocal_pitch, true);
+    assert.equal(x.parts, 'LBDV');
+    assert.equal(x.partsKey, 'LBDV G');                       // bass:auto hidden
+    assert.equal(y.partsKey, 'LB');
+    assert.equal(t._internals.toRows(data, true)[0].partsKey, 'LBDV GB');
+    // Old payloads (no new columns) still decode.
+    assert.equal(rows(t)[3].song.five_fret_parts.length, 0);
+});
+
+test('songs.js opens Play as from a table row and the card menu', () => {
+    assert.match(SONGS_SRC, /menu: window\.v3PlayAs \?/);
+    assert.match(SONGS_SRC, /id: '__playas', label: 'Play as…'/);
+});
+
+test('songs.js offers Rock Band / Guitar Hero filter chips wired to five_fret', () => {
+    assert.match(SONGS_SRC, /const FIVE_FRET = \[\['guitar', 'Guitar'\], \['rhythm', 'Rhythm'\], \['bass', 'Bass'\]\]/);
+    assert.match(SONGS_SRC, /section\('Rock Band \/ Guitar Hero'/);
+    assert.match(SONGS_SRC, /p\.set\('five_fret', fiveFretParam\(f\)\)/);
+    assert.match(SONGS_SRC, /auto \? i : i \+ ':chart'/);
+});

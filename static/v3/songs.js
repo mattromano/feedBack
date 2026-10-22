@@ -51,6 +51,8 @@
     // pitch + vocals stem).
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo'];
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'piano', 'other'];
+    // Rock Band / Guitar Hero 5-fret parts (the server's `five_fret` filter).
+    const FIVE_FRET = [['guitar', 'Guitar'], ['rhythm', 'Rhythm'], ['bass', 'Bass']];
     const PAGE_SIZE = 24;
     // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
     // blank before the next window render lands.
@@ -68,7 +70,7 @@
         artist: '', album: '',
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
-        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
+        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
         page: 0, total: 0, loading: false, built: false, accuracy: {}, plays: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
@@ -131,7 +133,7 @@
         const f = state.filters;
         return f.arr_has.length + f.arr_lacks.length + f.stem_has.length + f.stem_lacks.length +
             (f.lyrics ? 1 : 0) + (f.tuningMatch === 'playable' ? 1 : f.tunings.length) + (f.mastery ? f.mastery.length : 0) +
-            (f.match ? f.match.length : 0) + (f.genre ? f.genre.length : 0) +
+            (f.match ? f.match.length : 0) + (f.genre ? f.genre.length : 0) + (f.ff ? f.ff.length : 0) +
             (state.artist ? 1 : 0) + (state.album ? 1 : 0);
     }
 
@@ -155,6 +157,7 @@
                 stem_lacks: [...(f.stem_lacks || [])].sort(),
                 lyrics: f.lyrics || '',
                 tunings: [...(f.tunings || [])].sort(),
+                ff: [...(f.ff || [])].sort(),
                 mastery: [...(f.mastery || [])].sort(),
                 match: [...(f.match || [])].sort(),
                 genre: [...(f.genre || [])].sort(),
@@ -188,6 +191,7 @@
                 arr_has: arr(f.arr_has).filter((a) => ARRANGEMENTS.includes(a)), arr_lacks: arr(f.arr_lacks).filter((a) => ARRANGEMENTS.includes(a)),
                 stem_has: arr(f.stem_has), stem_lacks: arr(f.stem_lacks),
                 lyrics: f.lyrics || '', tunings: arr(f.tunings),
+                ff: arr(f.ff).filter((i) => FIVE_FRET.some((x) => x[0] === i)),
                 mastery: [], match: [], genre: [],
             };
         }
@@ -215,6 +219,7 @@
                     arr_has: [...f.arr_has], arr_lacks: [...f.arr_lacks],
                     stem_has: [...f.stem_has], stem_lacks: [...f.stem_lacks],
                     lyrics: f.lyrics || '', tunings: [...f.tunings],
+                    ...(f.ff && f.ff.length ? { ff: [...f.ff] } : {}),
                 },
             }));
         } catch (_) { /* best-effort */ }
@@ -305,6 +310,16 @@
     // filename is '' too).
     function pickIsSelected(song) { const k = song ? pickSelectedKey() : ''; return !!k && k === localFilename(song.display_chart ? Object.assign({}, song, song.display_chart) : song); }
 
+    // The 5-fret filter value for the picked instruments (every one must match):
+    // real charts only, unless the five-fret plugin's "Show auto charts" is on.
+    function fiveFretParam(f) {
+        if (!f.ff || !f.ff.length) return '';
+        const ff = window.feedBackFiveFret;
+        let auto = false;
+        try { auto = !!(ff && typeof ff.showAutoCharts === 'function' && ff.showAutoCharts()); } catch (_) { auto = false; }
+        return f.ff.map((i) => (auto ? i : i + ':chart')).join(',');
+    }
+
     function queryParams(extra, opts) {
         const f = state.filters;
         const skipArtistAlbum = opts && opts.catalog;
@@ -320,6 +335,7 @@
         if (f.stem_has.length) p.set('stems_has', f.stem_has.join(','));
         if (f.stem_lacks.length) p.set('stems_lacks', f.stem_lacks.join(','));
         if (f.lyrics) p.set('has_lyrics', f.lyrics);
+        if (fiveFretParam(f)) p.set('five_fret', fiveFretParam(f));
         // The two modes answer different questions, so only one filters at a
         // time: sending both would silently intersect them.
         if (f.tunings.length && f.tuningMatch !== 'playable') p.set('tunings', f.tunings.join(','));
@@ -353,6 +369,7 @@
         if (f.stem_has.length) r.stems_has = f.stem_has.join(',');
         if (f.stem_lacks.length) r.stems_lacks = f.stem_lacks.join(',');
         if (f.lyrics) r.has_lyrics = f.lyrics;
+        if (fiveFretParam(f)) r.five_fret = fiveFretParam(f);
         if (f.tunings.length) r.tunings = f.tunings.join(',');
         if (state.sort && state.sort !== 'artist') r.sort = state.sort;
         return r;
@@ -1057,6 +1074,10 @@
         const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
         const rows = [
             { id: '__play', label: 'Play', run: () => { _saveLibraryScrollSnapshot(); window.playSong && window.playSong(enc(playTarget.filename)); } },
+            // Every way to play this chart (static/v3/play-as.js) — local
+            // files only, and only when there is more than plain Play.
+            ...(state.provider === 'local' && playTarget.filename && window.v3PlayAs
+                && window.v3PlayAs.rows(playTarget).length > 1 ? [{ id: '__playas', label: 'Play as…' }] : []),
             ...(canCharts ? [
                 { id: '__charts', label: 'Charts (' + song.chart_count + ')…' },
                 { id: '__playver', label: 'Play version ▸' },
@@ -1114,7 +1135,9 @@
             // 'Play version ▸' swaps THIS menu's rows for the work's charts —
             // it must expand in place, so it's the one entry that doesn't close.
             if (id === '__playver') { await _expandPlayVersions(menu, song, closeMenu); return; }
+            const menuBox = menu.getBoundingClientRect();
             closeMenu();
+            if (id === '__playas') { openPlayAs(playTarget, { pos: { x: menuBox.left, y: menuBox.top }, returnFocus: anchorBtn }); return; }
             if (id === '__play') { playCard(playTarget); return; }
             if (id === '__charts') { openChartsDrawer(song.work_key, song); return; }
             if (id === '__unsplit') {
@@ -3147,6 +3170,13 @@
     // without touching this module's internals.
     window.__fbOpenArtistPage = openArtistPage;
 
+    // "Play as" menu (static/v3/play-as.js) for one library item; leaving for
+    // the player keeps the library's scroll place, as a card play does.
+    function openPlayAs(song, opts) {
+        if (!window.v3PlayAs || !song) return;
+        window.v3PlayAs.open(song, Object.assign({ beforeRun: () => _saveLibraryScrollSnapshot() }, opts));
+    }
+
     // Table view: the whole filtered library (same params as the grid, so
     // search / format / drawer filters / grouping all apply) as sortable,
     // virtualised rows. Column sorting is the table's own (click a header);
@@ -3165,8 +3195,12 @@
             url: '/api/library/table?' + queryParams(extra).toString(),
             play: (row) => {
                 _saveLibraryScrollSnapshot();
-                if (window.playSong) window.playSong(enc(row.playFilename));
+                if (window.feedBack && window.feedBack.ui && typeof window.feedBack.ui.playSongAs === 'function') {
+                    window.feedBack.ui.playSongAs(row.playFilename);
+                } else if (window.playSong) window.playSong(enc(row.playFilename));
             },
+            // A row click / right-click: every way to play it.
+            menu: window.v3PlayAs ? (row, rowEl, pos) => openPlayAs(row.song, { pos, returnFocus: rowEl }) : null,
         });
     }
 
@@ -3259,6 +3293,9 @@
                     + '" title="Songs you can sing: synced lyrics with vocal pitch and a separated vocals track">'
                     + (on ? '✕ ' : '') + 'Karaoke-ready</button>';
             })()) +
+            // Rock Band / Guitar Hero 5-fret parts — multi-select; a song must
+            // have every picked part (the Parts column's green G / R / B).
+            section('Rock Band / Guitar Hero', FIVE_FRET.map((it) => '<button data-ff="' + it[0] + '" title="Songs with a 5-fret ' + it[1].toLowerCase() + ' chart" class="px-2 py-1 rounded-md text-xs border ' + ((f.ff || []).includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + ((f.ff || []).includes(it[0]) ? '✕ ' : '') + it[1] + '</button>').join('')) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
             section('Progress', [['mastered', 'Mastered'], ['in_progress', 'In progress'], ['not_started', 'Not started']].map((it) => '<button data-mastery="' + it[0] + '" class="px-2 py-1 rounded-md text-xs border ' + (f.mastery.includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + it[1] + '</button>').join('')) +
             // Match (P8) — the song's metadata-match lifecycle state, a triage
@@ -3368,6 +3405,7 @@
             }
             renderDrawer();
         }));
+        d.querySelectorAll('[data-ff]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-ff'); const ff = f.ff || (f.ff = []); const i = ff.indexOf(v); if (i >= 0) ff.splice(i, 1); else ff.push(v); renderDrawer(); }));
         d.querySelectorAll('[data-mastery]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-mastery'); const i = f.mastery.indexOf(v); if (i >= 0) f.mastery.splice(i, 1); else f.mastery.push(v); renderDrawer(); }));
         d.querySelector('[data-grouping]')?.addEventListener('click', () => {
             state.grouping = !(state.grouping !== false);
@@ -3380,7 +3418,7 @@
         d.querySelector('[data-drawer-tidy]')?.addEventListener('click', openArtistTidyUp);
         d.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         d.querySelector('[data-drawer-clear]')?.addEventListener('click', async () => {
-            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' };
+            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' };
             state.artist = '';
             state.album = '';
             renderDrawer();
@@ -4613,6 +4651,7 @@
             if (f.stem_lacks.length) p.set('stems_lacks',       f.stem_lacks.join(','));
             if (f.lyrics)           p.set('has_lyrics',         f.lyrics);
             if (f.tunings.length)   p.set('tunings',            f.tunings.join(','));
+            if (fiveFretParam(f))   p.set('five_fret',          fiveFretParam(f));
             return p.toString();
         },
         _scrollHelpers: {

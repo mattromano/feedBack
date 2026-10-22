@@ -521,6 +521,11 @@ export function setViz(id) {
     }
     // Persist only once we know the renderer is valid.
     try { localStorage.setItem('vizSelection', id); } catch (_) {}
+    // Keep the picker on it too (the default / venue paths do the same):
+    // song:ready re-reads the picker, and a picker left on Auto would swap a
+    // view set by code (e.g. the library's "Play as" 5-Fret) straight back.
+    const _pickSel = document.getElementById('viz-picker');
+    if (_pickSel && Array.from(_pickSel.options || []).some((o) => o.value === id)) _pickSel.value = id;
     _installVizRenderer(renderer, id);
     _syncVenueVizPlayerClass(id);
     if (window.v3VenueScene3d && typeof window.v3VenueScene3d.syncViz === 'function') {
