@@ -50,6 +50,16 @@ older than the auto-charter's (an equal one is kept: the part's "auto" field say
 get status auto (would-auto in a dry run, rerun by --write like would-join); a song with no real part
 written but an auto one has that status too. The CSV adds real_status (what the chart search found) and
 arrangement (the source arrangement).
+
+--from-drums (with five-fret --parts only; not with --upgrade, --auto or --local): a fast offline pass.
+Each song's only candidate is the chart its drums were joined from (the pack's drum source: drum_join.json
+or the legacy drums arrangement), taken from the local cache: the recorded folder if it exists here,
+else its last name under ~/.cache/slopsmith-drums/chorus/ or sng/ (Windows paths included). The drum
+join's warp is tried first, then a fresh alignment against the cached chart's own audio (a drums-only
+folder: a note envelope), exactly as above. No Chorus search and no downloads. A song whose pack has no
+drum source, or whose chart isn't cached / has no notes.mid or notes.chart, gets status no-drum-chart;
+a part the chart lacks gets no-chart. Writing, backups, state and CSV are the same (same default state:
+songs already finished there are skipped; --retry no-chart,flagged brings earlier misses back).
 """
 from __future__ import annotations
 
@@ -266,6 +276,38 @@ def five_fret_candidates(artist, title, duration, parts, min_match, n=3) -> list
     return out[:n]
 
 
+def drum_chart(view) -> dict | None:
+    """--from-drums: the chart the pack's drums were joined from, as a local folder, or None (no drum
+    source, not cached here, or no notes.mid / notes.chart). The recorded folder is used as it is
+    when it exists; otherwise (another machine, a Windows path) its last name is looked up under
+    the local cache's chorus/ or sng/. Returns ``{"folder", "reuse", "label", "source"}``."""
+    import drumjoin
+    import fivefretjoin
+    from pathlib import PureWindowsPath
+    src = fivefretjoin.drum_source(view)
+    if not src:
+        return None
+    s = src["folder"]
+    win = "\\" in s or re.match(r"^[A-Za-z]:", s)
+    rec = PureWindowsPath(s) if win else Path(s)
+    folder = None
+    if not win and rec.is_dir():
+        folder = rec
+    else:
+        kind = rec.parent.name.lower()
+        base = {"chorus": CACHE / "chorus", "sng": drumjoin.SNG_CACHE}.get(kind)
+        if base is not None and rec.name and (base / rec.name).is_dir():
+            folder = base / rec.name
+    if folder is None or not any((folder / n).is_file() for n in ("notes.mid", "notes.chart")):
+        return None
+    md5 = folder.name.lower() if folder.parent.name.lower() == "chorus" and \
+        re.fullmatch(r"[0-9a-f]{32}", folder.name, re.I) else None
+    if md5:
+        return {"folder": folder, "reuse": src, "label": f"chorus:{md5}",
+                "source": {"kind": "chart", "origin": "chorus", "md5": md5}}
+    return {"folder": folder, "reuse": src, "label": f"local:{folder}", "source": {"kind": "chart", "origin": "local"}}
+
+
 def _stem_roles(parts, chart_has_rhythm: bool) -> tuple:
     """Stems a chart download needs for ``parts`` (each part's roles, in order, no repeats)."""
     import chorus
@@ -438,13 +480,20 @@ def process_five_fret(path_str: str) -> dict:
             res["status"] = "no-better" if a.upgrade else "has-parts"
             return res
         cands = []
-        for e in _LOCAL:
+        if a.from_drums:        # the drums' own cached chart is the only candidate: no search, no download
+            dc = drum_chart(view)
+            if dc is None:
+                res["status"] = "no-drum-chart"
+                res["parts"] = {part: {"status": "no-drum-chart"} for part in wanted}
+                return res
+            cands.append({"kind": "drums", **dc})
+        for e in ([] if a.from_drums else _LOCAL):
             s = drumjoin.name_score(artist, title, e[1], e[2])
             if s >= a.min_match:
                 cands.append({"kind": "local", "path": e[0], "artist": e[1], "name": e[2], "score": round(s, 3)})
-        cands.sort(key=lambda c: -c["score"])
+        cands.sort(key=lambda c: -c.get("score", 1))
         cands = cands[:2]
-        if a.online and artist and title:
+        if a.online and artist and title and not a.from_drums:
             cands += five_fret_candidates(artist, title, dur, wanted, a.min_match,
                                           a.max_candidates * (3 if a.upgrade else 1))
         if a.upgrade:      # online: only charts with more hand-charted levels for some part count
@@ -474,10 +523,14 @@ def process_five_fret(path_str: str) -> dict:
             if not remaining:
                 break
             label = (f"chorus:{c['md5']} {c['artist']} - {c['name']} ({c.get('charter')})" if c["kind"] == "online"
-                     else f"local:{c['path']}")
+                     else c["label"] if c["kind"] == "drums" else f"local:{c['path']}")
             pending = set(remaining)
             try:        # one failing candidate (download, unreadable chart, ...) doesn't stop the song
-                if c["kind"] == "online":
+                if c["kind"] == "drums":    # cached locally; an unreadable chart is an error, not no-chart
+                    charts, _ = fivefretchart.load_song_folder(c["folder"])
+                    have = [x for x in remaining if x in charts]
+                    source = c["source"]
+                elif c["kind"] == "online":
                     have = [x for x in remaining if x in c["parts_have"]]
                     cache = CACHE / "chorus" / c["md5"]
                     ids = fivefretjoin.chart_ids(label=label, folder=cache)
@@ -497,10 +550,13 @@ def process_five_fret(path_str: str) -> dict:
                 if not have:
                     continue
                 pending = set(have)
-                reuse = fivefretjoin.reusable_warp(view, ids)
+                if c["kind"] == "drums":        # the drums' chart by definition: always its warp
+                    reuse, folder = c["reuse"], c["folder"]
+                else:
+                    reuse = fivefretjoin.reusable_warp(view, ids)
                 if c["kind"] == "online":       # a reused warp needs no audio: chart + song.ini only
                     folder = chorus.fetch(c["md5"], cache, roles=() if reuse else _stem_roles(have, c["has_rhythm"]))
-                else:
+                elif c["kind"] == "local":
                     folder = path
 
                 def join(parts):
@@ -649,6 +705,9 @@ def parse_args(argv=None):
     ap.add_argument("--upgrade", action="store_true",
                     help="songs WITH Drums (five-fret: a real chart part) but < 3 hand-charted lower levels: "
                          "replace only with a chart that has more hand-charted levels and validates")
+    ap.add_argument("--from-drums", action="store_true",
+                    help="five-fret --parts only: try just the chart each song's drums were joined from, "
+                         "from the local cache (no search, no downloads; songs without one: no-drum-chart)")
     ap.add_argument("--auto", action="store_true",
                     help="five-fret --parts only: parts with no real chart get an auto chart made from the "
                          "matching real-guitar arrangement (never replaces a real chart)")
@@ -663,6 +722,13 @@ def parse_args(argv=None):
         ap.error("--auto needs five-fret --parts (guitar, rhythm, bass)")
     if a.auto and a.upgrade:
         ap.error("--auto can't be used with --upgrade (auto parts never replace real charts)")
+    if a.from_drums:
+        if parts == ["drums"]:
+            ap.error("--from-drums needs five-fret --parts (guitar, rhythm, bass)")
+        for flag, why in ((a.upgrade, "--upgrade"), (a.auto, "--auto"), (a.local, "--local")):
+            if flag:
+                ap.error(f"--from-drums can't be used with {why} (it tries only the drums' cached chart)")
+        a.online = False
     a.parts = parts
     if a.state is None:
         a.state = str(Path.home() / "drums-work" / "library" /

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`drums_library.py --from-drums`** (with five-fret `--parts`): a fast, offline pass that
+  tries only each song's own drum chart from the local cache (`~/.cache/slopsmith-drums/chorus|sng`,
+  Windows source paths remapped by folder name) with the drum join's warp; no search, no
+  downloads. Songs without a cached drum chart get `no-drum-chart`.
 - **`drums_library.py --parts`** finds and joins real Clone Hero guitar / rhythm / bass
   charts for a whole sloppak library (`--parts guitar,rhythm,bass`; default `drums`, the
   drum run as before). Local charts first, then Chorus Encore; each part is aligned to
