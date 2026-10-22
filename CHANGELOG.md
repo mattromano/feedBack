@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Press Start: the standard Start button on a free controller, outside a song, emits `gamepad:start-pressed` for a play mode that asked for it.
 - Library grid: a play mode's button on cards it can play (chips row; hidden while picking or selecting).
 - Home: a registered play mode gets the right half of the hero (solo practice stays on the left; they stack on narrow windows).
 - **`feedBack.ui.registerPlayMode`**: plugins add a way to play (Home hero half, library card button,

@@ -289,8 +289,18 @@ What core renders:
   chips row when `cardAction.isAvailable(song)` is `true`; clicking it calls
   `cardAction.run(song)`.
 - **Tour step.** A mode with a `tour` adds a step to the app tour.
-- **Press Start.** When any mode sets `startPress`, `gamepad:start-pressed`
-  launches the mode.
+- **Press Start.** When any mode sets `startPress`, core watches free
+  controllers (`feedBack.gamepadInput.watch`, which is not a claim) and the
+  standard Start button (button 9) emits
+  `gamepad:start-pressed { pad, id, controllerKey }`; the mode listens and
+  launches with that pad. It fires only on a standard-mapped, connected,
+  unclaimed pad, and never during a song (loading, playing or paused), on the
+  player, FeedBarcade or a `plugin-*` screen, under a visible modal
+  (`[aria-modal="true"]` / `.feedBack-modal`), during a library pick, or while
+  any controller is claimed. One press gives one event: a held Start doesn't
+  repeat and a 1 s cooldown drops the same press on a mirror slot. Nothing is
+  watched during a song. Start is not one of core's menu buttons, so it does
+  nothing else.
 
 With no mode registered nothing changes: Home shows the solo hero, cards have
 no extra button and the tour and Press Start behave as before.
