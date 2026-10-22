@@ -78,12 +78,14 @@ the claim.
 
 ### Polling
 
-Polling runs on `requestAnimationFrame` only while at least one claim exists;
-releasing the last claim lets the loop lapse. The steady state allocates
+Polling runs on `requestAnimationFrame` while at least one claim or watcher
+exists; when the last of both goes, the loop lapses. The steady state allocates
 nothing: values are compared in place, the reconcile pass runs only when a
 claim is not connected in its own slot, and listener lists are copy-on-write so
 dispatch never copies them. A claim's baseline is the
-controller's state at claim time, so held inputs do not fire on claim.
+controller's state at claim time, so held inputs do not fire on claim. A
+watched pad's baseline is taken when watching starts, when the pad connects and
+when a claim on it is released, so held inputs do not fire on watch either.
 
 ### Disconnect and reconnect
 
