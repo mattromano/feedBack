@@ -140,3 +140,10 @@ test('songs.js opens Play as from a table row and the card menu', () => {
     assert.match(SONGS_SRC, /menu: window\.v3PlayAs \?/);
     assert.match(SONGS_SRC, /id: '__playas', label: 'Play as…'/);
 });
+
+test('songs.js offers Rock Band / Guitar Hero filter chips wired to five_fret', () => {
+    assert.match(SONGS_SRC, /const FIVE_FRET = \[\['guitar', 'Guitar'\], \['rhythm', 'Rhythm'\], \['bass', 'Bass'\]\]/);
+    assert.match(SONGS_SRC, /section\('Rock Band \/ Guitar Hero'/);
+    assert.match(SONGS_SRC, /p\.set\('five_fret', fiveFretParam\(f\)\)/);
+    assert.match(SONGS_SRC, /auto \? i : i \+ ':chart'/);
+});

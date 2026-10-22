@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Songs table: the Parts column shows Rock Band / Guitar Hero 5-fret parts as green G / R / B pills after the real-instrument letters (auto charts dashed, only while the five-fret "Show auto charts" setting is on), and D / V whenever a song has a drum chart or vocal pitch.
 - "Play as" menu: clicking a song in the table (or "Play as…" in the card ⋮ menu) lists every way to play it — Play, each real-instrument arrangement, and the entries plugins add (drums, vocals, 5-fret parts, RockHeroSmith). Enter, double-click and gamepad A still just play. A view an entry sets (e.g. 5-fret) lasts for that play only.
+- Library filters: a **Rock Band / Guitar Hero** section (Guitar / Rhythm / Bass) keeps songs with those 5-fret parts (real charts, plus auto charts while "Show auto charts" is on).
 - `libraryCardActions`: `placement: 'play-as'` with optional `group`, `hint` and per-song `variants`; `feedBack.ui.playSongAs(filename, { arrangement, viz })`.
 - First-run tour: a step for the registered play mode's hero half.
 - Press Start: the standard Start button on a free controller, outside a song, emits `gamepad:start-pressed` for a play mode that asked for it.
