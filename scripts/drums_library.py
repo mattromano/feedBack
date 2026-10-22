@@ -58,8 +58,11 @@ else its last name under ~/.cache/slopsmith-drums/chorus/ or sng/ (Windows paths
 join's warp is tried first, then a fresh alignment against the cached chart's own audio (a drums-only
 folder: a note envelope), exactly as above. No Chorus search and no downloads. A song whose pack has no
 drum source, or whose chart isn't cached / has no notes.mid or notes.chart, gets status no-drum-chart;
-a part the chart lacks gets no-chart. Writing, backups, state and CSV are the same (same default state:
-songs already finished there are skipped; --retry no-chart,flagged brings earlier misses back).
+a part the chart lacks gets no-chart. Writing, backups, state and CSV are the same, but the default
+state is its own (five_fret_from_drums_state.json), so a later online run isn't told to skip songs this
+pass missed. Sharing a state with an online run (--state five_fret_state.json) works both ways: songs
+finished there are skipped here, and the online run then needs --retry no-drum-chart,no-chart,flagged
+to search the songs this pass didn't join.
 """
 from __future__ import annotations
 
@@ -290,15 +293,13 @@ def drum_chart(view) -> dict | None:
     s = src["folder"]
     win = "\\" in s or re.match(r"^[A-Za-z]:", s)
     rec = PureWindowsPath(s) if win else Path(s)
-    folder = None
-    if not win and rec.is_dir():
-        folder = rec
-    else:
-        kind = rec.parent.name.lower()
-        base = {"chorus": CACHE / "chorus", "sng": drumjoin.SNG_CACHE}.get(kind)
-        if base is not None and rec.name and (base / rec.name).is_dir():
-            folder = base / rec.name
-    if folder is None or not any((folder / n).is_file() for n in ("notes.mid", "notes.chart")):
+    tries = [] if win else [rec]        # as recorded, then by name in the local cache
+    base = {"chorus": CACHE / "chorus", "sng": drumjoin.SNG_CACHE}.get(rec.parent.name.lower())
+    if base is not None and rec.name:
+        tries.append(base / rec.name)
+    folder = next((f for f in tries if f.is_dir() and
+                   any((f / n).is_file() for n in ("notes.mid", "notes.chart"))), None)
+    if folder is None:
         return None
     md5 = folder.name.lower() if folder.parent.name.lower() == "chorus" and \
         re.fullmatch(r"[0-9a-f]{32}", folder.name, re.I) else None
@@ -698,7 +699,8 @@ def parse_args(argv=None):
     ap.add_argument("--retry", default="error", help="comma list of state statuses to run again "
                     "(e.g. no-chart,flagged,error); default: error")
     ap.add_argument("--state", help="default: ~/drums-work/library/drums_state.json "
-                    "(five_fret_state.json for five-fret --parts)")
+                    "(five_fret_state.json for five-fret --parts, five_fret_from_drums_state.json "
+                    "with --from-drums)")
     ap.add_argument("--parts", default="drums", help="drums (default) or a comma list of guitar, rhythm, bass")
     ap.add_argument("--min-match", type=float, default=0.86)
     ap.add_argument("--max-candidates", type=int, default=3)
@@ -732,7 +734,8 @@ def parse_args(argv=None):
     a.parts = parts
     if a.state is None:
         a.state = str(Path.home() / "drums-work" / "library" /
-                      ("drums_state.json" if parts == ["drums"] else "five_fret_state.json"))
+                      ("drums_state.json" if parts == ["drums"] else
+                       "five_fret_from_drums_state.json" if a.from_drums else "five_fret_state.json"))
     return a
 
 
@@ -871,6 +874,9 @@ def main(argv=None):
     state_path.write_text(json.dumps(state, indent=0, default=str))
     write_report(state, csv_path, ff)
     log("done: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + f"; report {csv_path}")
+    if a.from_drums:
+        log(f"--from-drums: an online run sharing this state ({state_path}) should use "
+            "--retry no-drum-chart,no-chart,flagged, or it skips the songs this pass didn't join")
 
 
 if __name__ == "__main__":

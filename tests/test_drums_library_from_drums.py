@@ -219,3 +219,37 @@ def test_from_drums_end_to_end(env, tmp_path, monkeypatch, offline):
         assert ok, why
         assert doc["source"] == {"kind": "chart", "origin": "chorus", "md5": MD5_A, "charter": "Tester"}
     assert (bd / "song.sloppak").exists()
+
+
+# ── state and fallthrough ───────────────────────────────────────────────────
+
+def test_from_drums_default_state_is_its_own(tmp_path):
+    base = [str(tmp_path), "--backup-dir", str(tmp_path / "bak"), "--parts", "guitar,bass"]
+    lib_dir = Path.home() / "drums-work" / "library"
+    a = drums_library.parse_args(base + ["--from-drums"])
+    assert Path(a.state) == lib_dir / "five_fret_from_drums_state.json"
+    assert a.online is False
+    assert Path(drums_library.parse_args(base).state) == lib_dir / "five_fret_state.json"
+    assert drums_library.parse_args(base + ["--from-drums", "--state", "x.json"]).state == "x.json"
+
+
+def test_end_of_run_says_how_an_online_run_retries(env, tmp_path, monkeypatch, offline, capsys):
+    lib, bd = env
+    _pack(lib / "song.sloppak")
+    monkeypatch.setattr(fivefretjoin, "join_parts", FakeJoin())
+    _run(monkeypatch, lib, bd, tmp_path / "st.json", *_args())
+    assert "--retry no-drum-chart,no-chart,flagged" in capsys.readouterr().out
+
+
+def test_existing_folder_without_notes_falls_through_to_cache(env, tmp_path, monkeypatch, offline):
+    lib, bd = env
+    stale = tmp_path / "old" / "chorus" / MD5_A
+    stale.mkdir(parents=True)
+    (stale / "song.ini").write_text("[song]\n")
+    cached = _chart(tmp_path / "cache" / "chorus" / MD5_A)
+    _pack(lib / "song.sloppak", drum_folder=str(stale), warp=WARP)
+    fake = FakeJoin()
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", *_args())
+    assert [c["folder"] for c in fake.calls] == [cached]
+    assert s["song.sloppak"]["status"] == "would-join"
