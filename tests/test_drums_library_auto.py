@@ -200,3 +200,47 @@ def test_auto_failure_keeps_search_results(env, tmp_path, monkeypatch):
     assert r["parts"]["guitar"]["status"] == "no-chart" and r["parts"]["guitar"]["auto"] == "error"
     assert "bad arrangement" in r["parts"]["guitar"]["error"]
     assert p.read_bytes() == before and _bak(bd) == ["placeholder"]
+
+
+def _drop_arrangements(pack, ids):
+    with zipfile.ZipFile(pack) as z:
+        members = {n: z.read(n) for n in z.namelist()}
+    man = yaml.safe_load(members["manifest.yaml"])
+    man["arrangements"] = [e for e in man["arrangements"] if e["id"] not in ids]
+    members["manifest.yaml"] = yaml.safe_dump(man).encode()
+    with zipfile.ZipFile(pack, "w") as z:
+        for n, b in members.items():
+            z.writestr(n, b)
+
+
+def test_auto_skip_keeps_search_error(env, tmp_path, monkeypatch):
+    lib, bd = env
+    _local_chart(tmp_path / "charts", parts=("guitar",))
+    p = _band(lib, "song.sloppak")
+    _drop_arrangements(p, {"lead", "rhythm"})          # nothing to auto-chart guitar from
+    monkeypatch.setattr(fivefretjoin, "join_parts", FakeJoin(lambda folder, part, n: False))
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", "--parts", "guitar", "--auto",
+             "--local", str(tmp_path / "charts"), "--no-online", "--write")
+    pr = s["song.sloppak"]["parts"]["guitar"]
+    assert pr["status"] == "flagged" and pr["auto"] == "skip-none"
+    assert "too few notes within 30 ms" in pr["error"] and "no matching arrangement" in pr["error"]
+    row = next(x for x in _rows(tmp_path / "st.json") if x["part"] == "guitar")
+    assert "too few notes within 30 ms" in row["error"]
+
+
+def test_retry_matches_real_status_of_auto_parts(env, tmp_path, monkeypatch):
+    lib, bd = env
+    _local_chart(tmp_path / "charts", parts=("guitar",))
+    p = _band(lib, "song.sloppak")
+    fake = FakeJoin(lambda folder, part, n: n > 0)     # flags the first time, passes on the retry
+    monkeypatch.setattr(fivefretjoin, "join_parts", fake)
+    args = ("--parts", "guitar", "--auto", "--local", str(tmp_path / "charts"), "--no-online", "--write")
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", *args)
+    pr = s["song.sloppak"]["parts"]["guitar"]
+    assert pr["status"] == "auto" and pr["real_status"] == "flagged"
+    assert drums_library._retrying(s["song.sloppak"], {"flagged"})
+    assert not drums_library._retrying(s["song.sloppak"], {"error"})
+    s = _run(monkeypatch, lib, bd, tmp_path / "st.json", *args, "--retry", "flagged")
+    assert len(fake.calls) == 2
+    assert s["song.sloppak"]["status"] == "joined"
+    assert _doc(p, "five_fret_guitar.json")["source"]["kind"] == "chart"

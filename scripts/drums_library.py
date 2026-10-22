@@ -301,7 +301,9 @@ def auto_fill(p: Path, parts, write: bool, before_write=None) -> dict[str, dict]
     payloads, names, info = {}, {}, {}
     for r in rows:
         if r["action"] != "write":
-            out[r["part"]] = {"auto": r["action"], "error": r["reason"] or None, "arrangement": r["arrangement"]}
+            out[r["part"]] = {"auto": r["action"], "arrangement": r["arrangement"]}
+            if r["reason"]:
+                out[r["part"]]["error"] = r["reason"]
             continue
         part = r["part"]
         payloads[part], names[part] = r["data"], r["entry"]["name"]
@@ -554,7 +556,10 @@ def process_five_fret(path_str: str) -> dict:
                     pr = res["parts"][part]
                     if "status" in got:
                         pr["real_status"] = pr["status"]
+                    err = got.pop("error", None)
                     pr.update(got)
+                    if err:     # added to the search's own error, never replacing it
+                        pr["error"] = f"{pr['error']}; auto: {err}" if pr.get("error") else err
                 if not passed and any(pr.get("status") in ("auto", "would-auto") for pr in res["parts"].values()):
                     res["status"] = "auto" if a.write else "would-auto"
         if passed:
@@ -666,11 +671,13 @@ def parse_args(argv=None):
 
 
 def _retrying(prev, retry) -> bool:
-    """The song's state status, or any of its per-part statuses, is one of ``retry``."""
+    """The song's state status, or any of its per-part statuses (or, for an --auto part, what the
+    real-chart search found: ``real_status``), is one of ``retry``."""
     if not prev:
         return False
     return prev.get("status") in retry or any(
-        isinstance(pr, dict) and pr.get("status") in retry for pr in (prev.get("parts") or {}).values())
+        isinstance(pr, dict) and (pr.get("status") in retry or pr.get("real_status") in retry)
+        for pr in (prev.get("parts") or {}).values())
 
 
 DONE_PART = ("joined", "upgraded", "auto")     # best first
