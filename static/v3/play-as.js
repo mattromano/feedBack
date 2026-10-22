@@ -15,8 +15,10 @@
  * feedBack.ui.playSongAs(filename, { arrangement?, viz? }) is how an entry
  * plays. A `viz` (e.g. 'five_fret', 'drums') is set for that play only: the
  * viewer's own pick comes back on the next play that isn't a Play-as one, so
- * a 5-fret play never sticks to later songs. A play without `viz` puts a
- * non-guitar view back to Auto (a guitar view the viewer picked stays).
+ * a 5-fret play never sticks to later songs. `resetView` (the Real
+ * instrument entries) also puts a non-guitar view back to Auto, so a guitar
+ * part never lands on, say, the 5-Fret view; a plain Play keeps the
+ * viewer's pick, as a card play does.
  *
  * Browser-global (window.v3PlayAs, feedBack.ui.playSongAs); the pure parts
  * are CommonJS-exported for node tests.
@@ -74,7 +76,7 @@
         }
 
         /** Before a Play-as play of `filename` (as passed to playSong). */
-        function beforePlay(filename, viz) {
+        function beforePlay(filename, viz, resetView) {
             ownPlay = filename;
             if (viz) {
                 const st = deps.load();
@@ -89,7 +91,7 @@
                 return;
             }
             restore();
-            if (!GUITAR_VIEWS.includes(deps.current())) deps.setViz('auto');
+            if (resetView && !GUITAR_VIEWS.includes(deps.current())) deps.setViz('auto');
         }
 
         /** song:loading: any play but ours ends a forced view. */
@@ -134,12 +136,12 @@
         sm.on('song:loading', (e) => keeper.onSongLoading(e && e.detail ? e.detail.filename : null));
     }
 
-    /** Play `filename` (unencoded) as one part with one view; see the header. */
+    /** Play `filename` (unencoded) as one part with one view: opts { arrangement?, viz?, resetView? }; see the header. */
     function playSongAs(filename, opts) {
         if (!filename || typeof w.playSong !== 'function') return false;
         const o = opts || {};
         const target = encodeURIComponent(filename);
-        keeper.beforePlay(target, typeof o.viz === 'string' && o.viz ? o.viz : null);
+        keeper.beforePlay(target, typeof o.viz === 'string' && o.viz ? o.viz : null, o.resetView === true);
         if (Number.isInteger(o.arrangement)) w.playSong(target, o.arrangement);
         else w.playSong(target);
         return true;
@@ -161,7 +163,7 @@
             placement: PLACEMENT, order: 10,
             applies: (song) => !!(song && song.filename),
             variants: (song) => realArrangements(song).map((a) => ({ key: String(a.index), label: a.name })),
-            run: (song, ctx) => playSongAs(song.filename, { arrangement: parseInt(ctx.variant, 10) }),
+            run: (song, ctx) => playSongAs(song.filename, { arrangement: parseInt(ctx.variant, 10), resetView: true }),
         });
     }
 
@@ -207,7 +209,9 @@
 
         // Place at the pointer, else under the anchor; kept on screen.
         let x = 16, y = 16;
-        if (o.pos && Number.isFinite(o.pos.x)) { x = o.pos.x; y = o.pos.y; }
+        // Just off the pointer: a double-click's second press must land on
+        // the row (it closes the menu and the row's dblclick plays).
+        if (o.pos && Number.isFinite(o.pos.x)) { x = o.pos.x + 8; y = o.pos.y + 8; }
         else if (o.anchor && o.anchor.getBoundingClientRect) { const b = o.anchor.getBoundingClientRect(); x = b.left + 24; y = b.bottom; }
         const vw = w.innerWidth, vh = w.innerHeight;
         el.style.left = Math.max(8, Math.min(x, vw - el.offsetWidth - 8)) + 'px';
@@ -227,6 +231,9 @@
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault(); e.stopPropagation();
                 focusAt(at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1));
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                // The screen's own grid nav must not move focus out of the menu.
+                e.preventDefault(); e.stopPropagation();
             } else if (e.key === 'Home' || e.key === 'End') {
                 e.preventDefault(); e.stopPropagation();
                 focusAt(e.key === 'Home' ? 0 : b.length - 1);
@@ -236,12 +243,24 @@
             }
         }
         function onDown(e) { if (!el.contains(e.target)) finish(false); }
+        // Focus leaving the menu, another screen or a song starting closes it.
+        function onFocusOut(e) { if (e.relatedTarget && !el.contains(e.relatedTarget)) finish(false); }
+        const offBus = [];
+        if (typeof sm.on === 'function' && typeof sm.off === 'function') {
+            ['screen:changed', 'song:loading'].forEach((t) => {
+                const fn = () => finish(false);
+                sm.on(t, fn);
+                offBus.push(() => sm.off(t, fn));
+            });
+        }
         function finish(refocus) {
             if (!openMenu || openMenu.el !== el) return;
             openMenu = null;
             doc.removeEventListener('keydown', onKey, true);
             doc.removeEventListener('mousedown', onDown, true);
             w.removeEventListener('resize', close);
+            el.removeEventListener('focusout', onFocusOut);
+            offBus.forEach((off) => off());
             el.remove();
             if (refocus && returnTo && returnTo.isConnected && typeof returnTo.focus === 'function') returnTo.focus();
         }
@@ -262,6 +281,7 @@
         doc.addEventListener('keydown', onKey, true);
         doc.addEventListener('mousedown', onDown, true);
         w.addEventListener('resize', close);
+        el.addEventListener('focusout', onFocusOut);
         openMenu = { el, close: () => finish(false) };
         focusAt(0);
         return el;

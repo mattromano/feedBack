@@ -80,11 +80,14 @@ test('a view the viewer picked is never undone', () => {
     assert.equal(changed.st.viz, 'highway_3d');
 });
 
-test('a plain play puts a non-guitar view back to Auto and leaves guitar views alone', () => {
+test('a plain play keeps the viewer\'s view; a real-instrument play puts a non-guitar view back to Auto', () => {
+    const plain = keeper('piano');
+    plain.k.beforePlay('a', null);
+    assert.deepEqual(plain.st.calls, []);
     const piano = keeper('piano');
-    piano.k.beforePlay('a', null);
+    piano.k.beforePlay('a', null, true);
     assert.equal(piano.st.viz, 'auto');
     const hw = keeper('highway_3d');
-    hw.k.beforePlay('a', null);
+    hw.k.beforePlay('a', null, true);
     assert.deepEqual(hw.st.calls, []);
 });
