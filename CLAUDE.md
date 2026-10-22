@@ -642,6 +642,12 @@ of a code comment.)
 - **Type hints** — used sparingly (`Path | None`, `dict`, `list`)
 - **Docstrings** — minimal; code is self-documenting
 
+### `/api/library` filters (5-fret)
+
+| Param | Values | Notes |
+|-------|--------|-------|
+| `five_fret` | comma list, e.g. `guitar,bass` | Every valid entry must match (AND); invalid entries are dropped, duplicates collapse, none valid = no filter. Entry: `any`, `any:chart\|auto` (any part from that source), `guitar\|rhythm\|bass` (chart or auto), or `<inst>:chart\|auto`. Items carry `five_fret_parts` (`["guitar:chart", ...]`) and `five_fret_only` (true when the pack's only arrangements are 5-fret parts and it has no drum tab). |
+
 ## Testing
 
 ```bash

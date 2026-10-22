@@ -64,6 +64,7 @@ test('list parses vendor/product', () => {
     assert.deepEqual({ ...list[0] }, {
         index: 0, id: 'Xbox 360 Controller (STANDARD GAMEPAD Vendor: 045e Product: 02ea)',
         mapping: 'standard', vendor: '045e', product: '02ea', connected: true, claimedBy: null,
+        controllerKey: 'Xbox 360 Controller (STANDARD GAMEPAD Vendor: 045e Product: 02ea)#1',
     });
     assert.equal(list[1].index, 2);
     assert.equal(list[1].vendor, '1430');
@@ -365,4 +366,129 @@ test('registers the capability owner with inspect and list-sources', async () =>
     assert.equal(r.outcome, 'handled');
     const snap = JSON.stringify(r);
     assert.match(snap, /five_fret/, 'snapshot reports the claim owner');
+});
+
+// ── watch: passive listener on unclaimed controllers ────────────────────────
+
+test('watch reports button and axis changes on unclaimed pads only', () => {
+    const g = load();
+    g.setPads([pad(0, { buttons: [0, 0, 0, 0] }), pad(1, { id: 'Other Pad', buttons: [0, 0] })]);
+    const events = [];
+    const off = g.api.watch((ev) => events.push({ ...ev }));
+    assert.equal(typeof off, 'function');
+    assert.equal(g.polling(), true, 'a watcher starts polling');
+    g.tick();
+    assert.deepEqual(events, [], 'no events without change');
+
+    g.setClock(2000);
+    g.setPads([pad(0, { buttons: [1, 0, 0, 0], axes: [0.01, 0] }), pad(1, { id: 'Other Pad', buttons: [0, 0] })]);
+    g.tick();
+    assert.deepEqual(events, [{ pad: 0, type: 'button', index: 0, value: 1, pressed: true, t: 2 }]);
+
+    events.length = 0;
+    g.setPads([pad(0, { buttons: [1, 0, 0, 0], axes: [0.015, -0.5] }), pad(1, { id: 'Other Pad', buttons: [0, 1] })]);
+    g.tick();
+    assert.deepEqual(events, [
+        { pad: 0, type: 'axis', index: 1, value: -0.5, t: 2 },
+        { pad: 1, type: 'button', index: 1, value: 1, pressed: true, t: 2 },
+    ], 'sub-0.02 axis change ignored; each event names its pad');
+    off();
+});
+
+test('watch is not a claim: claimCount stays 0', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    const off = g.api.watch(() => {});
+    assert.equal(g.api.claimCount(), 0);
+    assert.equal(g.api.isClaimed(0), false);
+    assert.equal(g.api.list()[0].claimedBy, null);
+    assert.equal(g.api.claim(0, 'five_fret') !== null, true, 'a watched pad can still be claimed');
+    off();
+});
+
+test('a claimed pad stops reaching watchers; after release it resumes from a fresh baseline', () => {
+    const g = load();
+    g.setPads([pad(0, { buttons: [0, 0] })]);
+    const events = [];
+    g.api.watch((ev) => events.push({ ...ev }));
+    g.tick();
+    const h = g.api.claim(0, 'five_fret');
+    g.setPads([pad(0, { buttons: [1, 0] })]);
+    g.tick();
+    assert.deepEqual(events, [], 'claimed pad is not watched');
+    g.setPads([pad(0, { buttons: [1, 1] })]);
+    h.release();
+    g.tick();
+    assert.deepEqual(events, [], 'inputs held at release do not fire');
+    g.setPads([pad(0, { buttons: [0, 1] })]);
+    g.tick();
+    assert.deepEqual(events.map((e) => [e.index, e.pressed]), [[0, false]], 'changes after the baseline fire');
+});
+
+test('non-standard mapping pads are watched', () => {
+    const g = load();
+    const guitar = { id: 'Guitar Hero Guitar (Vendor: 1430 Product: 4748)', mapping: '' };
+    g.setPads([pad(0, { ...guitar, buttons: [0, 0] })]);
+    const events = [];
+    g.api.watch((ev) => events.push({ ...ev }));
+    g.tick();
+    g.setPads([pad(0, { ...guitar, buttons: [0, 1] })]);
+    g.tick();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].index, 1);
+});
+
+test('a pad that connects after watching starts is baselined, not fired', () => {
+    const g = load();
+    g.setPads([]);
+    const events = [];
+    g.api.watch((ev) => events.push({ ...ev }));
+    g.tick();
+    g.setPads([pad(0, { buttons: [1, 0] })]);
+    g.tick();
+    assert.deepEqual(events, [], 'a button held at connect does not fire');
+    g.setPads([pad(0, { buttons: [1, 1] })]);
+    g.tick();
+    assert.equal(events.length, 1);
+});
+
+test('unsubscribing the last watcher with no claims stops polling', () => {
+    const g = load();
+    g.setPads([pad(0)]);
+    const a = g.api.watch(() => {});
+    const b = g.api.watch(() => {});
+    g.tick();
+    a();
+    g.tick();
+    assert.equal(g.polling(), true, 'still polling for the other watcher');
+    b();
+    g.tick();
+    assert.equal(g.polling(), false);
+    const h = g.api.claim(0, 'x');
+    const off = g.api.watch(() => {});
+    off();
+    g.tick();
+    assert.equal(g.polling(), true, 'a claim keeps polling after watchers leave');
+    h.release();
+    g.tick();
+    assert.equal(g.polling(), false);
+    assert.equal(g.api.watch('nope')(), undefined, 'non-function watcher is a no-op');
+    assert.equal(g.polling(), false);
+});
+
+test('list carries controllerKey for claimed and unclaimed pads; identical ids are #1 and #2', () => {
+    const g = load();
+    g.setPads([pad(0), pad(1), pad(2, { id: 'Other Pad' }), pad(3, { connected: false })]);
+    let list = g.api.list();
+    const id = pad(0).id;
+    assert.equal(list[0].controllerKey, `${id}#1`);
+    assert.equal(list[1].controllerKey, `${id}#2`);
+    assert.equal(list[2].controllerKey, 'Other Pad#1');
+    assert.equal(list[3].controllerKey, null, 'disconnected pad has no key');
+    const h = g.api.claim(1, 'p2');
+    assert.equal(h.controllerKey, `${id}#2`);
+    list = g.api.list();
+    assert.equal(list[1].controllerKey, h.controllerKey, 'claimed pad reports its claim key');
+    assert.equal(list[0].controllerKey, `${id}#1`);
+    assert.equal(g.api.version, 1);
 });

@@ -1708,6 +1708,10 @@ def extract_meta(path: Path) -> dict:
     # arrangement index 0 stays valid and aligned.
     if not arrangements and not has_drum_tab and five_fret_parts:
         arrangements.append({"index": 0, "name": five_fret_parts[0][1], "notes": 0})
+    five_fret_only = bool(five_fret_parts) and not has_drum_tab and all(
+        isinstance(e, dict) and str(e.get("type") or "").strip().lower() == "five_fret"
+        for e in arr_list
+    )
     tuning_offsets = _tuning_for_meta(arr_list)
     # Per-role tunings alongside the song-level one, so the library can answer
     # for whichever arrangement the player actually plays.
@@ -1761,6 +1765,10 @@ def extract_meta(path: Path) -> dict:
         "has_drum_tab": has_drum_tab,
         # ["guitar:chart", "bass:auto", ...] — the library's five_fret filter.
         "five_fret_parts": list(dict.fromkeys(tag for tag, _name in five_fret_parts)),
+        # True when the pack has 5-fret parts and nothing else to play: every
+        # manifest arrangement is `type: five_fret` and there is no drum tab.
+        # Its note-less placeholder arrangement is not a real guitar part.
+        "five_fret_only": five_fret_only,
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,

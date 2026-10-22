@@ -7,7 +7,10 @@
 // same reason `midi-input` is: an input plane outlives any one feature.
 //
 // One owner per controller. Polling runs on requestAnimationFrame only while
-// at least one claim exists, and its steady state allocates nothing. A claimed
+// at least one claim or watcher exists, and its steady state allocates nothing.
+// `watch(fn)` is a passive listener on controllers nobody has claimed (any
+// mapping): it hears changes without taking a controller, so core's menus keep
+// working. A watcher is not a claim and does not move `claimCount()`. A claimed
 // controller that unplugs keeps its handle (silent). When a controller with the
 // same `id` is back (its old slot preferred, else any free slot holding an
 // identical controller), events resume on that handle. `claimCount()` lets
@@ -37,6 +40,12 @@
     // iterates them in place and a listener that adds/removes mid-dispatch
     // cannot disturb the loop.
     let changeListeners = [];
+    // Passive watchers (copy-on-write, like the other listener arrays) and the
+    // per-slot last-seen state they diff against: slot → { id, base, pressed,
+    // values, axes }. The arrays are reused, so steady-state polling allocates
+    // nothing; a slot's state is dropped when its pad leaves or watching stops.
+    let watchers = [];
+    const watchState = new Map();
     // slot → change type a poll tick already announced, so the browser's own
     // connect/disconnect event for the same transition is not announced twice.
     const pollAnnounced = new Map();
@@ -182,9 +191,63 @@
         }
     }
 
+    function _polling() { return claimList.length > 0 || watchers.length > 0; }
+
+    // Record a pad's current state as the watch baseline (nothing fires).
+    function _watchBaseline(st, p) {
+        st.id = p.id;
+        st.base = true;
+        const buttons = p.buttons || NO_PADS;
+        for (let i = 0; i < buttons.length; i++) {
+            st.pressed[i] = !!(buttons[i] && buttons[i].pressed);
+            st.values[i] = _buttonValue(buttons[i]);
+        }
+        const axes = p.axes || NO_PADS;
+        for (let i = 0; i < axes.length; i++) st.axes[i] = Number(axes[i]) || 0;
+    }
+
+    // Diff one unclaimed pad against its watch state, in place.
+    function _watchDiff(st, index, p, t) {
+        const buttons = p.buttons || NO_PADS;
+        for (let i = 0; i < buttons.length; i++) {
+            const b = buttons[i];
+            const pressed = !!(b && b.pressed);
+            const value = _buttonValue(b);
+            if (pressed !== !!st.pressed[i] || Math.abs(value - (st.values[i] || 0)) >= AXIS_EPSILON) {
+                st.pressed[i] = pressed;
+                st.values[i] = value;
+                _call(watchers, { pad: index, type: 'button', index: i, value, pressed, t });
+            }
+        }
+        const axes = p.axes || NO_PADS;
+        for (let i = 0; i < axes.length; i++) {
+            const v = Number(axes[i]) || 0;
+            if (Math.abs(v - (st.axes[i] || 0)) >= AXIS_EPSILON) {
+                st.axes[i] = v;
+                _call(watchers, { pad: index, type: 'axis', index: i, value: v, t });
+            }
+        }
+    }
+
+    function _watchPads(pads, t) {
+        for (let i = 0; i < pads.length; i++) {
+            const p = pads[i];
+            let st = watchState.get(i);
+            if (!_live(p)) { if (st) st.base = false; continue; }
+            if (_claimAt(i, pads)) { if (st) st.base = false; continue; }
+            if (!st) {
+                st = { id: null, base: false, pressed: [], values: [], axes: [] };
+                watchState.set(i, st);
+            }
+            // New pad, a different pad in the slot, or just released: baseline.
+            if (!st.base || st.id !== p.id) { _watchBaseline(st, p); continue; }
+            _watchDiff(st, i, p, t);
+        }
+    }
+
     function _poll() {
         rafPending = false;
-        if (claimList.length === 0) return;
+        if (!_polling()) return;
         const pads = _pads();
         if (!_allInPlace(pads)) {
             const changes = _reconcile(pads);
@@ -201,11 +264,12 @@
             const p = pads[c.index];
             if (_live(p)) _diff(c, p, t);
         }
+        if (watchers.length) _watchPads(pads, t);
         _schedule();
     }
 
     function _schedule() {
-        if (rafPending || claimList.length === 0) return;
+        if (rafPending || !_polling()) return;
         const raf = window.requestAnimationFrame;
         if (typeof raf !== 'function') return;
         rafPending = true;
@@ -249,6 +313,8 @@
                 product,
                 connected: !!p.connected,
                 claimedBy: c ? c.owner : null,
+                // The claim's key, else what claim(index) would assign now.
+                controllerKey: c ? c.key : (_live(p) ? _keyFor(pads, i) : null),
             });
         }
         return out;
@@ -299,6 +365,29 @@
         return c.handle;
     }
 
+    // Passive listener for changes on connected, unclaimed controllers (any
+    // mapping). Baselines are taken now, when a pad connects and when its claim
+    // is released, so a held input never fires. Returns an unsubscribe.
+    function watch(fn) {
+        if (typeof fn !== 'function') return () => {};
+        if (watchers.length === 0) {
+            const pads = _pads();
+            for (let i = 0; i < pads.length; i++) {
+                const p = pads[i];
+                if (!_live(p) || _claimAt(i, pads)) continue;
+                const st = { id: null, base: false, pressed: [], values: [], axes: [] };
+                _watchBaseline(st, p);
+                watchState.set(i, st);
+            }
+        }
+        watchers = watchers.concat(fn);
+        _schedule();
+        return () => {
+            watchers = watchers.filter((l) => l !== fn);
+            if (watchers.length === 0) watchState.clear();
+        };
+    }
+
     function isClaimed(index) {
         return !!_claimAt(index, _pads());
     }
@@ -338,6 +427,7 @@
         claim,
         isClaimed,
         claimCount: () => claimList.length,
+        watch,
         on,
         // Test/diagnostic hook: how many times the slow reconcile path ran.
         _reconcileCount: () => reconcileCount,

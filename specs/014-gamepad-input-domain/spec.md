@@ -45,7 +45,9 @@ would depend on that plugin. The domain is `core.gamepad-input`, as
 
 ### In-page API (`window.feedBack.gamepadInput`, `version: 1`)
 
-- `list()` → `[{ index, id, mapping, vendor, product, connected, claimedBy }]`.
+- `list()` → `[{ index, id, mapping, vendor, product, connected, claimedBy, controllerKey }]`.
+  `controllerKey` is the claim's key when claimed, else what `claim(index)` would
+  assign now (`id#n`); `null` for a disconnected controller.
   `vendor`/`product` are parsed from `id` (`Vendor: 045e Product: 02ea`, bare or
   in parentheses), lower-case hex, else `null`.
 - `claim(index, ownerId)` → handle, or `null` when `index` is not a
@@ -57,6 +59,14 @@ would depend on that plugin. The domain is `core.gamepad-input`, as
   t }` with `t = performance.now() / 1000`, fired only on change. Axis changes
   (and analog button value changes) smaller than 0.02 against the last reported
   value are ignored.
+- `watch(fn)` → unsubscribe function. A passive listener for connected,
+  **unclaimed** controllers of any mapping; it does not claim, so `claimCount()`
+  and core's menus are unaffected. `fn(ev)` gets `{ pad, type: 'button'|'axis',
+  index, value, pressed (buttons only), t }` (`pad` is the controller's slot),
+  on change only, with the same 0.02 threshold. A pad's baseline is taken when
+  watching starts, when it connects and when its claim is released, so held
+  inputs never fire. Polling runs while there is a watcher or a claim.
+  Consumers feature-check `typeof gi.watch === 'function'`; `version` stays 1.
 - `isClaimed(index)`, `claimCount()`.
 - `on('change', fn)` → unsubscribe function.
 
@@ -68,12 +78,14 @@ the claim.
 
 ### Polling
 
-Polling runs on `requestAnimationFrame` only while at least one claim exists;
-releasing the last claim lets the loop lapse. The steady state allocates
+Polling runs on `requestAnimationFrame` while at least one claim or watcher
+exists; when the last of both goes, the loop lapses. The steady state allocates
 nothing: values are compared in place, the reconcile pass runs only when a
 claim is not connected in its own slot, and listener lists are copy-on-write so
 dispatch never copies them. A claim's baseline is the
-controller's state at claim time, so held inputs do not fire on claim.
+controller's state at claim time, so held inputs do not fire on claim. A
+watched pad's baseline is taken when watching starts, when the pad connects and
+when a claim on it is released, so held inputs do not fire on watch either.
 
 ### Disconnect and reconnect
 
