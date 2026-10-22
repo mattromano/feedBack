@@ -291,6 +291,12 @@
     // the session through pickState (core-internal).
     const pickApi = () => (sm && sm.library && sm.library.pickState) || null;
     function pickOn() { const p = pickApi(); return !!(p && p.session()); }
+    // ── Play modes (feedBack.ui.playModeState, static/v3/play-modes.js) ──────
+    // A registered mode (e.g. RockHeroSmith) adds a button to the cards it can
+    // play. The epoch rides _cardSig so cards rendered before the mode
+    // registered are rebuilt with the button on ui:play-modes-changed.
+    const playModeState = () => (sm && sm.ui && sm.ui.playModeState) || null;
+    let playModesEpoch = 0;
     function pickSelectedKey() { const p = pickApi(); const s = p && p.session(); return (s && s.selected && s.selected.filename) || ''; }
     // Is this row the pick's selection? A grouped card shows (and plays) its
     // display_chart, so that's the chart it's keyed on. An empty key means
@@ -966,6 +972,11 @@
             : '';
         const arrChips = arrChipsHtml(shown);
         const chartsChip = chartsChipHtml(song);
+        // Play-mode buttons (chips row, outside the play hitbox). Asked about the
+        // displayed chart; none while picking or selecting.
+        const pms = playModeState();
+        const modeActs = (pms && window.v3PlayModes && !pickOn() && !state.selectMode) ? pms.cardActions(shown) : [];
+        const modeBtns = modeActs.length ? window.v3PlayModes.cardButtonsHtml(modeActs, esc) : '';
         // Plugin-contributed card actions placed 'inline' (in the hover action
         // row) or 'overlay' (centered over the art). Menu-placed actions live in
         // the ⋮ menu (openCardMenu); rendering these here means plugins using
@@ -1016,7 +1027,7 @@
             // Always emit the chip row (even when empty) at a FIXED single-line
             // height — uniform card height is what makes the windowed grid's
             // absolute-position math exact (.v3-card-chips in v3.css).
-            '<div class="v3-card-chips flex gap-1 mt-1">' + chartsChip + arrChips + '</div>' +
+            '<div class="v3-card-chips flex gap-1 mt-1">' + modeBtns + chartsChip + arrChips + '</div>' +
             '</div>';
     }
 
@@ -1586,6 +1597,15 @@
                 e.stopPropagation();
                 openChartsDrawer(e.currentTarget.getAttribute('data-charts'), song);
             });
+            // Play-mode button → the mode, with the displayed chart. Never a card
+            // play: the chips row sits outside [data-v3-play], and stopPropagation
+            // keeps it that way.
+            el.querySelectorAll('[data-play-mode-card]').forEach((b) => b.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const p = playModeState();
+                if (p) p.runCardAction(b.getAttribute('data-play-mode-card'), playTarget);
+            }));
             // "No match" badge → straight into the Fix-metadata popup for this
             // song (the batch → fix handoff). stopPropagation so it doesn't also
             // trigger the card's play. Follows the displayed chart, like the menu.
@@ -2144,7 +2164,8 @@
     // otherwise the node is reused as-is across window slides.
     function _cardSig(i) {
         return (state.songs[i] ? 'r' : 's') + (state.selectMode ? '1' : '0')
-            + (pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '');
+            + (pickOn() ? (pickIsSelected(state.songs[i]) ? 'P' : 'p') : '')
+            + 'm' + playModesEpoch;
     }
 
     function _buildCardNode(i) {
@@ -4763,6 +4784,13 @@
         // badge repaint, but its own event so unscored plays don't fire the
         // scored-run reactions that listen to stats:recorded.
         sm.on('stats:play-counted', onStatsChanged);
+        // A play mode registered or went away → every card's button set may
+        // change. Bump the epoch (part of _cardSig) and force a window re-render
+        // so already-rendered cards are rebuilt.
+        sm.on('ui:play-modes-changed', () => {
+            playModesEpoch++;
+            if (songsActive()) { state.winRange = null; requestWindowRender(); }
+        });
         // A library scan (rescan / full rescan from Settings, or a DLC-folder
         // change) can add or remove songs while this grid is cached — the
         // Settings rescan only refreshed the classic library, so the v3 grid
