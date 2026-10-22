@@ -1601,7 +1601,7 @@ function requestExitSong() {
 window.requestExitSong = requestExitSong;
 if (window.feedBack) window.feedBack.requestExitSong = requestExitSong;
 
-// Pause the song under a plugin overlay and resume it afterwards. Build-a-Band's
+// Pause the song under a plugin overlay and resume it afterwards. RockHeroSmith's
 // Settings overlay uses these. They mirror the exit-confirm's pause and Stay
 // (_openExitConfirm below): pause cancels any count-in and pauses a playing
 // song; resume plays only what was playing, only on the same song

@@ -1,4 +1,4 @@
-// Build-a-Band: a secondary highway (the drum lane) streams its own song
+// RockHeroSmith: a secondary highway (the drum lane) streams its own song
 // over its own WebSocket but must not rebroadcast global song state —
 // window.feedBack.currentSong, song:loaded, beats:loaded, song:ready all
 // belong to the main player. connect(url, { secondary: true }) opts out.

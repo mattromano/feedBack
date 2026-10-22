@@ -1,4 +1,4 @@
-// Build-a-Band: fret-number labels scale independently of note size so they stay
+// RockHeroSmith: fret-number labels scale independently of note size so they stay
 // readable in a narrower lane. labelFont() (static/js/highway-draw.js) is the single
 // source of the label font; highway.setLabelScale / setContainer (static/highway.js).
 'use strict';

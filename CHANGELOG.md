@@ -308,6 +308,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in that mode.
 
 ### Changed
+- **Sidebar: RockHeroSmith** (formerly Build-a-Band, plugin id `rockherosmith`) is the first HOME
+  item, right under Home.
 - **Artist "Play all" runs the discography in release order.** The artist page's
   Play all used the Songs list order — alphabetical by title — so a whole-artist
   session hopped between albums at random. `GET /api/artist/{name}/page` now

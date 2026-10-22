@@ -1951,7 +1951,7 @@ function createHighway() {
 
         // Fret-number / note-label scale, 0.75–2.5. Drawn next frame; no resize needed.
         // `{ persist: false }` applies the scale for this session only, leaving the
-        // saved solo-play preference alone (Build-a-Band keeps its own per-lane value).
+        // saved solo-play preference alone (RockHeroSmith keeps its own per-lane value).
         setLabelScale(f, opts) {
             const v = Number(f);
             if (!Number.isFinite(v)) return;
@@ -2078,7 +2078,7 @@ function createHighway() {
             }));
         },
 
-        // opts.secondary: this highway is an extra lane (Build-a-Band's drum
+        // opts.secondary: this highway is an extra lane (RockHeroSmith's drum
         // lane), not the main player. It still parses and draws its stream, but
         // must not rebroadcast global song state — window.feedBack.currentSong,
         // song:loaded, beats:loaded, song:ready all belong to the main player,

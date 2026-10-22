@@ -1,6 +1,6 @@
 'use strict';
 // A library pick that is the FIRST Songs visit of a session (the band flow:
-// launch, open Build-a-Band, "Choose a song"). The pick fires
+// launch, open RockHeroSmith, "Choose a song"). The pick fires
 // library:pick-changed while Songs is still unbuilt, which marks the grid
 // dirty. That dirty flag must not short-circuit the first render() (blank
 // library), nothing may write the default prefs over the saved ones, and a

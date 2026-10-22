@@ -1,4 +1,4 @@
-// pauseForOverlay / resumeAfterOverlay: a plugin overlay (Build-a-Band's
+// pauseForOverlay / resumeAfterOverlay: a plugin overlay (RockHeroSmith's
 // Settings over the song) pauses the song, cancelling any count-in, and later
 // resumes it through the song count-in, the way the exit-confirm Stay does.
 //
