@@ -253,3 +253,45 @@ const { item, filters, reason } = await window.feedBack.library.pick({
   { active: true }`; each end emits `library:pick-changed { active: false }`.
 - `feedBack.library.pickState` is the session handle the Songs screen uses. It
   is **core-internal**: plugins call `pick` only.
+
+## Play modes (feedBack.ui.registerPlayMode)
+
+A plugin can add a way to play. `feedBack.ui.registerPlayMode(spec)` returns an
+`unregister()` function; `feedBack.ui.playModes()` lists the registered modes
+(sorted by `order`, then `id`). Registering or unregistering emits
+`ui:play-modes-changed { ids }`.
+
+```js
+const off = feedBack.ui.registerPlayMode({
+  id: 'my-mode',               // required, unique (a duplicate is ignored with a warning)
+  label: 'My Mode',            // required
+  startLabel: 'Play My Mode',  // hero button text (default 'Play ' + label)
+  order: 100,                  // sort key (default 100)
+  renderHero(artEl) {},        // fills the hero half's art element
+  start() {},                  // launches the mode
+  startPress: false,           // true: Press Start on a gamepad launches this mode
+  tour: { title: '…', content: '…' },
+  cardAction: {
+    label: 'My Mode',          // card button text (default: the mode label)
+    title: 'Play with My Mode',
+    isAvailable: (song) => true,  // default () => false; a throw counts as false
+    run: (song) => {},
+  },
+});
+```
+
+What core renders:
+
+- **Split hero.** A mode with both `renderHero` and `start` (the first in order)
+  puts a second half beside the solo hero on Home, with a button labelled
+  `startLabel`.
+- **Card button.** Each library card gets a `cardAction.label` button in the
+  chips row when `cardAction.isAvailable(song)` is `true`; clicking it calls
+  `cardAction.run(song)`.
+- **Tour step.** A mode with a `tour` adds a step to the app tour.
+- **Press Start.** When any mode sets `startPress`, `gamepad:start-pressed`
+  launches the mode.
+
+With no mode registered nothing changes: Home shows the solo hero, cards have
+no extra button and the tour and Press Start behave as before.
+`feedBack.ui.playModeState` is the handle core uses and is **core-internal**.

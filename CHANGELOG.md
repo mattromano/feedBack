@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`feedBack.ui.registerPlayMode`**: plugins add a way to play (Home hero half, library card button,
+  Press Start, tour step).
 - **`drums_library.py --from-drums`** (with five-fret `--parts`): a fast, offline pass that
   tries only each song's own drum chart from the local cache (`~/.cache/slopsmith-drums/chorus|sng`,
   Windows source paths remapped by folder name) with the drum join's warp; no search, no
