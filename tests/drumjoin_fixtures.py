@@ -86,6 +86,53 @@ def drum_audio(hits, dur, sr=SR, seed=0, noise=0.0):
     return y
 
 
+def guitar_audio(notes, dur, sr=SR, seed=0, noise=0.0, decay=0.15):
+    """Mono float32 plucks: notes = (time, frets) with the five-fret bitmask (bit0 green ..
+    bit4 orange, 0 = open). Each fret bit sounds 110 Hz * 2^(bit/12) (open: 82.4 Hz) with two
+    overtones, decaying over ``decay`` s, after a 3 ms pick click; a chord's frets are summed."""
+    rng = np.random.default_rng(seed)
+    y = np.zeros(int(dur * sr), dtype=np.float32)
+    n = int(decay * 5 * sr)
+    x = np.arange(n) / sr
+    env = np.exp(-x / decay)
+    click = np.zeros(n)
+    k = int(0.003 * sr)
+    click[:k] = rng.standard_normal(k) * np.linspace(1, 0, k)
+    for t, frets in notes:
+        a = int(round(t * sr))
+        if not 0 <= a < len(y):
+            continue
+        fs = [110.0 * 2 ** (b / 12) for b in range(5) if frets >> b & 1] or [82.4]
+        amp = 0.6 + 0.3 * rng.random()
+        s = 0.3 * click.copy()
+        for f in fs:
+            ph = rng.uniform(0, 2 * np.pi)
+            s += sum(w * np.sin(2 * np.pi * f * h * x + ph) for h, w in ((1, 1.0), (2, 0.5), (3, 0.3))) * env
+        b = min(len(y), a + n)
+        y[a:b] += (0.4 * amp * s[:b - a] / len(fs) ** 0.5).astype(np.float32)
+    if noise:
+        y += noise * rng.standard_normal(len(y)).astype(np.float32)
+    return y
+
+
+def five_fret_notes(n_measures, seed=0, tpq=TPQ, base=96):
+    """Aperiodic eighths and quarters for a five-fret part track (Expert notes base..base+4,
+    96-100 by default; Hard is 84): some chords, some sustains. [(tick, MIDI note, velocity, length)]."""
+    rng = np.random.default_rng(seed)
+    e = tpq // 2
+    notes, t, end = [], 0, n_measures * 8 * e
+    while t < end:
+        step = e if rng.random() < 0.6 else 2 * e
+        if rng.random() < 0.85:
+            frets = {int(rng.integers(0, 5))}
+            if rng.random() < 0.2:
+                frets.add(int(rng.integers(0, 5)))
+            length = step - 40 if step == 2 * e and rng.random() < 0.3 else 10   # sustains on quarters only
+            notes += [(t, base + f, 100, length) for f in sorted(frets)]
+        t += step
+    return notes
+
+
 def write_audio(path: Path, y, sr=SR):
     """Write float audio as OGG (via ffmpeg) or WAV depending on suffix."""
     import soundfile as sf

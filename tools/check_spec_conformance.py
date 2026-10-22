@@ -58,6 +58,7 @@ READERS = [
     "lib/enrichment.py",
     "lib/songmeta.py",
     "lib/gp2notation.py",        # rewrites manifest.yaml; stamps feedpak_version
+    "lib/fivefretjoin.py",       # offline tool: writes five_fret entries; stamps feedpak_version
     "lib/routers/ws_highway.py", # reads `authors` off a feedpak manifest
     "lib/routers/chart.py",      # Get-info panel: binds `m = load_manifest(...)`
     "lib/routers/song.py",       # enrichment gap-fill: reads the manifest directly
