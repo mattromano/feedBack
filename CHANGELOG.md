@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outright is logged and the next one tried. The state is per `--parts` selection (a
   run with other parts needs its own `--state` or `--redo`, which replaces the song's
   entry); `--retry` also matches per-part statuses.
+- **`drums_library.py --parts ... --auto`** gives parts that got no real chart an
+  auto chart made from the matching real-guitar arrangement by the five-fret
+  auto-charter, written into the pack with the same backup, dry-run and state rules
+  (status `auto` / `would-auto`). A real chart part is never replaced; an older
+  auto part is, an equal one is kept. `--auto` needs five-fret `--parts`.
 - **Five-fret auto-charter (offline, opt-in).** `scripts/five_fret_autochart.py`
   makes five-fret parts from a pack's Rocksmith guitar, rhythm and bass
   arrangements (`PACK... | --library DIR [--only REGEX] [--parts ...]`). It is

@@ -39,6 +39,17 @@ The state is per --parts selection: a song it lists as finished is skipped whate
 run asks for, so a run with different parts needs its own --state (or --redo). --redo replaces a
 song's state entry with that run's parts; --retry STATUS also matches per-part statuses (e.g.
 --retry flagged reruns a song whose guitar joined but bass flagged, for the bass only).
+
+--auto (with five-fret --parts only, not --upgrade): a wanted part that got no real chart in this run
+(none found, all flagged, or --no-online with nothing local) gets an auto chart instead, made from the
+matching real-guitar arrangement by the Plan 5 auto-charter (scripts/five_fret_autochart.py picks the
+arrangement; pairs_with follows the rule above) and written with the same writer, backup and dry-run
+rules: source {kind: auto, generator, generator_version, from_arrangement}, named "<Part> (auto)". A
+real chart part is never replaced; an existing auto part is replaced only when its generator_version is
+older than the auto-charter's (an equal one is kept: the part's "auto" field says "current"). Such parts
+get status auto (would-auto in a dry run, rerun by --write like would-join); a song with no real part
+written but an auto one has that status too. The CSV adds real_status (what the chart search found) and
+arrangement (the source arrangement).
 """
 from __future__ import annotations
 
@@ -259,6 +270,51 @@ def _stem_roles(parts, chart_has_rhythm: bool) -> tuple:
     """Stems a chart download needs for ``parts`` (each part's roles, in order, no repeats)."""
     import chorus
     return tuple(dict.fromkeys(r for p in parts for r in chorus.stem_roles(p, chart_has_rhythm)))
+
+
+def auto_fill(p: Path, parts, write: bool, before_write=None) -> dict[str, dict]:
+    """--auto: auto charts for ``parts`` of pack ``p`` (parts that got no real chart this run), from
+    the Plan 5 auto-charter via five_fret_autochart.run_pack (its arrangement pick and payload), written
+    (``write``) with fivefretjoin.write_five_fret. Per part: ``{"status": "auto"|"would-auto",
+    "arrangement"}`` when one is (or would be) written, else ``{"auto": why}``: "real-chart" (never
+    replaced), "current" (an auto part from this generator version or newer is there), or the
+    command's skip action, with ``error`` its reason."""
+    import tempfile
+    import drumjoin
+    import fivefret_autochart as ac
+    import fivefretjoin
+    import five_fret_autochart as ffa
+    ex = fivefretjoin.existing_parts(PackView(p))
+    out, todo = {}, []
+    for part in parts:
+        e = ex.get(part)
+        if e and e["kind"] != "auto":
+            out[part] = {"auto": "real-chart"}
+        elif e and drumjoin._version_tuple(e["generator_version"]) >= drumjoin._version_tuple(ac.GENERATOR_VERSION):
+            out[part] = {"auto": "current"}
+        else:
+            todo.append(part)
+    if not todo:
+        return out
+    with tempfile.TemporaryDirectory(prefix="drums_library_auto_") as tmp:
+        rows = ffa.run_pack(p, todo, Path(tmp))
+    payloads, names, info = {}, {}, {}
+    for r in rows:
+        if r["action"] != "write":
+            out[r["part"]] = {"auto": r["action"], "error": r["reason"] or None, "arrangement": r["arrangement"]}
+            continue
+        part = r["part"]
+        payloads[part], names[part] = r["data"], r["entry"]["name"]
+        info[part] = {"tool": "five_fret_autochart", "source": r["data"]["source"],
+                      "notes": r["notes"], "joined": time.strftime("%Y-%m-%d %H:%M")}
+        out[part] = {"status": "auto" if write else "would-auto", "arrangement": r["arrangement"]}
+    if payloads and write:
+        sp = drumjoin.SloppakFiles(p)
+        try:
+            fivefretjoin.write_five_fret(sp, payloads, info, before_write=before_write, names=names)
+        finally:
+            sp.close()
+    return out
 
 
 # ── per-song worker ─────────────────────────────────────────────────────────
@@ -486,6 +542,21 @@ def process_five_fret(path_str: str) -> dict:
             res["parts"][part] = pr
         flagged = any(not t.get("exception") for t in tried)
         res["status"] = word if passed else ("flagged" if flagged else ("error" if tried else none))
+        if a.auto:      # parts with no real chart this run get an auto chart (never over a real one)
+            no_real = [x for x in wanted if x not in passed]
+            try:
+                filled = auto_fill(p, no_real, a.write, backup if a.write else None) if no_real else {}
+            except Exception as e:      # the real-chart results stand; the parts say what failed
+                log(f"   {p.name}: auto: {type(e).__name__}: {e}")
+                filled = {x: {"auto": "error", "error": f"{type(e).__name__}: {e}"} for x in no_real}
+            if filled:
+                for part, got in filled.items():
+                    pr = res["parts"][part]
+                    if "status" in got:
+                        pr["real_status"] = pr["status"]
+                    pr.update(got)
+                if not passed and any(pr.get("status") in ("auto", "would-auto") for pr in res["parts"].values()):
+                    res["status"] = "auto" if a.write else "would-auto"
         if passed:
             res["chart"] = next(iter(passed.values()))["chart"]
         res["tried"] = tried
@@ -516,7 +587,8 @@ def build_local_index(dirs) -> list[tuple]:
 
 
 FIVE_FRET_COLS = ["file", "artist", "title", "part", "status", "chart", "reused_drums", "method", "offset",
-                  "median_ms", "within_30ms", "beat_margin", "levels_before", "levels_after", "secs", "error"]
+                  "median_ms", "within_30ms", "beat_margin", "levels_before", "levels_after", "secs", "error",
+                  "real_status", "arrangement", "auto"]       # the last three: --auto
 
 
 def write_five_fret_report(state: dict, csv_path: Path):
@@ -572,6 +644,9 @@ def parse_args(argv=None):
     ap.add_argument("--upgrade", action="store_true",
                     help="songs WITH Drums (five-fret: a real chart part) but < 3 hand-charted lower levels: "
                          "replace only with a chart that has more hand-charted levels and validates")
+    ap.add_argument("--auto", action="store_true",
+                    help="five-fret --parts only: parts with no real chart get an auto chart made from the "
+                         "matching real-guitar arrangement (never replaces a real chart)")
     a = ap.parse_args(argv)
     parts = list(dict.fromkeys(x.strip().lower() for x in a.parts.split(",") if x.strip()))
     bad = [x for x in parts if x not in ("drums",) + FIVE_FRET_PARTS]
@@ -579,6 +654,10 @@ def parse_args(argv=None):
         ap.error(f"--parts: unknown part(s) {', '.join(bad) or '(none)'}; use drums or guitar, rhythm, bass")
     if "drums" in parts and len(parts) > 1:
         ap.error("--parts: drums can't be mixed with guitar / rhythm / bass; run them separately")
+    if a.auto and parts == ["drums"]:
+        ap.error("--auto needs five-fret --parts (guitar, rhythm, bass)")
+    if a.auto and a.upgrade:
+        ap.error("--auto can't be used with --upgrade (auto parts never replace real charts)")
     a.parts = parts
     if a.state is None:
         a.state = str(Path.home() / "drums-work" / "library" /
@@ -594,7 +673,7 @@ def _retrying(prev, retry) -> bool:
         isinstance(pr, dict) and pr.get("status") in retry for pr in (prev.get("parts") or {}).values())
 
 
-DONE_PART = ("joined", "upgraded")
+DONE_PART = ("joined", "upgraded", "auto")     # best first
 
 
 def _keep_earlier_parts(prev, r) -> dict:
@@ -605,8 +684,10 @@ def _keep_earlier_parts(prev, r) -> dict:
     if not old or new is None:
         return r
     r["parts"] = {k: new.get(k, old.get(k)) for k in dict.fromkeys(list(old) + list(new))}
-    done = [pr["status"] for pr in r["parts"].values() if isinstance(pr, dict) and pr.get("status") in DONE_PART]
-    if done and r.get("status") not in DONE_PART and r.get("status") != "error":
+    done = sorted({pr["status"] for pr in r["parts"].values() if isinstance(pr, dict)
+                   and pr.get("status") in DONE_PART}, key=DONE_PART.index)
+    st = r.get("status")
+    if done and st != "error" and (st not in DONE_PART or DONE_PART.index(done[0]) < DONE_PART.index(st)):
         r["status"] = done[0]
     return r
 
@@ -655,7 +736,7 @@ def main(argv=None):
                 todo.append(p)
             continue
         if prev and not a.redo and not _retrying(prev, retry):
-            if not (prev.get("status") == "would-join" and a.write):
+            if not (prev.get("status") in ("would-join", "would-auto") and a.write):
                 continue
         if a.only and not re.search(a.only, p.name, re.I):
             try:

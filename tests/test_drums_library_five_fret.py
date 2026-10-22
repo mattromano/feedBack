@@ -347,7 +347,7 @@ def test_partial_song_rows(env, tmp_path, monkeypatch):
     assert rows[1]["error"] == "too few notes within 30 ms" and rows[0]["chart"].startswith("local:")
     assert list(_rows(st)[0]) == ["file", "artist", "title", "part", "status", "chart", "reused_drums", "method",
                                   "offset", "median_ms", "within_30ms", "beat_margin", "levels_before",
-                                  "levels_after", "secs", "error"]
+                                  "levels_after", "secs", "error", "real_status", "arrangement", "auto"]
     m = _members(p)
     assert "five_fret_guitar.json" in m and "five_fret_bass.json" not in m
 

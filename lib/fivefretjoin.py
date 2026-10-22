@@ -41,15 +41,18 @@ def _is_part_entry(e) -> bool:
 
 
 def existing_parts(sp: drumjoin.SloppakFiles) -> dict[str, dict]:
-    """``{part: {"id", "kind": "chart"|"auto", "levels", "md5"}}`` for the pack's five-fret parts.
+    """``{part: {"id", "kind": "chart"|"auto", "levels", "md5", "generator_version"}}`` for the
+    pack's five-fret parts.
 
-    ``levels`` counts hand-charted lower levels. An unreadable file counts as a chart with 3 levels,
-    so it is never replaced."""
+    ``levels`` counts hand-charted lower levels; ``generator_version`` is an auto part's
+    ``source.generator_version`` (None otherwise). An unreadable file counts as a chart with 3
+    levels, so it is never replaced."""
     out: dict[str, dict] = {}
     for e in sp.manifest.get("arrangements") or []:
         if not _is_part_entry(e):
             continue
-        info = {"id": str(e.get("id") or ""), "kind": "chart", "levels": 3, "md5": None}
+        info = {"id": str(e.get("id") or ""), "kind": "chart", "levels": 3, "md5": None,
+                "generator_version": None}
         try:
             doc = sp.read_json(str(e["five_fret"]))
             src = doc["source"]
@@ -59,7 +62,9 @@ def existing_parts(sp: drumjoin.SloppakFiles) -> dict[str, dict]:
             n = sum(1 for lv in fivefret.LEVELS
                     if isinstance(levels.get(lv), dict) and levels[lv].get("notes")
                     and not levels[lv].get("generated"))
-            info.update(kind=kind, levels=n, md5=md5)
+            gv = src.get("generator_version") if kind == "auto" else None
+            info.update(kind=kind, levels=n, md5=md5,
+                        generator_version=str(gv) if isinstance(gv, (str, int)) else None)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
         out[e["instrument"]] = info
@@ -184,10 +189,12 @@ def _referenced_files(sp: drumjoin.SloppakFiles, entries) -> set[Path]:
 
 
 def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dict[str, dict],
-                    backup_dir=None, *, before_write: Callable[[], None] | None = None) -> None:
+                    backup_dir=None, *, before_write: Callable[[], None] | None = None,
+                    names: dict[str, str] | None = None) -> None:
     """Write ``parts`` (``{part: five_fret payload}``) into the pack, replacing the same instrument's
     existing part (and its file, when that file is inside the pack and nothing kept uses it) only,
-    and merge ``info`` into ``five_fret_join.json``.
+    and merge ``info`` into ``five_fret_join.json``. Entries are named ``names[part]`` (default
+    "<Part> (5-fret)"); ``pairs_with`` follows ``pairs_with()``.
 
     Raises ValueError, writing nothing, when a payload fails ``validate_five_fret``. ``before_write``
     (e.g. a backup) runs once, after validation and before the pack's first change; if it raises,
@@ -214,7 +221,8 @@ def write_five_fret(sp: drumjoin.SloppakFiles, parts: dict[str, dict], info: dic
     for part, payload in parts.items():
         rel = f"five_fret_{part}.json"
         (sp.dir / rel).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        entry = {"id": f"five_fret_{part}", "name": f"{fivefretchart.PART_NAMES[part]} (5-fret)",
+        name = (names or {}).get(part) or f"{fivefretchart.PART_NAMES[part]} (5-fret)"
+        entry = {"id": f"five_fret_{part}", "name": name,
                  "type": "five_fret", "instrument": part, "five_fret": rel}
         pw = pairs_with({"arrangements": keep}, part)
         if pw:

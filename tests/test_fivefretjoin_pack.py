@@ -74,9 +74,20 @@ def test_existing_parts_kinds_and_levels(sp_factory):
          "five_fret_guitar.json": _payload("guitar", "auto"),
          "five_fret_rhythm.json": b"{not json"})
     got = fivefretjoin.existing_parts(sp)
-    assert got["bass"] == {"id": "five_fret_bass", "kind": "chart", "levels": 1, "md5": "m5"}
+    assert got["bass"] == {"id": "five_fret_bass", "kind": "chart", "levels": 1, "md5": "m5",
+                           "generator_version": None}
     assert got["guitar"]["kind"] == "auto" and got["guitar"]["md5"] is None
     assert got["rhythm"]["kind"] == "chart" and got["rhythm"]["levels"] == 3
+
+
+def test_existing_parts_generator_version(sp_factory):
+    auto = _payload("guitar", "auto")
+    auto["source"].update(generator="g", generator_version="3")
+    sp = sp_factory({"arrangements": [_entry("guitar"), _entry("bass")]},
+                    {"five_fret_guitar.json": auto, "five_fret_bass.json": _payload("bass", "auto")})
+    got = fivefretjoin.existing_parts(sp)
+    assert got["guitar"]["generator_version"] == "3"
+    assert got["bass"]["generator_version"] is None
 
 
 def test_pairs_with():
@@ -194,6 +205,15 @@ def test_write_replaces_same_instrument_only(sp_factory):
         m = yaml.safe_load(z.read("manifest.yaml"))
     ff = [e for e in m["arrangements"] if e.get("type") == "five_fret"]
     assert sorted(e["instrument"] for e in ff) == ["bass", "guitar"]
+
+
+def test_write_uses_given_names(sp_factory, tmp_path):
+    sp = _bass_pack(sp_factory, tmp_path)
+    path = sp.path
+    fivefretjoin.write_five_fret(sp, {"bass": _payload("bass", "auto")}, {}, names={"bass": "Bass (auto)"})
+    m = yaml.safe_load(zipfile.ZipFile(path).read("manifest.yaml"))
+    ent = [e for e in m["arrangements"] if e.get("type") == "five_fret"]
+    assert ent[0]["name"] == "Bass (auto)" and ent[0]["pairs_with"] == "bass"
 
 
 def test_write_rejects_invalid_payload(sp_factory, tmp_path):
