@@ -285,8 +285,8 @@ What core renders:
 - **Split hero.** A mode with both `renderHero` and `start` (the first in order)
   puts a second half beside the solo hero on Home, with a button labelled
   `startLabel`.
-- **Card button.** Each library card gets a `cardAction.label` button in the
-  chips row when `cardAction.isAvailable(song)` is `true`; clicking it calls
+- **Card button.** Each library grid card gets a `cardAction.label` button in the
+  chips row (grid cards only; not tree, table or library-home rows) when `cardAction.isAvailable(song)` is `true`; clicking it calls
   `cardAction.run(song)`.
 - **Tour step.** A mode with a `tour` adds a step to the app tour.
 - **Press Start.** When any mode sets `startPress`, core watches free

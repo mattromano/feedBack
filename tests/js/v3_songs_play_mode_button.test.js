@@ -76,6 +76,16 @@ test('ui:play-modes-changed bumps the epoch and re-renders the window', () => {
     assert.match(handler, /requestWindowRender\(\)/);
 });
 
+test('a mode change while Songs is inactive still re-renders on re-entry (epoch tracked)', () => {
+    assert.match(src, /renderedPlayModesEpoch: -1,/);
+    const at = src.indexOf('const same = state.winRange');
+    assert.ok(at >= 0, 'no `same` check');
+    const same = src.slice(at, src.indexOf('if (same', at));
+    assert.match(same, /state\.renderedPlayModesEpoch === playModesEpoch/);
+    assert.match(src, /state\.renderedPlayModesEpoch = playModesEpoch;/);
+    assert.match(src, /state\.renderedPlayModesEpoch = -1;/);
+});
+
 test('CRLF kept', () => {
     const raw = fs.readFileSync(songsPath);
     for (let i = 0; i < raw.length; i++) {

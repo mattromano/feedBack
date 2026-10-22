@@ -98,6 +98,7 @@
         geom: null,           // { cols, rowH, gap } measured from the live grid
         winRange: null,       // { start, end } last rendered, to skip redundant renders
         renderedSelectMode: null, // the selectMode the current window was rendered under
+        renderedPlayModesEpoch: -1, // the playModesEpoch the current window was rendered under
         gridResizeBound: false,
     };
 
@@ -2319,7 +2320,8 @@
         // toggled since the window was last painted (so checkboxes/rings on cached
         // cards track state — e.g. after leaving Songs in select mode and back).
         const same = state.winRange && state.winRange.start === start && state.winRange.end === end
-            && state.renderedSelectMode === state.selectMode;
+            && state.renderedSelectMode === state.selectMode
+            && state.renderedPlayModesEpoch === playModesEpoch;
         if (same && !_windowHasHoles(start, end)) return;
         const myToken = ++_winToken;
         if (_windowHasHoles(start, end)) {
@@ -2333,6 +2335,7 @@
         decorateTuningChips(grid);   // colour tuning chips by working-tuning match (async, feature-detected)
         state.winRange = { start, end };
         state.renderedSelectMode = state.selectMode;
+        state.renderedPlayModesEpoch = playModesEpoch;
         if (sm && typeof sm.emit === 'function') {
             try { sm.emit('v3:library-window-rendered', { start, end, total }); } catch (e) { /* */ }
         }
@@ -2357,6 +2360,7 @@
             state.keysetOk = false;
             state.winRange = null;
             state.renderedSelectMode = null;
+            state.renderedPlayModesEpoch = -1;
             state.geom = null;
             state.total = 0;
             grid.innerHTML = '';
