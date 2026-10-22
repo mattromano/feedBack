@@ -1057,6 +1057,10 @@
         const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
         const rows = [
             { id: '__play', label: 'Play', run: () => { _saveLibraryScrollSnapshot(); window.playSong && window.playSong(enc(playTarget.filename)); } },
+            // Every way to play this chart (static/v3/play-as.js) — local
+            // files only, and only when there is more than plain Play.
+            ...(state.provider === 'local' && playTarget.filename && window.v3PlayAs
+                && window.v3PlayAs.rows(playTarget).length > 1 ? [{ id: '__playas', label: 'Play as…' }] : []),
             ...(canCharts ? [
                 { id: '__charts', label: 'Charts (' + song.chart_count + ')…' },
                 { id: '__playver', label: 'Play version ▸' },
@@ -1114,7 +1118,9 @@
             // 'Play version ▸' swaps THIS menu's rows for the work's charts —
             // it must expand in place, so it's the one entry that doesn't close.
             if (id === '__playver') { await _expandPlayVersions(menu, song, closeMenu); return; }
+            const menuBox = menu.getBoundingClientRect();
             closeMenu();
+            if (id === '__playas') { openPlayAs(playTarget, { pos: { x: menuBox.left, y: menuBox.top }, returnFocus: anchorBtn }); return; }
             if (id === '__play') { playCard(playTarget); return; }
             if (id === '__charts') { openChartsDrawer(song.work_key, song); return; }
             if (id === '__unsplit') {
@@ -3147,6 +3153,13 @@
     // without touching this module's internals.
     window.__fbOpenArtistPage = openArtistPage;
 
+    // "Play as" menu (static/v3/play-as.js) for one library item; leaving for
+    // the player keeps the library's scroll place, as a card play does.
+    function openPlayAs(song, opts) {
+        if (!window.v3PlayAs || !song) return;
+        window.v3PlayAs.open(song, Object.assign({ beforeRun: () => _saveLibraryScrollSnapshot() }, opts));
+    }
+
     // Table view: the whole filtered library (same params as the grid, so
     // search / format / drawer filters / grouping all apply) as sortable,
     // virtualised rows. Column sorting is the table's own (click a header);
@@ -3165,8 +3178,12 @@
             url: '/api/library/table?' + queryParams(extra).toString(),
             play: (row) => {
                 _saveLibraryScrollSnapshot();
-                if (window.playSong) window.playSong(enc(row.playFilename));
+                if (window.feedBack && window.feedBack.ui && typeof window.feedBack.ui.playSongAs === 'function') {
+                    window.feedBack.ui.playSongAs(row.playFilename);
+                } else if (window.playSong) window.playSong(enc(row.playFilename));
             },
+            // A row click / right-click: every way to play it.
+            menu: window.v3PlayAs ? (row, rowEl, pos) => openPlayAs(row.song, { pos, returnFocus: rowEl }) : null,
         });
     }
 

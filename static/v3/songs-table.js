@@ -5,7 +5,8 @@
  * song with the practice columns the cards can't fit side by side — plays,
  * best accuracy, full combo, last played, time played — next to artist /
  * title / album / year / tuning / parts / length. Click a column header to
- * sort (again to reverse); click a row (or Enter on it) to play.
+ * sort (again to reverse). Click a row for its "Play as" menu (opts.menu);
+ * Enter, double-click or gamepad A plays it straight away (opts.play).
  *
  * Data comes from GET /api/library/table, which applies the SAME filters as the
  * grid (search, format, drawer, grouping) server-side and returns every match
@@ -31,15 +32,42 @@
     const norm = (s) => String(s || '').toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]+/g, '');
 
     // Arrangement names → compact part letters, in a fixed instrument order.
+    // A drum chart (has_drum_tab) is D and a vocal-pitch track V even when no
+    // arrangement is named for them; a 5-fret-only pack's placeholder
+    // arrangement is not a real part.
     const PART_ORDER = ['lead', 'rhythm', 'bass', 'combo', 'keys', 'drums', 'vocals'];
-    function parts(names) {
+    function parts(names, facts) {
+        const f = facts || {};
         const kinds = new Set();
-        for (const n of names || []) {
-            const low = String(n).toLowerCase();
-            const k = PART_ORDER.find((p) => low.includes(p)) || (low.includes('piano') ? 'keys' : '');
-            if (k) kinds.add(k);
+        if (!f.fiveFretOnly) {
+            for (const n of names || []) {
+                const low = String(n).toLowerCase();
+                const k = PART_ORDER.find((p) => low.includes(p)) || (low.includes('piano') ? 'keys' : '');
+                if (k) kinds.add(k);
+            }
         }
+        if (f.drums) kinds.add('drums');
+        if (f.vocals) kinds.add('vocals');
         return PART_ORDER.filter((k) => kinds.has(k)).map((k) => k[0].toUpperCase()).join('');
+    }
+
+    // 5-fret parts (["guitar:chart", "bass:auto", ...]) → pills in G R B order,
+    // one per instrument (a real chart beats an auto one). Auto charts only
+    // while the five-fret plugin's "Show auto charts" is on.
+    const FF_ORDER = [['guitar', 'G', 'guitar'], ['rhythm', 'R', 'rhythm'], ['bass', 'B', 'bass']];
+    function fiveFretPills(tags, showAuto) {
+        const kind = {};
+        for (const t of tags || []) {
+            const [inst, src] = String(t).split(':');
+            if (src === 'chart') kind[inst] = 'chart';
+            else if (src === 'auto' && !kind[inst]) kind[inst] = 'auto';
+        }
+        return FF_ORDER.filter(([inst]) => kind[inst] === 'chart' || (kind[inst] === 'auto' && showAuto))
+            .map(([inst, letter, name]) => ({ inst, letter, name, auto: kind[inst] === 'auto' }));
+    }
+    function showAutoCharts() {
+        const ff = window.feedBackFiveFret;
+        try { return !!(ff && typeof ff.showAutoCharts === 'function' && ff.showAutoCharts()); } catch (_) { return false; }
     }
 
     // [key, header, grid width, align, sort accessor, first-click direction]
@@ -50,7 +78,7 @@
         ['album', 'Album', 'minmax(100px,1fr)', 'left', (r) => r.albumSort || LAST, 1],
         ['year', 'Year', '52px', 'right', (r) => r.yearNum, -1],
         ['tuning', 'Tuning', '104px', 'left', (r) => r.tuning || LAST, 1],
-        ['parts', 'Parts', '56px', 'left', (r) => r.parts || LAST, 1],
+        ['parts', 'Parts', '104px', 'left', (r) => r.partsKey || LAST, 1],
         ['duration', 'Length', '58px', 'right', (r) => r.duration, -1],
         ['plays', 'Plays', '56px', 'right', (r) => r.plays, -1],
         ['best', 'Best', '58px', 'right', (r) => (r.best == null ? -1 : r.best), -1],
@@ -75,8 +103,15 @@
         return Number.isFinite(t) ? t : 0;
     }
 
-    // Columnar payload → row objects with precomputed sort keys.
-    function toRows(data) {
+    // The 5-fret pills and the Parts sort key (pills after the real letters).
+    function setPills(r, showAuto) {
+        r.ff = fiveFretPills(r.song.five_fret_parts, showAuto);
+        r.partsKey = r.parts + (r.ff.length ? ' ' + r.ff.map((p) => p.letter).join('') : '');
+    }
+
+    // Columnar payload → row objects with precomputed sort keys. `r.song` is
+    // the library item the "Play as" menu and plugins are asked about.
+    function toRows(data, showAuto) {
         const ix = {};
         (data.cols || []).forEach((c, i) => { ix[c] = i; });
         return (data.rows || []).map((a) => {
@@ -88,7 +123,19 @@
                 plays: a[ix.plays] || 0, best: a[ix.best_accuracy], fcs: a[ix.full_combos] || 0,
                 last: a[ix.last_played] || null, seconds: a[ix.seconds] || 0,
             };
-            r.parts = parts(r.arrangements);
+            const idx = a[ix.arr_index] || [];
+            r.song = {
+                filename: r.playFilename, title: r.title, artist: r.artist, album: r.album,
+                format: r.format, tuning: r.tuning,
+                arrangements: r.arrangements.map((name, i) => ({ index: Number.isInteger(idx[i]) ? idx[i] : i, name })),
+                has_drum_tab: a[ix.has_drum_tab] === true, has_vocal_pitch: a[ix.has_vocal_pitch] === true,
+                five_fret_parts: a[ix.five_fret_parts] || [], five_fret_only: a[ix.five_fret_only] === true,
+                stem_ids: a[ix.stem_ids] || [],
+            };
+            r.parts = parts(r.arrangements, {
+                drums: r.song.has_drum_tab, vocals: r.song.has_vocal_pitch, fiveFretOnly: r.song.five_fret_only,
+            });
+            setPills(r, !!showAuto);
             r.artistSort = norm(r.artist);
             r.titleSort = norm(r.title);
             r.albumSort = norm(r.album);
@@ -135,7 +182,12 @@
             case 'album': return esc(r.album);
             case 'year': return esc(r.year);
             case 'tuning': return esc(r.tuning);
-            case 'parts': return '<span title="' + esc(r.arrangements.join(', ')) + '">' + esc(r.parts) + '</span>';
+            case 'parts': {
+                const ff = r.ff.map((p) => '<span class="v3-table-ff' + (p.auto ? ' v3-table-ff-auto' : '') + '" title="5-fret '
+                    + p.name + (p.auto ? ' (auto chart)' : '') + '">' + p.letter + '</span>').join('');
+                return '<span title="' + esc(r.arrangements.join(', ')) + '">' + esc(r.parts) + '</span>'
+                    + (ff ? '<span class="v3-table-ffs" aria-label="5-fret parts">' + ff + '</span>' : '');
+            }
             case 'duration': return fmtLen(r.duration);
             case 'plays': return r.plays ? String(r.plays) : '';
             case 'best': {
@@ -159,7 +211,7 @@
             '<div class="v3-table-info flex items-center gap-3 text-xs text-fb-textDim mb-2">' +
             '<span class="v3-table-count text-fb-text font-semibold"></span>' +
             '<span class="v3-table-note"></span>' +
-            '<span class="flex-1"></span><span>Click a column to sort · click a song to play</span></div>' +
+            '<span class="flex-1"></span><span>Click a column to sort · click a song for Play as · double-click or Enter plays</span></div>' +
             '<div class="v3-table-box" role="table" aria-label="Song library">' +
             '<div class="v3-table-head" role="row" style="grid-template-columns:' + GRID + '"></div>' +
             '<div class="v3-table-scroll"><div class="v3-table-spacer"></div></div></div>';
@@ -186,12 +238,40 @@
             if (inst.raf) return;
             inst.raf = requestAnimationFrame(() => { inst.raf = 0; paint(inst); });
         }, { passive: true });
+        const rowOf = (rowEl) => rowEl && inst.view[Number(rowEl.getAttribute('data-i'))];
         const playRow = (rowEl) => {
-            const r = rowEl && inst.view[Number(rowEl.getAttribute('data-i'))];
+            const r = rowOf(rowEl);
             if (r && typeof inst.opts.play === 'function') inst.opts.play(r);
         };
-        inst.spacer.addEventListener('click', (e) => playRow(e.target.closest('[data-i]')));
+        // Click (the first of a double-click too) / right-click: the "Play as"
+        // menu; without a menu handler a click plays, as before.
+        const menuRow = (e, pos) => {
+            const rowEl = e.target.closest('[data-i]');
+            const r = rowOf(rowEl);
+            if (!r) return;
+            if (typeof inst.opts.menu === 'function') inst.opts.menu(r, rowEl, pos);
+            else playRow(rowEl);
+        };
+        inst.spacer.addEventListener('click', (e) => { if (e.detail < 2) menuRow(e, { x: e.clientX, y: e.clientY }); });
+        inst.spacer.addEventListener('dblclick', (e) => {
+            if (typeof inst.opts.menu !== 'function') return;   // the click already played
+            playRow(e.target.closest('[data-i]'));
+        });
+        inst.spacer.addEventListener('contextmenu', (e) => {
+            if (!e.target.closest('[data-i]') || typeof inst.opts.menu !== 'function') return;
+            e.preventDefault();
+            menuRow(e, { x: e.clientX, y: e.clientY });
+        });
         inst.spacer.addEventListener('keydown', (e) => {
+            if (e.key === 'ContextMenu' && typeof inst.opts.menu === 'function') {
+                const rowEl = e.target.closest('[data-i]');
+                if (!rowEl) return;
+                e.preventDefault();
+                const b = rowEl.getBoundingClientRect();
+                const r = rowOf(rowEl);
+                if (r) inst.opts.menu(r, rowEl, { x: b.left + 24, y: b.bottom });
+                return;
+            }
             if (e.key !== 'Enter' && e.key !== ' ') return;
             const rowEl = e.target.closest('[data-i]');
             if (!rowEl) return;
@@ -199,6 +279,16 @@
             playRow(rowEl);
         });
         inst.onResize = () => { fitHeight(inst); paint(inst); };
+        // The five-fret plugin's "Show auto charts" changed: re-pill and repaint.
+        const bus = window.feedBack;
+        if (bus && typeof bus.on === 'function') {
+            bus.on('five_fret:settings-changed', () => {
+                if (!host.isConnected || !inst.rows.length) return;
+                const show = showAutoCharts();
+                inst.rows.forEach((r) => setPills(r, show));
+                resort(inst);
+            });
+        }
         window.addEventListener('resize', inst.onResize, { passive: true });
         instances.set(host, inst);
         return inst;
@@ -264,12 +354,12 @@
         } catch (_) { data = null; }
         if (!host.isConnected) return;
         if (!data) { inst.info.textContent = 'Could not load the library.'; return; }
-        inst.rows = toRows(data);
+        inst.rows = toRows(data, showAutoCharts());
         inst.info.textContent = inst.rows.length + ' song' + (inst.rows.length === 1 ? '' : 's');
         inst.note.textContent = data.truncated ? '(showing the first ' + inst.rows.length + ' of ' + data.total + ' — narrow the search to see the rest)' : '';
         fitHeight(inst);
         resort(inst);
     }
 
-    window.v3SongsTable = { render, COLUMNS, _internals: { toRows, sortRows, parts, fmtLast, parseUtc } };
+    window.v3SongsTable = { render, COLUMNS, _internals: { toRows, sortRows, parts, fiveFretPills, fmtLast, parseUtc } };
 })();

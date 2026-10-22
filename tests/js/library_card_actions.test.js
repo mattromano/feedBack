@@ -68,3 +68,45 @@ test('bad specs are rejected (no id / no run)', () => {
     reg.register({ id: 'no-run' });
     assert.strictEqual(reg.list({}).length, 0);
 });
+
+test("'play-as' placement keeps group and hint", () => {
+    freshIds();
+    reg.register({ id: 'pa', label: 'Drums', placement: 'play-as', group: 'Controller', hint: 'kit or pad', run() {} });
+    const a = reg.list({ filename: 'x' })[0];
+    assert.strictEqual(a.placement, 'play-as');
+    assert.strictEqual(a.group, 'Controller');
+    assert.strictEqual(a.hint, 'kit or pad');
+    assert.strictEqual(a.variants, undefined);
+});
+
+test('variants: listed per song, empty or throwing variants hide the action', () => {
+    freshIds();
+    reg.register({
+        id: 'ff', label: '5-Fret', placement: 'play-as',
+        variants: (s) => (s.parts || []).map((p) => ({ key: p, label: '5-Fret ' + p, enabled: p !== 'bass' })),
+        run() {},
+    });
+    reg.register({ id: 'bad', label: 'Bad', placement: 'play-as', variants() { throw new Error('x'); }, run() {} });
+    const a = reg.list({ parts: ['guitar', 'guitar', 'bass'] });
+    assert.deepStrictEqual(a.map((x) => x.id), ['ff']);
+    assert.deepStrictEqual(a[0].variants, [
+        { key: 'guitar', label: '5-Fret guitar', hint: '', enabled: true },
+        { key: 'bass', label: '5-Fret bass', hint: '', enabled: false },
+    ]);
+    assert.strictEqual(reg.list({ parts: [] }).length, 0);
+});
+
+test('run() passes the chosen variant and refuses one the song does not offer', async () => {
+    freshIds();
+    let got = null;
+    reg.register({
+        id: 'ff', label: '5-Fret', placement: 'play-as',
+        variants: () => [{ key: 'guitar', label: 'G' }, { key: 'bass', label: 'B', enabled: false }],
+        run: (song, ctx) => { got = ctx.variant; },
+    });
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'guitar' })).outcome, 'handled');
+    assert.strictEqual(got, 'guitar');
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'rhythm' })).outcome, 'not-applicable');
+    assert.strictEqual((await reg.run('ff', {}, { variant: 'bass' })).outcome, 'disabled');
+    assert.strictEqual((await reg.run('ff', {}, {})).outcome, 'not-applicable');
+});
