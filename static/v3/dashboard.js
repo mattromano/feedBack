@@ -182,6 +182,10 @@
                 '<p class="text-fb-textDim text-sm">Play a song to see it here.</p></section>';
         }
 
+        const pms = sm && sm.ui && sm.ui.playModeState;
+        const heroMode = pms && window.v3PlayModes ? pms.heroMode() : null;
+        const heroHtml = heroMode ? window.v3PlayModes.splitHeroHtml(soloHeroHtml(false), heroMode, esc) : soloHeroHtml(true);
+
         root.innerHTML =
             '<div class="max-w-7xl mx-auto px-6 md:px-8 pb-8">' +
             // (Title "Welcome back, {name}!" lives in the topbar header row.)
@@ -189,23 +193,7 @@
                 '<a href="' + esc(changelogUrl) + '" target="_blank" rel="noopener" class="text-fb-primary hover:text-fb-primaryHi">Patch Notes for ' + esc(ver) + '</a>?</p>' : '') +
             // Featured grid: hero + continue
             '<div class="grid lg:grid-cols-3 gap-6 mt-6">' +
-            '<div id="v3-hero" class="lg:col-span-2 relative rounded-xl overflow-hidden min-h-[480px] flex items-center bg-fb-bg">' +
-            // Hero artwork (neon note-highway), right-anchored. Placeholder
-            // cropped from the design mock — swap static/v3/brand/hero.png for
-            // the designer's high-res original (same path) when available.
-            '<img src="/static/v3/brand/hero.png" alt="" aria-hidden="true" ' +
-            'class="absolute inset-y-0 right-0 h-full w-2/3 object-cover object-right" ' +
-            'onerror="this.style.display=\'none\'">' +
-            // 135° gradient overlay: solid navy on the left for text legibility,
-            // fading to transparent so the artwork shows through on the right.
-            '<div class="absolute inset-0" style="background-image:linear-gradient(135deg,#0f172a 0%,#0f172a 40%,rgba(15,23,42,0.55) 65%,rgba(15,23,42,0.15) 100%);"></div>' +
-            '<div class="relative p-8 max-w-md">' +
-            '<h3 class="text-4xl font-bold leading-tight text-fb-text">Turn any song into practice.</h3>' +
-            '<p class="text-fb-textDim mt-2">Play along to your library, track your accuracy, and rank up.</p>' +
-            '<div class="flex gap-3 mt-5">' +
-            '<button id="v3-start" class="bg-fb-primary hover:bg-fb-primaryHi text-white px-6 py-2 rounded-md font-medium shadow-lg shadow-fb-primary/20">Start Playing</button>' +
-            '<button id="v3-lessons-btn" class="bg-transparent border border-fb-textDim hover:border-white text-white px-6 py-2 rounded-md font-medium">Lessons</button>' +
-            '</div></div></div>' +
+            heroHtml +
             continueCard +
             '</div>' +
             // Stats row. The third slot belongs to the career plugin (it
@@ -242,6 +230,11 @@
                 window.playSong(enc(b.getAttribute('data-recent')), arr === '' || arr == null ? undefined : Number(arr));
             }));
 
+        if (heroMode) {
+            try { heroMode.renderHero(root.querySelector('[data-play-mode-art]')); } catch (e) { /* plugin art must not break Home */ }
+            root.querySelector('#v3-play-mode-start')?.addEventListener('click', () => pms.start(heroMode.id));
+        }
+
         // Let prompt 18 enhance the audio-routing card once it exists.
         if (window.v3AudioRouting && typeof window.v3AudioRouting.render === 'function') {
             try { window.v3AudioRouting.render(document.getElementById('v3-audio-routing')); } catch (e) { /* */ }
@@ -250,6 +243,28 @@
         // tour can wait for the real cards instead of attaching to nodes from a
         // prior render that this innerHTML swap just replaced.
         try { document.dispatchEvent(new CustomEvent('v3:dashboard-rendered')); } catch (e) { /* older runtimes */ }
+    }
+
+    // The solo-practice hero. spanTwo: it fills two of the three featured-grid
+    // columns (no play mode registered); false when it sits in the split hero.
+    function soloHeroHtml(spanTwo) {
+        return '<div id="v3-hero" class="' + (spanTwo ? 'lg:col-span-2 ' : '') + 'relative rounded-xl overflow-hidden min-h-[480px] flex items-center bg-fb-bg">' +
+        // Hero artwork (neon note-highway), right-anchored. Placeholder
+        // cropped from the design mock — swap static/v3/brand/hero.png for
+        // the designer's high-res original (same path) when available.
+        '<img src="/static/v3/brand/hero.png" alt="" aria-hidden="true" ' +
+        'class="absolute inset-y-0 right-0 h-full w-2/3 object-cover object-right" ' +
+        'onerror="this.style.display=\'none\'">' +
+        // 135° gradient overlay: solid navy on the left for text legibility,
+        // fading to transparent so the artwork shows through on the right.
+        '<div class="absolute inset-0" style="background-image:linear-gradient(135deg,#0f172a 0%,#0f172a 40%,rgba(15,23,42,0.55) 65%,rgba(15,23,42,0.15) 100%);"></div>' +
+        '<div class="relative p-8 max-w-md">' +
+        '<h3 class="text-4xl font-bold leading-tight text-fb-text">Turn any song into practice.</h3>' +
+        '<p class="text-fb-textDim mt-2">Play along to your library, track your accuracy, and rank up.</p>' +
+        '<div class="flex gap-3 mt-5">' +
+        '<button id="v3-start" class="bg-fb-primary hover:bg-fb-primaryHi text-white px-6 py-2 rounded-md font-medium shadow-lg shadow-fb-primary/20">Start Playing</button>' +
+        '<button id="v3-lessons-btn" class="bg-transparent border border-fb-textDim hover:border-white text-white px-6 py-2 rounded-md font-medium">Lessons</button>' +
+        '</div></div></div>';
     }
 
     function statCard(value, unit, unitColor) {
@@ -275,6 +290,10 @@
     if (sm && typeof sm.on === 'function') {
         sm.on('screen:changed', (e) => { if (e && e.detail && e.detail.id === 'v3-home') render(); });
         sm.on('v3:profile-updated', () => render());
+        sm.on('ui:play-modes-changed', () => {
+            const a = document.querySelector('.screen.active');
+            if (a && a.id === 'v3-home') render();
+        });
     }
     function boot() { render(); }
     // `defer` runs this at readyState 'interactive' — later scripts have not

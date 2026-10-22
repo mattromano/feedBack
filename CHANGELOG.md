@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Home: a registered play mode gets the right half of the hero (solo practice stays on the left; they stack on narrow windows).
 - **`feedBack.ui.registerPlayMode`**: plugins add a way to play (Home hero half, library card button,
   Press Start, tour step).
 - **`drums_library.py --from-drums`** (with five-fret `--parts`): a fast, offline pass that

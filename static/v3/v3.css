@@ -1414,3 +1414,47 @@ html.fb-immersive #v3-main > .screen.active {
     border-radius: 0.1875rem;
     padding: 0.0625rem 0.25rem;
 }
+
+/* Home hero: solo practice on the left, a registered play mode on the right. */
+.v3-hero-split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+}
+@media (min-width: 768px) {
+    .v3-hero-split {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+.v3-hero-mode {
+    position: relative;
+    min-height: 480px;
+    border-radius: .75rem;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    padding: 2rem;
+    background: #0f172a;
+}
+.v3-hero-mode-art {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+.v3-hero-mode-start {
+    background: #0ea5e9;
+    color: #fff;
+    padding: .5rem 1.5rem;
+    border-radius: .375rem;
+    font-weight: 600;
+}
+.v3-hero-mode-start:hover {
+    background: #38bdf8;
+}
+.v3-hero-mode-start:focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+}
