@@ -9,6 +9,8 @@
  *
  * Anchors (all stable, on-screen while #v3-home is active):
  *   #v3-hero               hero / Start Playing      (dashboard.js)
+ *   #v3-hero-mode          registered play mode's hero half (play-modes.js;
+ *                          step only when a mode with a `tour` is registered)
  *   [data-tour="continue"] continue / pick a song    (dashboard.js, 3 variants)
  *   #v3-instrument-wrap    instrument selector badge (badges.js, topbar)
  *   #v3-tuner-wrap         tuner badge               (badges.js, topbar)
@@ -24,8 +26,13 @@
     // Each step dims the page and spotlights one element (shape: 'spotlight').
     // waitFor blocks the step until its target exists, so the async dashboard
     // re-render kicked off by 'v3:profile-updated' can't race the first step.
+    // The play-mode step is decided here, at tour-start time (the engine calls
+    // buildSteps() on every start), so a plugin that registers its mode after
+    // this file loads is still picked up.
     function buildSteps() {
-        return [
+        const pms = window.feedBack && window.feedBack.ui && window.feedBack.ui.playModeState;
+        const m = pms ? pms.heroMode() : null;
+        const steps = [
             {
                 id: 'hero', shape: 'spotlight', position: 'bottom',
                 selector: '#v3-hero', waitFor: '#v3-hero',
@@ -69,6 +76,14 @@
                 content: 'Browse your full library, lessons and plugins anytime. You can replay this tour from the ? button in the corner.',
             },
         ];
+        if (m && m.tour) {
+            steps.splice(1, 0, {
+                id: 'play-mode', shape: 'spotlight', position: 'bottom',
+                selector: '#v3-hero-mode', waitFor: '#v3-hero-mode',
+                title: m.tour.title, content: m.tour.content,
+            });
+        }
+        return steps;
     }
 
     function register() {
