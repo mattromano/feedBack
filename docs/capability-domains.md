@@ -173,6 +173,14 @@ The reserved `midi-control` domain is the planned **sibling** for control mappin
 
 Diagnostics live under `feedBack.midi_input.diagnostics.v1` and contain provider ids, source ids/keys/kinds/availability, the selected key, and open-session keys — **device labels are redacted** and no raw MIDI messages are ever included.
 
+## Gamepad-Input Domain
+
+The gamepad-input slice (spec 014) adds `gamepad-input`, a **core-owned** provider-coordinator implemented by [static/capabilities/gamepad-input.js](../static/capabilities/gamepad-input.js), so plastic guitars, plastic drum kits and standard gamepads can be played as instruments. Core stays instrument-agnostic: a plugin claims a controller with `window.feedBack.gamepadInput.claim(index, ownerId)` and receives raw `{ type: 'button'|'axis', index, value, pressed, t }` change events on the returned handle; the plugin names the inputs through its own profiles. One owner holds a controller at a time; a second owner's claim returns `null`.
+
+Polling runs on `requestAnimationFrame` only while at least one claim or watcher exists, and axis changes under 0.02 are ignored. A claimed controller that unplugs keeps a valid, silent handle. Reconnect matches by controller `id`: when a controller with that `id` is back in the claim's old slot, or failing that in any free slot holding an identical controller, events resume on the same handle, whose `index` follows it. The handle's `controllerKey` (the `id` plus `#n` for the nth identical controller) is fixed at claim time. `claimCount()` lets core's menu gamepad support ignore every controller while any one is being played. `list()` returns `{ index, id, mapping, vendor, product, connected, claimedBy, controllerKey }`, with vendor/product parsed from the `id` and `controllerKey` the claim's key, else the key `claim(index)` would assign. `watch(fn)` (feature-check `typeof gi.watch === 'function'`) is a passive listener for connected, unclaimed controllers of any mapping: `fn({ pad, type, index, value, pressed, t })` on change only, baselined when watching starts, when a pad connects and when its claim is released. It is not a claim, so `claimCount()` and core's menus are unaffected.
+
+The command surface is `inspect` and `list-sources`, read-only snapshots for the Capability Inspector. Live input travels only through the in-page handle, never as capability events (the domain emits only a `change` event: connect, disconnect, claim, release) or diagnostics. Without the Gamepad API the domain lists nothing and every claim returns `null`.
+
 ## Capability Roles
 
 Use capability declarations for provider/requester/observer relationships:

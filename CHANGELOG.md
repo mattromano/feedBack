@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`drums_library.py --parts`** finds and joins real Clone Hero guitar / rhythm / bass
+  charts for a whole sloppak library (`--parts guitar,rhythm,bass`; default `drums`, the
+  drum run as before). Local charts first, then Chorus Encore; each part is aligned to
+  the song's stems (reusing the drum join's warp when the drums came from the same chart),
+  validated and written as a feedpak `five_fret` part. Its own state
+  (`five_fret_state.json`) and a CSV row per song and part.
+  A song is backed up only just before its first real write; a candidate that fails
+  outright is logged and the next one tried. The state is per `--parts` selection (a
+  run with other parts needs its own `--state` or `--redo`, which replaces the song's
+  entry); `--retry` also matches per-part statuses.
+- **`drums_library.py --parts ... --auto`** gives parts that got no real chart an
+  auto chart made from the matching real-guitar arrangement by the five-fret
+  auto-charter, written into the pack with the same backup, dry-run and state rules
+  (status `auto` / `would-auto`). A real chart part is never replaced; an older
+  auto part is, an equal one is kept. `--auto` needs five-fret `--parts`.
+- **Five-fret auto-charter (offline, opt-in).** `scripts/five_fret_autochart.py`
+  makes five-fret parts from a pack's Rocksmith guitar, rhythm and bass
+  arrangements (`PACK... | --library DIR [--only REGEX] [--parts ...]`). It is
+  a dry run unless `--out DIR` is given, and even then it only writes the part
+  files (`source.kind: "auto"`, named "Guitar (auto)" etc., Expert plus
+  generated Hard / Medium / Easy), the manifest entries a pack writer would add
+  and a summary into that folder: it never modifies a pack, never replaces a
+  real chart, and refuses an output folder inside the library. The charter
+  (`lib/fivefret_autochart.py`, GPL-3.0-or-later) ports Onyx's autochart (itself
+  a port of Edward Haas's midi-ch) and Onyx's lower-level reducer.
+  `fivefretchart.ensure_levels` gains a `reducer` argument (`"simple"`, the
+  default, or `"onyx"`). `scripts/five_fret_benchmark.py` scores auto charts
+  against real 5-fret charts in the library (read-only, holdout split, SVG lane
+  strips) using `lib/fivefret_bench.py`.
+- **Five-fret parts (plastic-controller charts).** A feedpak can now carry
+  Guitar Hero / Rock Band style five-fret parts as `type: five_fret`
+  arrangement entries (`instrument` guitar, rhythm or bass, plus a `five_fret`
+  JSON side file whose `source.kind` is `chart` or `auto`). Core validates and
+  loads them (`lib/fivefret.py`), streams them over the highway WebSocket on
+  request (`?five_fret_part=<id>`, with `song_info.five_fret_parts` listing
+  what a pack has), and imports Rock Band / Clone Hero charts with the guitar,
+  rhythm and bass parts kept. The library indexes them too: items carry
+  `five_fret_parts` (for example `["guitar:chart", "bass:auto"]`) and
+  `/api/library` accepts `five_fret=any`, `guitar|rhythm|bass` (real or
+  auto-generated) or `guitar:chart` etc. (that part, real chart only).
 - **Library drum-chart filter.** `/api/library` songs now report `has_drum_tab` and `has_vocal_pitch`, and every library endpoint accepts `has_drums=1` (only songs with a drum chart: a `drum_tab`, or an arrangement named Drums, Percussion or Drum Kit) or `has_drums=0` (only songs without one).
 - **Karaoke library filter.** The Filters drawer has a one-click
   **Karaoke-ready** button that shows the songs you can sing: synced lyrics with

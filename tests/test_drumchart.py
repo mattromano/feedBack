@@ -332,7 +332,7 @@ def test_convert_folder_to_pack_and_load(tmp_path):
         tab = json.loads(z.read("drum_tab.json"))
         tl = json.loads(z.read("song_timeline.json"))
         assert z.read("stems/full.ogg") == FAKE_OGG
-    assert man["feedpak_version"] == "1.20.0"
+    assert man["feedpak_version"] == "1.21.0"
     assert man["title"] == "Song" and man["artist"] == "Band" and man["album"] == "Record" and man["year"] == 2004
     assert man["arrangements"] == [{"id": "drums", "name": "Drums", "type": "drums", "drum_tab": "drum_tab.json"}]
     assert man["drum_tab"] == "drum_tab.json" and man["song_timeline"] == "song_timeline.json"

@@ -188,8 +188,9 @@ class DrumChart:
     levels: dict = field(default_factory=dict)          # "easy"/"medium"/"hard" -> [DrumHit]
     levels_generated: list = field(default_factory=list)  # which of those were reduced by software
 
-    def beat_list(self) -> list[dict]:
-        end = max((h.tick for h in self.hits), default=0)
+    def beat_list(self, end_tick: int = 0) -> list[dict]:
+        """Beats through the measure holding the last hit (or ``end_tick``, if later)."""
+        end = max([h.tick for h in self.hits] + [end_tick])
         return [{"time": round(self.tempo.tick_to_time(t) + self.offset, 3), "measure": m}
                 for t, m in self.tempo.beats(end)]
 
@@ -244,9 +245,13 @@ class _RawNote:
     dyn: str | None = None
 
 
-def _normalize_text(text: str) -> str:
+def normalize_text(text: str) -> str:
+    """A chart text event without its [brackets], stripped. Shared with lib/fivefretchart.py."""
     m = re.search(r"\[(.*?)\]", text)
     return (m.group(1) if m else text).strip()
+
+
+_normalize_text = normalize_text
 
 
 def _section_name(text: str) -> str | None:
@@ -378,13 +383,18 @@ def track_events(track) -> tuple[list, list]:
     return texts, events
 
 
-def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
+def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert",
+              missing_ok: bool = False) -> DrumChart:
+    """With ``missing_ok``, a file without a drums track gives a chart with no hits (its
+    tempo map and sections only) instead of raising."""
     ini = ini or {}
     tempo, sections, tracks = read_mid(path)
     # PART DRUMS overrides; the alternates only fill in when it's missing (TrackOverrides)
     drum_track = next((tracks[n] for n in DRUM_TRACK_NAMES if n in tracks), None)
     if drum_track is None:
-        raise ValueError(f"{Path(path).name}: no PART DRUMS track")
+        if not missing_ok:
+            raise ValueError(f"{Path(path).name}: no PART DRUMS track")
+        drum_track = []
 
     base = DIFF_START[difficulty]
     texts, events = track_events(drum_track)
@@ -426,7 +436,8 @@ def parse_mid(path: Path, ini: dict | None = None, difficulty: str = "expert") -
 _CHART_SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
 
-def _chart_sections(text: str) -> dict[str, list[str]]:
+def chart_sections(text: str) -> dict[str, list[str]]:
+    """A notes.chart as {section name: [body lines]}. Shared with lib/fivefretchart.py."""
     out, cur, body = {}, None, None
     for line in text.splitlines():
         m = _CHART_SECTION.match(line)
@@ -445,7 +456,8 @@ def _chart_sections(text: str) -> dict[str, list[str]]:
     return out
 
 
-def _chart_song_section(secs: dict) -> dict:
+def chart_song_section(secs: dict) -> dict:
+    """The [Song] section of chart_sections() output as {key: unquoted value}."""
     song = {}
     for line in secs.get("Song", []):
         k, _, v = line.partition("=")
@@ -453,11 +465,13 @@ def _chart_song_section(secs: dict) -> dict:
     return song
 
 
-def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert") -> DrumChart:
-    ini = ini or {}
-    secs = _chart_sections(Path(path).read_text(encoding="utf-8-sig", errors="replace"))
-    song = _chart_song_section(secs)
-    res = int(float(song.get("Resolution", 192)))
+_chart_sections = chart_sections
+_chart_song_section = chart_song_section
+
+
+def chart_tempo(secs: dict, resolution: int) -> TempoMap:
+    """The [SyncTrack] of chart_sections() output (``B`` tempos, ``TS`` time signatures)
+    as a TempoMap. Shared with lib/fivefretchart.py."""
     tempos, sigs = [], []
     for line in secs.get("SyncTrack", []):
         k, _, v = line.partition("=")
@@ -470,7 +484,17 @@ def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert")
         elif parts[0] == "TS":
             den = 2 ** int(parts[2]) if len(parts) > 2 else 4
             sigs.append((t, int(parts[1]), den))
-    tempo = TempoMap(res, tempos, sigs)
+    return TempoMap(resolution, tempos, sigs)
+
+
+def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert",
+                missing_ok: bool = False) -> DrumChart:
+    """``missing_ok`` as in parse_mid."""
+    ini = ini or {}
+    secs = _chart_sections(Path(path).read_text(encoding="utf-8-sig", errors="replace"))
+    song = _chart_song_section(secs)
+    res = int(float(song.get("Resolution", 192)))
+    tempo = chart_tempo(secs, res)
     sections = []
     for line in secs.get("Events", []):
         k, _, v = line.partition("=")
@@ -482,7 +506,9 @@ def parse_chart(path: Path, ini: dict | None = None, difficulty: str = "expert")
     name = difficulty.capitalize() + "Drums"
     track = secs.get(name)
     if track is None:
-        raise ValueError(f"{Path(path).name}: no [{name}] section")
+        if not missing_ok:
+            raise ValueError(f"{Path(path).name}: no [{name}] section")
+        track = []
     raw, flags, sp, fills, texts = [], [], [], [], []
     for line in track:
         k, _, v = line.partition("=")
@@ -543,9 +569,11 @@ def find_chart_file(folder: Path) -> Path | None:
     return hits[0] if hits else None
 
 
-def load_song_folder(folder: Path, difficulty: str = "expert", levels: bool = True) -> tuple[DrumChart, dict]:
+def load_song_folder(folder: Path, difficulty: str = "expert", levels: bool = True,
+                     missing_ok: bool = False) -> tuple[DrumChart, dict]:
     """Parse a CH/YARG song folder. With ``levels`` (Expert only), the chart's own
-    Easy/Medium/Hard parts are read into ``chart.levels`` where they have notes."""
+    Easy/Medium/Hard parts are read into ``chart.levels`` where they have notes. With
+    ``missing_ok``, a chart without drums gives a chart with no hits (see parse_mid)."""
     folder = Path(folder)
     ini = load_song_ini(folder / "song.ini")
     chart_path = find_chart_file(folder)
@@ -553,7 +581,7 @@ def load_song_folder(folder: Path, difficulty: str = "expert", levels: bool = Tr
         raise FileNotFoundError(f"{folder.name}: no notes.mid or notes.chart")
     is_chart = chart_path.suffix.lower() == ".chart"
     parse = parse_chart if is_chart else parse_mid
-    chart = parse(chart_path, ini, difficulty)
+    chart = parse(chart_path, ini, difficulty, missing_ok)
     if is_chart and (not ini.get("name") or not ini.get("artist")):
         song = _chart_song_section(_chart_sections(chart_path.read_text(encoding="utf-8-sig", errors="replace")))
         for key, ini_key in (("Name", "name"), ("Artist", "artist"), ("Album", "album")):
@@ -658,14 +686,15 @@ def tab_spans(tab: dict, key: str) -> list[tuple[float, float]]:
     return out
 
 
-def song_timeline(chart: DrumChart) -> dict:
-    """The chart's tempo map, beats and sections as a `song_timeline.json` payload."""
+def song_timeline(chart: DrumChart, end_tick: int = 0) -> dict:
+    """The chart's tempo map, beats and sections as a `song_timeline.json` payload; beats run
+    through the last hit or ``end_tick`` (for other parts of the same chart), whichever is later."""
     tm, off = chart.tempo, chart.offset
     return {
         "version": 1,
         "tempos": [{"time": round(tm.tick_to_time(t) + off, 4), "bpm": round(bpm, 4)} for t, bpm in tm.tempos],
         "time_signatures": [{"time": round(tm.tick_to_time(t) + off, 4), "ts": [int(n), int(d)]}
                             for t, n, d in tm.time_sigs],
-        "beats": chart.beat_list(),
+        "beats": chart.beat_list(end_tick),
         "sections": [{"name": n, "number": i + 1, "time": t} for i, (t, n) in enumerate(chart.sections)],
     }

@@ -44,6 +44,7 @@ from song import (
 from audio import find_wem_files, convert_wem
 import sloppak as sloppak_mod
 import drums as drums_mod
+import fivefret as fivefret_mod
 import notation as notation_mod
 import loosefolder as loosefolder_mod
 from metadata_db import _arr_smart_sort_key
@@ -203,7 +204,7 @@ def _drum_part_id_for_wire(drum_parts: list[dict] | None, selected_id: str | Non
 @router.websocket("/ws/highway/{filename:path}")
 async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                      naming_mode: str = "legacy", drum_part: str = "",
-                     arrangement_name: str = ""):
+                     arrangement_name: str = "", five_fret_part: str = ""):
     """Stream song data for the highway renderer over WebSocket.
 
     `arrangement_name` is a soft pick used only when no explicit
@@ -216,7 +217,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
     several (feedpak 1.17.0 "drums as arrangements") — a part id from
     song_info's `drum_parts`. Empty / unknown ids fall back to the primary,
     so a stale or mistyped selection degrades to today's behavior instead of
-    silencing drums."""
+    silencing drums.
+
+    `five_fret_part` restricts the five-fret stream to ONE part (a part id
+    from song_info's `five_fret_parts`); an unknown id streams nothing.
+    Absent, every five-fret part streams in manifest order."""
     await websocket.accept()
     structlog.contextvars.bind_contextvars(ws_conn_id=uuid.uuid4().hex[:8])
 
@@ -653,6 +658,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 {"id": p["id"], "name": p["name"]}
                 for p in (loaded_slop.drum_parts or [])
             ] if is_slop and loaded_slop is not None else [],
+            # The song's FIVE-FRET PARTS, manifest order — metadata only; the
+            # parts stream as `five_fret*` frames (all, or the `?five_fret_part=` one).
+            # Always a list (empty when none).
+            "five_fret_parts": [
+                {k: p[k] for k in ("id", "name", "instrument", "source_kind")}
+                for p in (loaded_slop.five_fret_parts or [])
+            ] if is_slop and loaded_slop is not None else [],
             "has_notation": bool(
                 is_slop
                 and loaded_slop is not None
@@ -742,6 +754,52 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                         })
             except WebSocketDisconnect:
                 return
+
+        # Stream the five-fret parts: every part in manifest order, or only
+        # the one named by `?five_fret_part=` (unknown id -> nothing). Per
+        # part: a `five_fret` header, `five_fret_notes` chunks, then each
+        # level's notes as `five_fret_level_notes` chunks — 500 per frame,
+        # like drums. Every frame carries `part_id` so the client can route.
+        if is_slop and loaded_slop is not None:
+            for _ff_part in (loaded_slop.five_fret_parts or []):
+                if five_fret_part and _ff_part["id"] != five_fret_part:
+                    continue
+                ff = _ff_part["five_fret"]
+                ff_notes = fivefret_mod.notes_to_wire(ff.get("notes") or [])
+                ff_levels = fivefret_mod.levels_to_wire(ff.get("levels"))
+                _ff_msg = {
+                    "type": "five_fret",
+                    "part_id": _ff_part["id"],
+                    "name": _ff_part["name"],
+                    "instrument": _ff_part["instrument"],
+                    "source_kind": _ff_part["source_kind"],
+                    "total": len(ff_notes),
+                }
+                for _key in ("star_power", "solos"):
+                    _ranges = fivefret_mod.ranges_to_wire(ff.get(_key))
+                    if _ranges:
+                        _ff_msg[_key] = _ranges
+                if ff_levels:
+                    _ff_msg["levels"] = ff_levels
+                try:
+                    await websocket.send_json(_ff_msg)
+                    for i in range(0, len(ff_notes), 500):
+                        await websocket.send_json({
+                            "type": "five_fret_notes",
+                            "part_id": _ff_part["id"],
+                            "notes": ff_notes[i:i + 500],
+                        })
+                    for lid in ff_levels:
+                        _lv_notes = fivefret_mod.notes_to_wire(ff["levels"][lid].get("notes"))
+                        for i in range(0, len(_lv_notes), 500):
+                            await websocket.send_json({
+                                "type": "five_fret_level_notes",
+                                "part_id": _ff_part["id"],
+                                "level": lid,
+                                "notes": _lv_notes[i:i + 500],
+                            })
+                except WebSocketDisconnect:
+                    return
 
         # Send beats
         beats = [{"time": b.time, "measure": b.measure} for b in song.beats]

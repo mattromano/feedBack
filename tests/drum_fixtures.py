@@ -52,23 +52,29 @@ def write_mid(path: Path, notes, *, tempos=((0, 120.0),), sigs=((0, 4, 4),), tex
 
 
 def write_chart(path: Path, lines, *, resolution=192, tempos=((0, 120.0),), sigs=((0, 4),), offset=None,
-                events=(), name="Song", artist="Band"):
-    """lines: (tick, 'N'|'S'|'E', a, b) entries for [ExpertDrums]."""
+                events=(), name="Song", artist="Band", section="ExpertDrums", extra_sections=None):
+    """lines: (tick, 'N'|'S'|'E', a, b) entries for [<section>] (default [ExpertDrums]);
+    extra_sections: {section name: lines} for more parts (e.g. [ExpertDoubleBass])."""
     song = [f'  Name = "{name}"', f'  Artist = "{artist}"', f"  Resolution = {resolution}"]
     if offset is not None:
         song.append(f"  Offset = {offset}")
     sync = [f"  {t} = TS {n}" for t, n in sigs] + [f"  {t} = B {int(round(b * 1000))}" for t, b in tempos]
     sync.sort(key=lambda s: int(s.split("=")[0]))
     ev = [f'  {t} = E "section {n}"' for t, n in events]
-    drums = []
-    for item in sorted(lines, key=lambda x: (x[0], x[1])):
-        t, kind = item[0], item[1]
-        if kind in ("N", "S"):
-            drums.append(f"  {t} = {kind} {item[2]} {item[3]}")
-        else:
-            drums.append(f"  {t} = E {item[2]}")
+    def track(sec, items):
+        out = []
+        for item in sorted(items, key=lambda x: (x[0], x[1])):
+            t, kind = item[0], item[1]
+            if kind in ("N", "S"):
+                out.append(f"  {t} = {kind} {item[2]} {item[3]}")
+            else:
+                out.append(f"  {t} = E {item[2]}")
+        return [f"[{sec}]", "{", *out, "}"]
+
     body = ["[Song]", "{", *song, "}", "[SyncTrack]", "{", *sync, "}", "[Events]", "{", *ev, "}",
-            "[ExpertDrums]", "{", *drums, "}"]
+            *track(section, lines)]
+    for sec, items in (extra_sections or {}).items():
+        body += track(sec, items)
     Path(path).write_text("\n".join(body) + "\n", encoding="utf-8")
     return path
 

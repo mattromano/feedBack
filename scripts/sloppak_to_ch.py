@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Drums feedpak -> Clone Hero / YARG song folder (notes.mid + song.ini + OGG stems).
+"""Drums / 5-fret feedpak -> Clone Hero / YARG song folder (notes.mid + song.ini + OGG stems).
 
 Usage:
     python scripts/sloppak_to_ch.py SONG.sloppak OUT_DIR [--part ID] [-v]
 
-The inverse of scripts/ch_to_sloppak.py, for the pack's drums. notes.mid gets:
+The inverse of scripts/ch_to_sloppak.py, for the pack's drums and 5-fret parts. notes.mid gets:
 
 - a tempo map + time signatures rebuilt from the pack's beat grid (480 ticks per
   beat; a pickup before the first beat), and EVENTS sections;
@@ -13,7 +13,16 @@ The inverse of scripts/ch_to_sloppak.py, for the pack's drums. notes.mid gets:
   the MIDI default and toms get tom markers (110/111/112); ``x2`` kicks go on note
   95; ``a`` / ``g`` become velocity 127 / 1 under [ENABLE_CHART_DYNAMICS]; the
   tab's ``levels`` become the Easy/Medium/Hard parts; ``star_power`` (116),
-  ``fills`` (120-124) and ``solos`` (103) become their phrase notes.
+  ``fills`` (120-124) and ``solos`` (103) become their phrase notes;
+- PART GUITAR / PART RHYTHM / PART BASS from the pack's ``five_fret`` parts (the first
+  part per instrument): frets at each difficulty's base (open = base-1 under
+  [ENHANCED_OPENS]); every note's HOPO state is spelled out so a re-import reproduces
+  it whatever the HOPO threshold: forced HOPO (base+5) on ``h`` notes, forced strum
+  (base+6) on other single notes (chords are never natural HOPOs), tap (104) on Expert
+  ``tap`` notes (104 covers every difficulty, so a lower level's own taps elsewhere go out
+  as Phase Shift tap phrases for that difficulty); ``star_power`` (116) and ``solos`` (103). Only authored levels are written
+  (``generated`` ones are left to the game). song.ini gets ``sustain_cutoff_threshold``
+  so short sustains survive and plain notes (1 tick long) stay plain.
 
 The MIDI layout follows YARG.Core's MidIOHelper / MidReader (LGPL-3.0, see
 lib/drumchart.py). Stems: drums/bass/guitar/vocals/piano(keys)/other(song) are
@@ -37,6 +46,8 @@ sys.path.insert(0, str(_ROOT / "lib"))
 
 import audio  # noqa: E402
 import drumchart  # noqa: E402
+import fivefret  # noqa: E402
+import fivefretchart  # noqa: E402
 import sloppak  # noqa: E402
 
 log = logging.getLogger("feedBack.scripts.sloppak_to_ch")
@@ -46,6 +57,10 @@ STEM_TO_CH = {"drums": "drums", "bass": "bass", "guitar": "guitar", "vocals": "v
               "other": "song", "full": "song"}
 TOM_MARKER = {"yellow": 110, "blue": 111, "green": 112}
 PAD_INDEX = {p: i for i, p in enumerate(drumchart.PADS)}
+FIVE_FRET_TRACK = {"guitar": "PART GUITAR", "rhythm": "PART RHYTHM", "bass": "PART BASS"}
+# song.ini sustain cutoff (ticks) for exported 5-fret parts: plain notes are written 1 tick
+# long, so they fall under it; any real sustain is written at least this long.
+SUSTAIN_CUTOFF = 2
 
 
 # ── tempo map from beats ────────────────────────────────────────────────────
@@ -181,6 +196,58 @@ def drums_track(tab: dict, clock: BeatClock):
     return _msgs_track("PART DRUMS", ev), len(hits)
 
 
+def _ps_phrase(events, tick, diff, code):
+    """A one-tick Phase Shift sysex phrase (lib/fivefretchart.py PS_*) for one difficulty."""
+    import mido
+    head = list(fivefretchart.PS_HEADER) + [fivefretchart.PS_TYPE_PHRASE, diff, code]
+    events.append((tick, 2, mido.Message("sysex", data=head + [1])))
+    events.append((tick + 1, 1, mido.Message("sysex", data=head + [0])))
+
+
+def five_fret_track(ff: dict, clock: BeatClock):
+    """PART GUITAR / RHYTHM / BASS for a five_fret payload -> (track, Expert note count).
+    Marker notes are 1 tick long: the importer's ranges end before the note-off tick."""
+    import mido
+    levels = [("expert", fivefret.notes_to_wire(ff.get("notes")))]
+    for lv in drumchart.LOWER_LEVELS:
+        entry = (ff.get("levels") or {}).get(lv)
+        if isinstance(entry, dict) and entry.get("generated") is not True:
+            levels.append((lv, fivefret.notes_to_wire(entry.get("notes"))))
+    ev = []
+    if any(n["f"] == 0 for _, notes in levels for n in notes):
+        ev.append((0, 0, mido.MetaMessage("text", text=f"[{fivefretchart.ENHANCED_OPENS_TEXT}]")))
+    taps: dict[str, set] = {lv: set() for lv, _ in levels}
+    seen = set()
+    for lv, notes in levels:
+        base = drumchart.DIFF_START[lv]
+        for n in notes:
+            tk = clock.tick(n["t"])
+            length = 1
+            if n.get("l"):
+                length = max(clock.tick(n["t"] + n["l"]) - tk, SUSTAIN_CUTOFF)
+            frets = [i for i in range(5) if n["f"] >> i & 1] or [-1]           # -1: open
+            for i in frets:
+                if (tk, base + i) not in seen:
+                    seen.add((tk, base + i))
+                    _note(ev, tk, base + i, 100, length=length)
+            if n.get("tap"):
+                taps[lv].add(tk)
+            elif n.get("h"):
+                _note(ev, tk, base + fivefretchart.MIDI_FORCE_HOPO, 100, length=1)
+            elif len(frets) == 1:
+                _note(ev, tk, base + fivefretchart.MIDI_FORCE_STRUM, 100, length=1)
+    taps_expert = taps.pop("expert")
+    for tk in sorted(taps_expert):
+        _note(ev, tk, fivefretchart.MIDI_TAP, 100, length=1)
+    for lv, ticks in taps.items():
+        for tk in sorted(ticks):
+            if tk not in taps_expert:
+                _ps_phrase(ev, tk, fivefretchart.PS_DIFF[lv], fivefretchart.PS_TAP)
+    _phrase(ev, clock, drumchart.tab_spans(ff, "star_power"), [fivefretchart.MIDI_STARPOWER])
+    _phrase(ev, clock, drumchart.tab_spans(ff, "solos"), [fivefretchart.MIDI_SOLO])
+    return _msgs_track(FIVE_FRET_TRACK[ff.get("instrument")], ev), len(levels[0][1])
+
+
 # ── driver ──────────────────────────────────────────────────────────────────
 
 def _pick_tab(loaded, part: str | None) -> dict | None:
@@ -207,21 +274,33 @@ def _copy_audio(files: list[Path], dst: Path) -> None:
     subprocess.run(cmd + ["-c:a", "libvorbis", "-q:a", "6", str(dst)], check=True)
 
 
+def _five_fret_parts(loaded) -> list[dict]:
+    """The pack's five_fret payloads, the first part per instrument."""
+    out: dict[str, dict] = {}
+    for p in loaded.five_fret_parts or []:
+        out.setdefault(p["instrument"], p["five_fret"])
+    return [dict(out[i], instrument=i) for i in fivefret.PARTS if i in out]
+
+
 def export(pack: Path, out_dir: Path, part: str | None = None) -> dict:
-    """Write a CH/YARG song folder for a pack's drum part. Returns a summary dict."""
+    """Write a CH/YARG song folder for a pack's drum part and 5-fret parts. Returns a summary dict."""
     import mido
     pack = Path(pack)
     cache = Path(tempfile.mkdtemp(prefix="pak2ch_"))
     try:
         loaded = sloppak.load_song(pack.name, pack.parent, cache)
         tab = _pick_tab(loaded, part)
-        if tab is None:
-            raise ValueError(f"{pack.name}: no drum_tab to export")
+        fives = _five_fret_parts(loaded)
+        if tab is None and not fives:
+            raise ValueError(f"{pack.name}: no drum_tab or five_fret part to export")
         song, man = loaded.song, loaded.manifest
         beats = [{"time": b.time, "measure": b.measure} for b in song.beats]
-        first = min((float(h["t"]) for h in tab.get("hits") or [] if isinstance(h, dict) and "t" in h),
-                    default=None)
-        clock = BeatClock(beats, first)
+        times = [float(h["t"]) for h in (tab or {}).get("hits") or [] if isinstance(h, dict) and "t" in h]
+        for ff in fives:
+            times += [n["t"] for n in fivefret.notes_to_wire(ff.get("notes"))]
+            times += [n["t"] for lv in (ff.get("levels") or {}).values() if isinstance(lv, dict)
+                      for n in fivefret.notes_to_wire(lv.get("notes"))]
+        clock = BeatClock(beats, min(times, default=None))
         mid = mido.MidiFile(type=1, ticks_per_beat=TPQ)
         sync = [(t, 0, mido.MetaMessage("set_tempo", tempo=us)) for t, us in clock.tempo_events()]
         sync += [(t, 0, mido.MetaMessage("time_signature", numerator=n, denominator=4))
@@ -230,8 +309,14 @@ def export(pack: Path, out_dir: Path, part: str | None = None) -> dict:
         mid.tracks.append(_msgs_track("EVENTS", [
             (clock.tick(s.start_time), 0, mido.MetaMessage("text", text=f"[section {s.name}]"))
             for s in song.sections]))
-        tr, n = drums_track(tab, clock)
-        mid.tracks.append(tr)
+        parts = {}
+        if tab is not None:
+            tr, parts["PART DRUMS"] = drums_track(tab, clock)
+            mid.tracks.append(tr)
+        for ff in fives:
+            tr, n = five_fret_track(ff, clock)
+            parts[tr.name] = n
+            mid.tracks.append(tr)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         mid.save(str(out_dir / "notes.mid"))
@@ -254,11 +339,14 @@ def export(pack: Path, out_dir: Path, part: str | None = None) -> dict:
         ini = {"name": man.get("title", ""), "artist": man.get("artist", ""), "album": man.get("album", ""),
                "year": man.get("year", "") or "", "charter": "feedBack export",
                "delay": int(round(clock.delay * 1000)),
-               "song_length": int(round(float(man.get("duration", 0) or 0) * 1000)),
-               "pro_drums": "True", "five_lane_drums": "False", "diff_drums": -1}
+               "song_length": int(round(float(man.get("duration", 0) or 0) * 1000))}
+        if tab is not None:
+            ini.update({"pro_drums": "True", "five_lane_drums": "False", "diff_drums": -1})
+        if fives:
+            ini["sustain_cutoff_threshold"] = SUSTAIN_CUTOFF
         (out_dir / "song.ini").write_text(
             "[song]\n" + "".join(f"{k} = {v}\n" for k, v in ini.items() if v != ""), encoding="utf-8")
-        return {"out": str(out_dir), "parts": {"PART DRUMS": n}, "stems": sorted(groups),
+        return {"out": str(out_dir), "parts": parts, "stems": sorted(groups),
                 "tempo_events": len(clock.tempo_events())}
     finally:
         shutil.rmtree(cache, ignore_errors=True)
@@ -277,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
         log.error("%s", e)
         return 1
-    log.info("wrote %s: PART DRUMS %d notes; stems %s", s["out"], s["parts"]["PART DRUMS"],
+    log.info("wrote %s: %s; stems %s", s["out"], ", ".join(f"{k} {n} notes" for k, n in s["parts"].items()),
              ", ".join(s["stems"]) or "none")
     return 0
 

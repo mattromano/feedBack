@@ -13,6 +13,7 @@ See the format spec in the project's sloppak plan for the full layout.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -52,7 +53,7 @@ FULL_MIX_STEM_ID = "full"
 
 import yaml
 
-from jsonc import load_json
+from jsonc import load_json, parse_jsonc
 from safepath import safe_join
 from song import (
     Song,
@@ -64,6 +65,7 @@ from song import (
     sanitize_tempos,
 )
 import drums as drums_mod
+import fivefret as fivefret_mod
 import notation as notation_mod
 
 
@@ -775,28 +777,50 @@ class LoadedSloppak:
     # its back-compat alias). None when the pack has no drums at all; a
     # single-part list for a legacy pack with only the song-level key.
     drum_parts: list[dict] | None = None
+    # The song's FIVE-FRET PARTS (guitar-style 5-lane charts for plastic
+    # controllers): one dict {"id", "name", "instrument", "source_kind",
+    # "pairs_with", "five_fret"} per `type: five_fret` arrangement entry, in
+    # manifest order, where `five_fret` is the parsed + validated side file.
+    # Like drum parts, these entries are NEVER turned into fretted
+    # Arrangements. None when the pack has none.
+    five_fret_parts: list[dict] | None = None
 
 
-def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
-    """Load + schema-validate one drum-tab JSON named by a manifest-relative
-    path. Shared by the song-level `drum_tab:` key and the per-arrangement
-    drum-part pointers (feedpak 1.17.0), so every tab gets the same posture:
-    permissive — a missing file disables that part silently; a traversal,
-    parse, or validation failure disables it with a warning, never aborting
-    the load."""
-    dt_path = _resolve_pack_path(source_dir, rel, label)
-    if dt_path is None or not dt_path.exists():
+def _load_side_json(source_dir: Path, rel: str, label: str, validator) -> dict | None:
+    """Load + validate one side-file JSON named by a manifest-relative path.
+
+    Shared posture for every validated side file (drum tabs, five-fret
+    charts): permissive — a missing file disables that part silently; a
+    traversal, parse, or validation failure disables it with a warning, never
+    aborting the load. `validator(raw) -> (ok, reason)`."""
+    path = _resolve_pack_path(source_dir, rel, label)
+    if path is None or not path.exists():
         return None
     try:
-        raw = load_json(dt_path)
+        raw = load_json(path)
     except Exception as e:
         log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
         return None
-    ok, reason = drums_mod.validate_drum_tab(raw)
+    try:
+        ok, reason = validator(raw)
+    except Exception as e:  # a validator bug still only disables this part
+        ok, reason = False, f"validator raised {type(e).__name__}: {e}"
     if not ok:
         log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
         return None
     return raw
+
+
+def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
+    """Load + schema-validate one drum-tab JSON. Shared by the song-level
+    `drum_tab:` key and the per-arrangement drum-part pointers (feedpak
+    1.17.0), so every tab gets the same `_load_side_json` posture."""
+    return _load_side_json(source_dir, rel, label, drums_mod.validate_drum_tab)
+
+
+def _load_five_fret_file(source_dir: Path, rel: str, label: str) -> dict | None:
+    """Load + schema-validate one five-fret chart JSON (`_load_side_json`)."""
+    return _load_side_json(source_dir, rel, label, fivefret_mod.validate_five_fret)
 
 
 def _load_rigs_file(source_dir: Path, rel: str) -> dict | None:
@@ -1024,6 +1048,7 @@ def load_song(
     any_notation = False
     arrangement_ids_acc: list[str | None] = []  # parallel to song.arrangements
     drum_pointer_entries: list[dict] = []  # feedpak 1.17.0 drum-part pointers
+    five_fret_entries: list[dict] = []  # `type: five_fret` part pointers
     for entry in manifest.get("arrangements", []) or []:
         if not isinstance(entry, dict):
             log.warning("sloppak: non-dict arrangement entry skipped (%r)", type(entry).__name__)
@@ -1034,10 +1059,16 @@ def load_song(
         has_notation_key = isinstance(notation_raw, str) and bool(notation_raw.strip())
         _etype = str(entry.get("type") or "").strip().lower()
         is_drums = _etype in ("drums", "drum")
+        is_five_fret = _etype == "five_fret"
         # A drums-typed entry MUST NEVER become a fretted Arrangement (grading
         # invariant, spec §5.2/§7.5): route on `type` FIRST, not on file
         # absence — a malformed drums entry that also carries a note file/
         # notation would otherwise fall through and grade as garbage.
+        # Same for a five-fret entry: it points at a `five_fret` side file and
+        # never becomes a fretted Arrangement, even if it also carries a `file`.
+        if is_five_fret:
+            five_fret_entries.append(entry)
+            continue
         if is_drums or (not rel and not has_notation_key):
             # A DRUM-PART POINTER entry (feedpak 1.17.0 "drums as
             # arrangements"): `type: drums` with a per-arrangement `drum_tab`
@@ -1182,6 +1213,39 @@ def load_song(
         drum_tones_data,
     )
 
+    # Five-fret parts: load each pointed-at side file with the same permissive
+    # posture as drum parts — a bad entry disables that part only.
+    five_fret_loaded: list[dict] = []
+    for entry in five_fret_entries:
+        entry_id = str(entry.get("id") or "").strip()
+        instrument = entry.get("instrument")
+        if instrument not in fivefret_mod.PARTS:
+            log.warning(
+                "sloppak: five_fret entry %r has unsupported instrument %r — dropped",
+                entry_id, instrument,
+            )
+            continue
+        rel_raw = entry.get("five_fret")
+        rel = rel_raw.strip() if isinstance(rel_raw, str) else ""
+        if not rel:
+            log.warning("sloppak: five_fret entry %r has no five_fret pointer — dropped", entry_id)
+            continue
+        ff = _load_five_fret_file(source_dir, rel, f"five_fret part {entry_id or rel}")
+        if ff is None:
+            continue
+        file_name = ff.get("name")
+        pairs_with = entry.get("pairs_with")
+        five_fret_loaded.append({
+            "id": entry_id,
+            "name": str(entry.get("name") or "").strip()
+                or (file_name if isinstance(file_name, str) and file_name else entry_id),
+            "instrument": instrument,
+            "source_kind": ff["source"]["kind"],
+            "pairs_with": pairs_with if isinstance(pairs_with, str) and pairs_with else None,
+            "five_fret": ff,
+        })
+    five_fret_parts = five_fret_loaded or None
+
     # Drum-only sloppak: every GP track was percussion, so it ships a
     # drum_tab but no pitched arrangements. The highway WS rejects an empty
     # arrangements list with "No arrangements found" *before* it serves the
@@ -1191,8 +1255,20 @@ def load_song(
     # highway just shows an empty board) and, when the manifest omits a
     # duration, derives a song length from the last drum hit so the timeline
     # isn't zero-length.
-    if not song.arrangements and drum_tab_data is not None:
-        if song.song_length <= 0:
+    #
+    # A pack whose only arrangements are `five_fret` entries gets the same
+    # placeholder for the same reason (five-fret parts never become fretted
+    # Arrangements), so the five-fret stream can reach a client.
+    if not song.arrangements and (drum_tab_data is not None or five_fret_parts):
+        if song.song_length <= 0 and drum_tab_data is None:
+            _max_t = 0.0
+            for _p in five_fret_parts:
+                for _n in _p["five_fret"].get("notes") or []:
+                    if isinstance(_n, dict) and isinstance(_n.get("t"), (int, float)):
+                        _max_t = max(_max_t, float(_n["t"]))
+            if _max_t > 0:
+                song.song_length = _max_t + 2.0
+        elif song.song_length <= 0:
             # validate_drum_tab() intentionally does NOT type-check individual
             # hits (they're sanitized at WS-stream time), so a hit may carry a
             # non-numeric "t". Skip anything that won't convert rather than let
@@ -1207,7 +1283,9 @@ def load_song(
                     continue
             if _max_t > 0:
                 song.song_length = _max_t + 2.0
-        song.arrangements.append(Arrangement(name="Drums"))
+        song.arrangements.append(
+            Arrangement(name="Drums" if drum_tab_data is not None else five_fret_parts[0]["name"])
+        )
         arrangement_ids_acc.append(None)
 
     # Optional song_timeline.json — top-level manifest key per sloppak-spec §5.3.
@@ -1493,6 +1571,7 @@ def load_song(
         feedpak_version=_fpv if isinstance(_fpv, str) and _fpv else None,
         drum_tab=drum_tab_data,
         drum_parts=drum_parts,
+        five_fret_parts=five_fret_parts,
         song_timeline=song_timeline_data,
         tempos=tempos_data,
         time_signatures=time_sigs_data,
@@ -1542,6 +1621,49 @@ def _role_tuning_for_meta(arrangements_manifest: list[dict], role: str) -> list[
     return None
 
 
+def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[tuple[str, str]]:
+    """`("<instrument>:<kind>", display name)` per `type: five_fret` entry, for
+    the library index (kind = the part file's `source.kind`).
+
+    Mirrors load_song()'s keep-rules for what the manifest declares (known
+    instrument, non-empty pointer) but reads only the tiny `source` / `name`
+    fields from each part file — a missing/unreadable/odd file defaults to
+    kind "chart" rather than hiding a part the manifest declares. Never
+    unpacks a zip."""
+    parts: list[tuple[str, str]] = []
+    for entry in arr_list:
+        if not (isinstance(entry, dict)
+                and str(entry.get("type") or "").strip().lower() == "five_fret"):
+            continue
+        instrument = entry.get("instrument")
+        rel = entry.get("five_fret")
+        if instrument not in fivefret_mod.PARTS or not (isinstance(rel, str) and rel.strip()):
+            continue
+        kind = "chart"
+        file_name = None
+        try:
+            raw = read_member_bytes(path, rel)
+            if raw is None:
+                doc = None
+            elif rel.strip().lower().endswith(".jsonc"):
+                doc = parse_jsonc(raw.decode("utf-8"))
+            else:
+                doc = json.loads(raw)
+            if isinstance(doc, dict):
+                src = doc.get("source")
+                if isinstance(src, dict) and src.get("kind") == "auto":
+                    kind = "auto"
+                if isinstance(doc.get("name"), str):
+                    file_name = doc["name"]
+        except Exception as e:
+            log.debug("sloppak: five_fret meta: cannot read %r in %s (%s); assuming kind 'chart'",
+                      rel, path, e)
+        name = (str(entry.get("name") or "").strip()
+                or (file_name or "") or str(entry.get("id") or "").strip())
+        parts.append((f"{instrument}:{kind}", name))
+    return parts
+
+
 def extract_meta(path: Path) -> dict:
     """Fast metadata for the library scanner. Reads only the manifest."""
     manifest = load_manifest(path)
@@ -1550,6 +1672,10 @@ def extract_meta(path: Path) -> dict:
     arrangements = []
     drum_entries: set[int] = set()
     for i, entry in enumerate(arr_list):
+        # A five_fret entry is never a song arrangement (load_song routes it to
+        # `five_fret_parts`), so it must not occupy an index here either.
+        if isinstance(entry, dict) and str(entry.get("type") or "").strip().lower() == "five_fret":
+            continue
         arrangements.append(
             {
                 "index": i,
@@ -1566,6 +1692,8 @@ def extract_meta(path: Path) -> dict:
     for i, a in enumerate(arrangements):
         a["index"] = i
 
+    five_fret_parts = _five_fret_parts_for_meta(path, arr_list)
+
     has_lyrics = bool(manifest.get("lyrics"))
     # Mirrors what load_song() keeps: a drums-typed entry without a `drum_tab`
     # pointer is dropped there, so it is not a drum chart here either.
@@ -1573,6 +1701,15 @@ def extract_meta(path: Path) -> dict:
         isinstance(e, dict)
         and str(e.get("type") or "").strip().lower() in ("drums", "drum")
         and isinstance(e.get("drum_tab"), str)
+        for e in arr_list
+    )
+    # A pack whose only arrangements are five_fret parts gets one note-less
+    # placeholder named after the first part (load_song does the same), so
+    # arrangement index 0 stays valid and aligned.
+    if not arrangements and not has_drum_tab and five_fret_parts:
+        arrangements.append({"index": 0, "name": five_fret_parts[0][1], "notes": 0})
+    five_fret_only = bool(five_fret_parts) and not has_drum_tab and all(
+        isinstance(e, dict) and str(e.get("type") or "").strip().lower() == "five_fret"
         for e in arr_list
     )
     tuning_offsets = _tuning_for_meta(arr_list)
@@ -1626,6 +1763,12 @@ def extract_meta(path: Path) -> dict:
         # mode scores against, so the library's Karaoke-ready filter keys on it.
         "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
         "has_drum_tab": has_drum_tab,
+        # ["guitar:chart", "bass:auto", ...] — the library's five_fret filter.
+        "five_fret_parts": list(dict.fromkeys(tag for tag, _name in five_fret_parts)),
+        # True when the pack has 5-fret parts and nothing else to play: every
+        # manifest arrangement is `type: five_fret` and there is no drum tab.
+        # Its note-less placeholder arrangement is not a real guitar part.
+        "five_fret_only": five_fret_only,
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,

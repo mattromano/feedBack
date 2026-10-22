@@ -233,7 +233,11 @@ window.feedBackViz_my_viz = function () {
             // toneChanges, toneBase, mastery, hasPhraseData, inverted,
             // lefty, renderScale, labelScale (fret-number glyph
             // multiplier, 0.75–2.5, from highway.setLabelScale),
-            // lyricsVisible, the 2D coordinate
+            // lyricsVisible, `fiveFretParts` (`{}` when none, else
+            // `{ [partId]: { partId, name, instrument, sourceKind, total, notes,
+            // levels: {easy|medium|hard: {notes, generated}}, starPower, solos } }`;
+            // live read-only reference, also `highway.getFiveFretParts()`),
+            // the 2D coordinate
             // helpers project and fretX, and getNoteState (see below).
             // The bundle OBJECT is reused across frames (mutated in
             // place — no per-frame allocation): never cache it or
@@ -638,6 +642,12 @@ of a code comment.)
 - **Type hints** — used sparingly (`Path | None`, `dict`, `list`)
 - **Docstrings** — minimal; code is self-documenting
 
+### `/api/library` filters (5-fret)
+
+| Param | Values | Notes |
+|-------|--------|-------|
+| `five_fret` | comma list, e.g. `guitar,bass` | Every valid entry must match (AND); invalid entries are dropped, duplicates collapse, none valid = no filter. Entry: `any`, `any:chart\|auto` (any part from that source), `guitar\|rhythm\|bass` (chart or auto), or `<inst>:chart\|auto`. Items carry `five_fret_parts` (`["guitar:chart", ...]`) and `five_fret_only` (true when the pack's only arrangements are 5-fret parts and it has no drum tab). |
+
 ## Testing
 
 ```bash
@@ -686,7 +696,7 @@ The highway WebSocket at `/ws/highway/{filename}?arrangement={index}` streams th
 | Message | Shape | Description |
 |---------|-------|-------------|
 | `loading` | `{ type: 'loading', stage }` | Status/progress message during extraction or conversion |
-| `song_info` | `{ type, title, artist, arrangement, arrangement_index, arrangements, duration, tuning, capo, centOffset, format, audio_url, audio_error, stems }` | Song metadata. `arrangements` is the full list for the switcher. `audio_url` is `null` when audio is unavailable, in which case `audio_error` is non-null; otherwise `audio_error` is `null`. `stems` is always present — an empty array for non-sloppak songs or sloppak songs with no split stems. `tuning` is an array (6 for guitar, 4 for bass). `centOffset` is a float (cents) from the RS2014 `<centOffset>` field — commonly `-1200.0` for extended-range bass (one octave down), small non-zero values for true-tuned content (e.g. A443 ≈ +11.8 cents), `0.0` when absent. Available via `getSongInfo().centOffset`. |
+| `song_info` | `{ type, title, artist, arrangement, arrangement_index, arrangements, duration, tuning, capo, centOffset, format, audio_url, audio_error, stems }` | Song metadata. `arrangements` is the full list for the switcher. `audio_url` is `null` when audio is unavailable, in which case `audio_error` is non-null; otherwise `audio_error` is `null`. `stems` is always present — an empty array for non-sloppak songs or sloppak songs with no split stems. `tuning` is an array (6 for guitar, 4 for bass). `centOffset` is a float (cents) from the RS2014 `<centOffset>` field — commonly `-1200.0` for extended-range bass (one octave down), small non-zero values for true-tuned content (e.g. A443 ≈ +11.8 cents), `0.0` when absent. Available via `getSongInfo().centOffset`. Also carries `five_fret_parts: [{ id, name, instrument, source_kind }]` (always a list, empty when the pack has none). |
 | `beats` | `{ type, data: [{ time, measure }] }` | Beat timestamps with measure numbers |
 | `sections` | `{ type, data: [{ time, name }] }` | Named sections (Intro, Verse, Chorus, etc.) |
 | `anchors` | `{ type, data: [{ time, fret, width }] }` | Fret zoom anchors |
@@ -696,6 +706,7 @@ The highway WebSocket at `/ws/highway/{filename}?arrangement={index}` streams th
 | `notes` | `{ type, data: [{ t, s, f, sus, ho, po, sl, bn, ... }] }` | Single notes |
 | `chords` | `{ type, data: [{ t, notes: [{ s, f, sus, ... }] }] }` | Chord events |
 | `phrases` | `{ type, data: [{ start_time, end_time, max_difficulty, levels: [{ difficulty, notes, chords, anchors, handshapes }] }], total }` | Optional — per-phrase difficulty ladder for master-difficulty slider (feedBack#48). Only sent when the source chart carries multi-level phrase data (phrase-aware sloppak). Sent in chunks (`data` is a batch, `total` is the full count across messages) to avoid multi-MB single frames. Absent for GP imports and legacy sloppak; consumers must treat missing message as "single fixed difficulty — slider disabled". |
+| `five_fret` / `five_fret_notes` / `five_fret_level_notes` | `{ type: 'five_fret', part_id, name, instrument, source_kind, total, star_power?, solos?, levels?: { level: { total, generated } } }`, then `{ type: 'five_fret_notes', part_id, notes: [{ t, f, l?, h?, tap? }] }` (≤500 per frame), then per level `{ type: 'five_fret_level_notes', part_id, level, notes }` | Optional — every part in `song_info.five_fret_parts` streams in manifest order (header, then its notes chunks, then its level chunks) unless `?five_fret_part=<id>` restricts it to one (unknown id sends nothing). Every frame carries `part_id`; the client folds them into `bundle.fiveFretParts`. `f` is the fret bitmask, `t`/`l` seconds. |
 | `ready` | `{ type: 'ready' }` | All data sent — safe to finalize and start rendering |
 
 Message delivery is incremental. You may receive `loading` updates and `lyrics` before note/chord payloads; `tone_changes` comes after `lyrics` when present and may be omitted entirely. Do not finalize rendering until you receive `ready`.

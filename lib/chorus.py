@@ -1,5 +1,5 @@
-"""Chorus Encore (enchor.us) client: find Clone Hero charts with an Expert drums part and
-download just the pieces of the .sng a drum join needs (HTTP range requests).
+"""Chorus Encore (enchor.us) client: find Clone Hero charts with an Expert drums / guitar / rhythm / bass part and
+download just the pieces of the .sng a part join (drums, guitar, rhythm, bass) needs (HTTP range requests).
 
 Free public service run by the Clone Hero community; be polite: one request at a time
 per process, a short pause between searches, retries with backoff.
@@ -87,15 +87,44 @@ def _req(url, data=None, headers=None, timeout=30, tries=6, min_gap=1.0):
     raise err
 
 
-def search(query: str, per_page: int = 25) -> list[dict]:
-    """Charts matching ``query`` that contain a drums part.  (The API's own instrument /
+PART_INSTRUMENTS = {"drums": ("drums",), "guitar": ("guitar",), "rhythm": ("rhythm", "guitarcoop"),
+                    "bass": ("bass",)}
+STEM_ROLES = {"drums": ("drums",), "guitar": ("guitar",), "rhythm": ("rhythm", "guitar"),
+              "bass": ("bass", "rhythm")}
+LOWER = ("easy", "medium", "hard")
+
+
+def stem_roles(part: str, chart_has_rhythm: bool) -> tuple:
+    """Stem names to fetch for ``part``, in preference order.  Rock Band bass audio is often
+    rhythm.*, so bass also takes rhythm when the chart has no rhythm part of its own."""
+    if part == "bass" and chart_has_rhythm:
+        return ("bass",)
+    return STEM_ROLES[part]
+
+
+def has_part(r: dict, part: str) -> bool:
+    """A Chorus search result with a ``part`` chart (notesData instruments or diff_<part>)."""
+    if any(i in ((r.get("notesData") or {}).get("instruments") or []) for i in PART_INSTRUMENTS[part]):
+        return True
+    d = r.get(f"diff_{part}")
+    return d is not None and d >= 0
+
+
+def part_levels(r: dict, part: str) -> int:
+    """Hand-charted lower levels (Easy/Medium/Hard with notes) of ``part`` in a search result."""
+    counts = (r.get("notesData") or {}).get("noteCounts") or []
+    ids = PART_INSTRUMENTS[part]
+    have = {c.get("difficulty") for c in counts if c.get("instrument") in ids and (c.get("count") or 0) > 0}
+    return sum(lv in have for lv in LOWER)
+
+
+def search(query: str, per_page: int = 25, parts: tuple = ("drums",)) -> list[dict]:
+    """Charts matching ``query`` that contain any of ``parts``.  (The API's own instrument /
     difficulty filters drop obvious matches, so results are filtered here instead.)"""
     body = json.dumps({"search": query, "page": 1, "per_page": per_page, "instrument": None,
                        "difficulty": None, "drumType": None, "source": "website"}).encode()
     out = json.loads(_req(API, body, {"Content-Type": "application/json"}, min_gap=1.2))
-    return [r for r in out.get("data", [])
-            if "drums" in ((r.get("notesData") or {}).get("instruments") or [])
-            or (r.get("diff_drums") is not None and r["diff_drums"] >= 0)]
+    return [r for r in out.get("data", []) if any(has_part(r, p) for p in parts)]
 
 
 def _range(md5, a, b):
@@ -105,12 +134,32 @@ def _range(md5, a, b):
 AUDIO = (".opus", ".ogg", ".mp3", ".wav", ".flac")
 
 
-def fetch(md5: str, out_dir: Path) -> Path:
-    """Song folder with song.ini, the chart and the audio a join needs: the drum stems if the
-    package has them, else every audio file (the full mix).  Cached in out_dir."""
+def _wanted(package_files, roles: tuple) -> list[str]:
+    """Chart, plus the audio files matching any of ``roles`` (else all non-preview, non-crowd audio)."""
+    names = [n for n in package_files if n.lower() in ("notes.mid", "notes.chart")]
+    if not roles:
+        return names
+    audio = [n for n in package_files if Path(n).suffix.lower() in AUDIO and not n.lower().startswith("preview")
+             and not n.lower().startswith("crowd")]
+    stems = [n for n in audio if any(n.lower().startswith(r) for r in roles)]
+    return names + (stems or audio)
+
+
+def fetch(md5: str, out_dir: Path, roles: tuple = ("drums",)) -> Path:
+    """Song folder with song.ini, the chart and the audio a join needs: the stems matching any of
+    ``roles`` if the package has them, else every audio file (the full mix); no roles = chart only.
+    Cached in out_dir; a later call with other roles adds just the missing files."""
     out = Path(out_dir)
     done = out / ".complete"
+    state = {}
     if done.exists():
+        try:
+            state = json.loads(done.read_text())
+        except ValueError:
+            state = {}
+    have = list(state.get("files") or [])
+    pkg = state.get("package_files")
+    if state and pkg is not None and not [n for n in _wanted(pkg, roles) if n not in have]:
         return out
     buf = _range(md5, 0, 65535)
     while True:
@@ -120,20 +169,19 @@ def fetch(md5: str, out_dir: Path) -> Path:
         except sngfile.NeedMore as e:
             buf = _range(md5, 0, e.need - 1)
     mask = meta.pop("mask")
-    names = [n for n in files if n.lower() in ("notes.mid", "notes.chart")]
-    audio = [n for n in files if Path(n).suffix.lower() in AUDIO and not n.lower().startswith("preview")
-             and not n.lower().startswith("crowd")]
-    drums = [n for n in audio if n.lower().startswith("drums")]
-    names += drums or audio
     out.mkdir(parents=True, exist_ok=True)
-    for n in names:
+    for n in _wanted(list(files), roles):
+        if n in have:
+            continue
         off, size = files[n]
         safe = Path(n.replace("\\", "/")).name          # no directories from the package
         if not safe or safe in (".", ".."):
             continue
         data = _range(md5, off, off + size - 1) if size else b""
         (out / safe).write_bytes(sngfile.unmask(data, mask))
-    ini = "".join(f"{k} = {v}\n" for k, v in meta.items() if "\n" not in k + v)
-    (out / "song.ini").write_text("[song]\n" + ini, encoding="utf-8")
-    done.write_text(json.dumps({"md5": md5, "files": names}))
+        have.append(n)
+    if not state:
+        ini = "".join(f"{k} = {v}\n" for k, v in meta.items() if "\n" not in k + v)
+        (out / "song.ini").write_text("[song]\n" + ini, encoding="utf-8")
+    done.write_text(json.dumps({"md5": md5, "files": have, "package_files": list(files)}))
     return out
