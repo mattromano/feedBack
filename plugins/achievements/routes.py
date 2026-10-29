@@ -350,6 +350,11 @@ class ActivityIn(BaseModel):
     chart:          str | None = None
     night_session:  bool = False
     night_date:     str | None = None     # 'YYYY-MM-DD', frontend supplies (no server clock)
+    # Drums / 5-fret runs (RockHeroSmith play:result), see engine.apply_activity.
+    full_combos:       int = Field(ge=0, default=0)
+    expert_clears:     int = Field(ge=0, default=0)
+    controller_streak: int = Field(ge=0, default=0)
+    pro_drums_clears:  int = Field(ge=0, default=0)
 
 
 class UnlockIn(BaseModel):
@@ -429,6 +434,10 @@ def setup(app, context):
                     "song_done": body.song_done,
                     "seconds": body.seconds,
                     "chart_play_count": chart_play_count,
+                    "full_combos": body.full_combos,
+                    "expert_clears": body.expert_clears,
+                    "controller_streak": body.controller_streak,
+                    "pro_drums_clears": body.pro_drums_clears,
                 })
                 if witching_run is not None:
                     new_counters["witching_nights_run"] = max(

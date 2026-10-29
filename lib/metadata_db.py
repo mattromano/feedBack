@@ -890,6 +890,60 @@ class MetadataDB:
                 "ALTER TABLE song_stats ADD COLUMN full_combos INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # Per-part scored stats (drums / 5-fret / vocals from RockHeroSmith's
+        # `play:result`, see lib/play_parts.py). Kept OUT of song_stats on
+        # purpose: song_stats is keyed by arrangement and feeds Continue, the
+        # library mastery badges and guitar progression, none of which should
+        # see a drum or controller run. Real guitar keeps writing song_stats.
+        # Additive + idempotent (CREATE IF NOT EXISTS) — an old db just gains
+        # the tables, and an older build ignores them.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS part_stats (
+                filename TEXT NOT NULL,
+                part TEXT NOT NULL,
+                difficulty TEXT NOT NULL DEFAULT '',
+                plays INTEGER NOT NULL DEFAULT 0,
+                best_score INTEGER NOT NULL DEFAULT 0,
+                best_accuracy REAL NOT NULL DEFAULT 0,
+                best_streak INTEGER NOT NULL DEFAULT 0,
+                full_combos INTEGER NOT NULL DEFAULT 0,
+                last_score INTEGER NOT NULL DEFAULT 0,
+                last_accuracy REAL NOT NULL DEFAULT 0,
+                last_played_at TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (filename, part, difficulty)
+            )
+        """)
+        # Run history: one row per scored run (every part, real guitar
+        # included as part ''), pruned to the newest PLAY_RUNS_KEEP per
+        # (filename, part, difficulty). (session_id, player) is unique so a
+        # re-sent `play:result` can't record (or award XP for) a run twice.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS play_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                part TEXT NOT NULL DEFAULT '',
+                difficulty TEXT NOT NULL DEFAULT '',
+                arrangement INTEGER,
+                score INTEGER NOT NULL DEFAULT 0,
+                accuracy REAL NOT NULL DEFAULT 0,
+                hits INTEGER,
+                misses INTEGER,
+                best_streak INTEGER,
+                full_combo INTEGER NOT NULL DEFAULT 0,
+                stars INTEGER,
+                input TEXT,
+                session_id TEXT,
+                player TEXT,
+                played_at TEXT NOT NULL
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_play_runs_bucket "
+            "ON play_runs(filename, part, difficulty, id DESC)")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_play_runs_session "
+            "ON play_runs(session_id, player) WHERE session_id IS NOT NULL")
         # Playlists + the reserved "Saved for Later" system playlist. Additive.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS playlists (
@@ -2563,6 +2617,153 @@ class MetadataDB:
             "full_combos": sum(a["full_combos"] or 0 for a in arr),
             "arrangements": arr,
         }
+
+    # ── Per-part stats + run history (drums / 5-fret / vocals) ───────────────
+    # Newest runs kept per (filename, part, difficulty); bests live in
+    # part_stats / song_stats, so pruning never loses a personal best.
+    PLAY_RUNS_KEEP = 50
+
+    _PART_COLS = (
+        "filename", "part", "difficulty", "plays", "best_score", "best_accuracy",
+        "best_streak", "full_combos", "last_score", "last_accuracy",
+        "last_played_at", "updated_at",
+    )
+    _RUN_COLS = (
+        "id", "filename", "part", "difficulty", "arrangement", "score", "accuracy",
+        "hits", "misses", "best_streak", "full_combo", "stars", "input",
+        "session_id", "player", "played_at",
+    )
+
+    def _run_dict(self, r) -> dict:
+        d = dict(zip(self._RUN_COLS, r))
+        d["full_combo"] = bool(d["full_combo"])
+        return d
+
+    def part_best(self, filename: str, part: str, difficulty: str) -> dict | None:
+        r = self.conn.execute(
+            "SELECT " + ", ".join(self._PART_COLS) +
+            " FROM part_stats WHERE filename = ? AND part = ? AND difficulty = ?",
+            (filename, part, difficulty),
+        ).fetchone()
+        return dict(zip(self._PART_COLS, r)) if r else None
+
+    def part_bests(self, filename: str, part: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT " + ", ".join(self._PART_COLS) +
+            " FROM part_stats WHERE filename = ? AND part = ? ORDER BY difficulty",
+            (filename, part),
+        ).fetchall()
+        return [dict(zip(self._PART_COLS, r)) for r in rows]
+
+    def _run_exists(self, session_id, player) -> bool:
+        if not session_id:
+            return False
+        return self.conn.execute(
+            "SELECT 1 FROM play_runs WHERE session_id = ? AND player = ?",
+            (session_id, player or ""),
+        ).fetchone() is not None
+
+    def _insert_run(self, filename, part, difficulty, *, score, accuracy,
+                    arrangement=None, hits=None, misses=None, best_streak=None,
+                    full_combo=False, stars=None, input=None, session_id=None,
+                    player=None) -> dict:
+        """Insert one history row and prune the bucket. Caller holds the lock
+        and commits."""
+        cur = self.conn.execute(
+            """INSERT INTO play_runs
+                   (filename, part, difficulty, arrangement, score, accuracy, hits,
+                    misses, best_streak, full_combo, stars, input, session_id,
+                    player, played_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       strftime('%Y-%m-%d %H:%M:%f','now'))""",
+            (filename, part, difficulty, arrangement, int(score), float(accuracy),
+             hits, misses, best_streak, 1 if full_combo else 0, stars, input,
+             session_id or None, (player or "") if session_id else player),
+        )
+        run_id = cur.lastrowid
+        self.conn.execute(
+            "DELETE FROM play_runs WHERE filename = ? AND part = ? AND difficulty = ? "
+            "AND id NOT IN (SELECT id FROM play_runs WHERE filename = ? AND part = ? "
+            "AND difficulty = ? ORDER BY id DESC LIMIT ?)",
+            (filename, part, difficulty, filename, part, difficulty,
+             max(1, int(self.PLAY_RUNS_KEEP))),
+        )
+        r = self.conn.execute(
+            "SELECT " + ", ".join(self._RUN_COLS) + " FROM play_runs WHERE id = ?",
+            (run_id,)).fetchone()
+        return self._run_dict(r)
+
+    def add_play_run(self, filename: str, part: str = "", difficulty: str = "", **kw) -> dict | None:
+        """Append a history row (used by the real-guitar path). None when the
+        (session_id, player) pair was already recorded."""
+        with self._lock:
+            if self._run_exists(kw.get("session_id"), kw.get("player")):
+                return None
+            run = self._insert_run(filename, part, difficulty, **kw)
+            self.conn.commit()
+        return run
+
+    def record_part_session(self, filename: str, part: str, difficulty: str, *,
+                            score: int, accuracy: float, hits=None, misses=None,
+                            best_streak=None, full_combo: bool = False,
+                            arrangement=None, stars=None, input=None,
+                            session_id=None, player=None) -> dict:
+        """Record one scored part run: part_stats upsert (plays += 1, best_* =
+        max, last_* = new, full_combos += fc) plus a history row. Returns
+        {stats, run, new_best, duplicate}; a (session_id, player) already on
+        record is a no-op with duplicate=True."""
+        with self._lock:
+            if self._run_exists(session_id, player):
+                return {"stats": self.part_best(filename, part, difficulty),
+                        "run": None, "new_best": False, "duplicate": True}
+            existing = self.part_best(filename, part, difficulty)
+            new_best = existing is None or int(score) > int(existing["best_score"] or 0)
+            self.conn.execute(
+                """INSERT INTO part_stats
+                       (filename, part, difficulty, plays, best_score, best_accuracy,
+                        best_streak, full_combos, last_score, last_accuracy,
+                        last_played_at, updated_at)
+                   VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?,
+                           strftime('%Y-%m-%d %H:%M:%f','now'), strftime('%Y-%m-%d %H:%M:%f','now'))
+                   ON CONFLICT(filename, part, difficulty) DO UPDATE SET
+                       plays = part_stats.plays + 1,
+                       best_score = MAX(part_stats.best_score, excluded.best_score),
+                       best_accuracy = MAX(part_stats.best_accuracy, excluded.best_accuracy),
+                       best_streak = MAX(part_stats.best_streak, excluded.best_streak),
+                       full_combos = part_stats.full_combos + excluded.full_combos,
+                       last_score = excluded.last_score,
+                       last_accuracy = excluded.last_accuracy,
+                       last_played_at = excluded.last_played_at,
+                       updated_at = excluded.updated_at""",
+                (filename, part, difficulty, int(score), float(accuracy),
+                 int(best_streak or 0), 1 if full_combo else 0, int(score), float(accuracy)),
+            )
+            run = self._insert_run(
+                filename, part, difficulty, score=score, accuracy=accuracy,
+                arrangement=arrangement, hits=hits, misses=misses,
+                best_streak=best_streak, full_combo=full_combo, stars=stars,
+                input=input, session_id=session_id, player=player)
+            self.conn.commit()
+        return {"stats": self.part_best(filename, part, difficulty), "run": run,
+                "new_best": new_best, "duplicate": False}
+
+    def play_runs(self, filename: str, part: str = "", difficulty: str | None = None,
+                  arrangement: int | None = None, limit: int = 10) -> list[dict]:
+        """Newest-first history for a song/part, optionally one difficulty /
+        arrangement."""
+        limit = max(1, min(self.PLAY_RUNS_KEEP, int(limit)))
+        sql = ("SELECT " + ", ".join(self._RUN_COLS) +
+               " FROM play_runs WHERE filename = ? AND part = ?")
+        args: list = [filename, part]
+        if difficulty is not None:
+            sql += " AND difficulty = ?"
+            args.append(difficulty)
+        if arrangement is not None:
+            sql += " AND arrangement = ?"
+            args.append(int(arrangement))
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        return [self._run_dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
     def recent_stats(self, limit: int = 12) -> list[dict]:
         """Recently-played rows (most recent first) for 'Jump back in'."""

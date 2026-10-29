@@ -199,8 +199,14 @@
     // `active` gates note counting to an actual song in progress — without it,
     // note:hit/miss from the tuner or input-calibration would inflate Feats from
     // non-song input and flush a phantom streak with chart:null.
-    var song = { hits: 0, streak: 0, maxStreak: 0, chart: null, active: false };
-    function resetSong(chart) { song = { hits: 0, streak: 0, maxStreak: 0, chart: chart || null, active: true }; }
+    // `streaks` holds per-player runs for RockHeroSmith judgments (a band has
+    // one streak per player); `streak` is note detection's single player.
+    var song = { hits: 0, streak: 0, maxStreak: 0, streaks: {}, chart: null, active: false };
+    function resetSong(chart) { song = { hits: 0, streak: 0, maxStreak: 0, streaks: {}, chart: chart || null, active: true }; }
+    function countHit(streak) {
+        song.hits++; session.notesTotal++;
+        if (streak > song.maxStreak) song.maxStreak = streak;
+    }
 
     function flushActivity(seconds) {
         if (!song.active) return;   // no active song → nothing to flush (ignore stray events)
@@ -224,15 +230,47 @@
         fetchJSON('/activity', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-        }).then(function (res) {
-            if (res && res.unlocked && res.unlocked.length) {
-                // A Feat just unlocked — refresh the shelf + toast via the bus.
-                fetchFeatsAndRender();
-                res.unlocked.forEach(function (f) {
-                    try { bus.emit && bus.emit('achievements:feat-unlocked', f); } catch (_) { /* noop */ }
-                });
-            }
+        }).then(announceUnlocks);
+    }
+
+    // Drum / controller Feats from a finished run (play:result fires once when
+    // the results screen opens). Song count, time and notes already flow from
+    // song:ended / play:judgment, so this posts only the run-level deltas.
+    // `failed` / `proDrums` are optional player fields (not in the contract
+    // yet): a failed run is no clear, and the Pro Kit feat needs proDrums.
+    var resultsSeen = {};
+    function flushPlayResult(d) {
+        if (!d.filename || d.practice === true || !Array.isArray(d.players)) return;
+        if (d.sessionId) {
+            if (resultsSeen[d.sessionId]) return;
+            resultsSeen[d.sessionId] = true;
+        }
+        var body = { full_combos: 0, expert_clears: 0, controller_streak: 0, pro_drums_clears: 0 };
+        var any = false;
+        d.players.forEach(function (p) {
+            if (!p || p.instrument === 'guitar') return;
+            any = true;
+            var failed = p.failed === true || d.failed === true;
+            if (p.fullCombo === true && !p.misses && !failed) body.full_combos++;
+            if (p.difficulty === 'expert' && !failed) body.expert_clears++;
+            if (p.instrument === 'drums' && p.proDrums === true && !failed) body.pro_drums_clears++;
+            var bs = Math.round(Number(p.bestStreak) || 0);
+            if (bs > body.controller_streak) body.controller_streak = bs;
         });
+        if (!any) return;
+        fetchJSON('/activity', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(announceUnlocks);
+    }
+    // A Feat just unlocked — refresh the shelf + toast via the bus.
+    function announceUnlocks(res) {
+        if (res && res.unlocked && res.unlocked.length) {
+            fetchFeatsAndRender();
+            res.unlocked.forEach(function (f) {
+                try { bus.emit && bus.emit('achievements:feat-unlocked', f); } catch (_) { /* noop */ }
+            });
+        }
     }
 
     // ── Rendering ────────────────────────────────────────────────────────────
@@ -375,10 +413,25 @@
         });
         bus.on && bus.on('note:hit', function () {
             if (!song.active) return;   // ignore tuner/calibration note events
-            song.hits++; song.streak++; session.notesTotal++;
-            if (song.streak > song.maxStreak) song.maxStreak = song.streak;
+            song.streak++;
+            countHit(song.streak);
         });
         bus.on && bus.on('note:miss', function () { if (song.active) song.streak = 0; });
+        // RockHeroSmith judgments (drums / 5-fret / vocals; play-layer contract
+        // §3) feed the same note Feats. Real guitar is skipped: note detection
+        // already fires note:hit for it. Only hits and misses/overhits are notes.
+        bus.on && bus.on('play:judgment', function (e) {
+            var d = (e && e.detail) || {};
+            if (!song.active || d.instrument === 'guitar') return;
+            var who = String(d.player || d.instrument || '?');
+            if (d.kind === 'hit') {
+                song.streaks[who] = (song.streaks[who] || 0) + 1;
+                countHit(song.streaks[who]);
+            } else if (d.kind === 'miss' || d.kind === 'overhit') {
+                song.streaks[who] = 0;
+            }
+        });
+        bus.on && bus.on('play:result', function (e) { flushPlayResult((e && e.detail) || {}); });
         bus.on && bus.on('song:ended', function (e) {
             flushActivity(e && e.detail && (e.detail.time || e.detail.audioT));
         });

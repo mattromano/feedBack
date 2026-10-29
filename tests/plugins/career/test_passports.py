@@ -472,3 +472,53 @@ def test_gig_reroll_changes_the_set(client, meta_db):
                         json={"instrument": "guitar", "genre": "Metalcore", "size": 4})
         sets.add(tuple(sorted(s["filename"] for s in r.json()["songs"])))
     assert len(sets) > 1, "re-roll must be able to produce a different set"
+
+
+# ── Drums / 5-fret runs (part_stats from RockHeroSmith play:result) ──────────
+
+def test_drum_part_bests_fill_the_drums_passport(client, meta_db):
+    for i in range(5):
+        meta_db.add_part(f"d{i}.feedpak", "drums", 0.8, genre="Soul")
+    # A 5-fret run is not a drums (or guitar) passport stub.
+    meta_db.add_part("ff.feedpak", "five_fret:guitar", 0.99, genre="Soul")
+    _open(client, "drums", "Soul")
+    p = _passport(client, "drums", "soul")
+    assert p["qualifying_count"] == 5
+    assert sorted(s["filename"] for s in p["songs"]) == [f"d{i}.feedpak" for i in range(5)]
+    _open(client, "guitar", "Soul")
+    assert _passport(client, "guitar", "soul")["songs"] == []
+
+
+def test_drum_and_guitar_bests_merge_per_song_for_stars(client, meta_db):
+    meta_db.add("both.feedpak", 0, 0.62, arrangements=LEAD)   # guitar: 1 star
+    meta_db.add_part("both.feedpak", "drums", 0.9)             # drums: 3 stars
+    meta_db.add_part("ff.feedpak", "five_fret:bass", 0.80)     # 2 stars
+    meta_db.add_part("gone.feedpak", "drums", 0.99, in_library=False)
+    state = client.get("/api/plugins/career/state").json()
+    assert state["stars_per_song"] == {"both.feedpak": 3, "ff.feedpak": 2}
+
+
+def test_drums_gig_reads_the_newest_drum_run(client, meta_db):
+    meta_db.add("k.feedpak", 0, 0.95, genre="Soul", arrangements=LEAD,
+                last_accuracy=0.95, last_played_at="2026-10-01T00:00:00")
+    meta_db.add_part("k.feedpak", "drums", 0.5, genre="Soul", difficulty="easy")
+    meta_db.add_part("k.feedpak", "drums", 0.7, genre="Soul", difficulty="hard")
+    res = client.post("/api/plugins/career/gigs", json={
+        "instrument": "drums", "genre": "Soul", "songs": ["k.feedpak"]})
+    assert res.json()["gig"]["songs"][0]["accuracy"] == 0.7
+    # A guitar gig on the same song still reads guitar's song_stats row.
+    res = client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul", "songs": ["k.feedpak"]})
+    assert res.json()["gig"]["songs"][0]["accuracy"] == 0.95
+
+
+def test_career_tolerates_a_db_without_part_tables(client, meta_db):
+    meta_db.conn.execute("DROP TABLE part_stats")
+    meta_db.conn.execute("DROP TABLE play_runs")
+    meta_db.add("s.feedpak", 0, 0.9, genre="Soul", arrangements=LEAD)
+    assert client.get("/api/plugins/career/state").json()["stars_total"] == 3
+    _open(client, "drums", "Soul")
+    assert _passport(client, "drums", "soul")["songs"] == []
+    res = client.post("/api/plugins/career/gigs", json={
+        "instrument": "drums", "genre": "Soul", "songs": ["s.feedpak"]})
+    assert res.status_code == 200

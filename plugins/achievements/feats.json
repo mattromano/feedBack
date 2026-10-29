@@ -74,6 +74,54 @@
       "tier_titles": ["Encore", "Standing Ovation"]
     },
     {
+      "id": "play_full_combo",
+      "title": "Flawless",
+      "description": "Full combo a song on drums or a 5-fret controller.",
+      "category": "global",
+      "sourceId": "achievements",
+      "secret": false,
+      "needs_notedetect": false,
+      "counter": "play_full_combos",
+      "tiers": [1, 10, 50],
+      "tier_titles": ["Flawless", "Flawless x10", "Flawless x50"]
+    },
+    {
+      "id": "play_streak",
+      "title": "On Fire",
+      "description": "Hit a long note streak on drums or a 5-fret controller.",
+      "category": "global",
+      "sourceId": "achievements",
+      "secret": false,
+      "needs_notedetect": false,
+      "counter": "play_streak_max",
+      "tiers": [100, 250],
+      "tier_titles": ["On Fire (100)", "Unstoppable (250)"]
+    },
+    {
+      "id": "play_expert_clear",
+      "title": "Expert",
+      "description": "Finish a song on Expert with drums or a 5-fret controller.",
+      "category": "global",
+      "sourceId": "achievements",
+      "secret": false,
+      "needs_notedetect": false,
+      "counter": "play_expert_clears",
+      "tiers": [1, 25],
+      "tier_titles": ["Expert", "Expert Veteran"]
+    },
+    {
+      "id": "drums_pro_clear",
+      "title": "Pro Kit",
+      "description": "Finish a song on drums with pro cymbals on.",
+      "category": "global",
+      "sourceId": "achievements",
+      "secret": false,
+      "needs_notedetect": false,
+      "counter": "drums_pro_clears",
+      "tiers": [1],
+      "tier_titles": ["Pro Kit"]
+    },
+    {
       "id": "secret_witching",
       "title": "The Witching Hour",
       "description": "Practise in the dead of night, seven nights running.",

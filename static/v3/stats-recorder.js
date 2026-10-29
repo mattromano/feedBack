@@ -9,9 +9,12 @@
  * plugin isn't installed, no note events fire and nothing is recorded
  * (graceful degrade — the dashboard simply shows no accuracy).
  *
- * Two paths:
+ * Three paths:
  *   • Scored session: tally hits/misses (or accept an explicit
- *     `note_detect:session-ended` summary), then POST on song end.
+ *     `note_detect:session-ended` summary — note: no shipped plugin emits it
+ *     today), then POST on song end.
+ *   • Part runs: RockHeroSmith's `play:result` (drums / 5-fret / vocals) →
+ *     one scored POST per non-guitar player with a `part` key.
  *   • Resume position: a lightweight POST of the play position (as the
  *     `lastPlayPosition` field, which /api/stats accepts alongside
  *     `last_position`) on pause/stop so Continue-Playing works for non-scored
@@ -266,6 +269,69 @@
             await notifyProgression(response, body, true);
             if (window.v3Profile && typeof window.v3Profile.refresh === 'function') window.v3Profile.refresh();
             sm.emit('stats:recorded', { filename: body.filename, arrangement: body.arrangement });
+        });
+    });
+
+    // ── RockHeroSmith results (drums / 5-fret / vocals) ───────────────────--
+    // `play:result` (play-layer contract §3) fires once when the results
+    // screen opens. One scored POST per player, keyed by `part`, so stats,
+    // XP, streak and progression `song_completed` fire for every instrument.
+    // Real guitar players are skipped: note detection already records them
+    // through the note:hit/miss tally above. Play time / play counts stay on
+    // the song:* path (no `seconds` / `count_play` here — never doubled).
+    const postedRuns = new Set();   // `${sessionId}:${player}` already sent
+    function partKey(p) {
+        const inst = String(p.instrument || '').toLowerCase();
+        const part = String(p.part || '').toLowerCase();
+        if (!inst) return '';
+        return (!part || part === inst) ? inst : inst + ':' + part;
+    }
+    function count(v) { return Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined; }
+    sm.on('play:result', (e) => {
+        const d = (e && e.detail) || {};
+        if (!d.filename || d.practice === true || !Array.isArray(d.players)) return;
+        const pending = [];
+        for (const p of d.players) {
+            if (!p || p.instrument === 'guitar') continue;
+            const part = partKey(p);
+            const hits = count(p.hits), misses = count(p.misses);
+            if (!part || ((hits || 0) + (misses || 0)) <= 0) continue;
+            if (!Number.isFinite(p.score) || !Number.isFinite(p.accuracy)) continue;
+            const runKey = (d.sessionId || '') + ':' + (p.player || part);
+            if (d.sessionId && postedRuns.has(runKey)) continue;
+            postedRuns.add(runKey);
+            const body = {
+                filename: d.filename,
+                part,
+                difficulty: p.difficulty || '',
+                arrangement: Number.isInteger(p.arrangement) && p.arrangement >= 0 ? p.arrangement : null,
+                score: Math.max(0, Math.round(p.score)),
+                accuracy: Math.min(1, Math.max(0, p.accuracy)),
+                hits, misses,
+                bestStreak: count(p.bestStreak),
+                stars: count(p.stars),
+                session_id: d.sessionId || undefined,
+                player: p.player || undefined,
+                input: p.input || undefined,
+            };
+            if (p.fullCombo === true && misses === 0) body.full_combo = true;
+            pending.push(post(body).then(async (response) => {
+                if (response == null) { postedRuns.delete(runKey); return null; }
+                // Not a calibration attempt: that flow is real guitar only.
+                await notifyProgression(response, body, false);
+                return { part, difficulty: body.difficulty, player: body.player, arrangement: body.arrangement };
+            }));
+        }
+        if (!pending.length) return;
+        // ONE stats:recorded per result, after every player's post settles: a
+        // band must not fire N venue-crowd stingers. Top-level fields mirror the
+        // first recorded player (consumers read filename/arrangement); `parts`
+        // lists every recorded player.
+        Promise.all(pending).then((rows) => {
+            const parts = rows.filter(Boolean);
+            if (!parts.length) return;
+            if (window.v3Profile && typeof window.v3Profile.refresh === 'function') window.v3Profile.refresh();
+            sm.emit('stats:recorded', Object.assign({ filename: d.filename }, parts[0], { parts }));
         });
     });
 

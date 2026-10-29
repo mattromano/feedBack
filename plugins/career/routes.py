@@ -46,8 +46,11 @@ from pathlib import Path
 from fastapi import Body, HTTPException
 from fastapi.responses import FileResponse
 
+import sqlite3
+
 import sloppak
 from dlc_paths import _resolve_dlc_path
+from play_parts import instrument_for_part
 from progression import instrument_for_arrangement
 
 PLUGIN_ID = "career"
@@ -125,9 +128,22 @@ def _stars():
         "FROM song_stats s JOIN songs sg ON sg.filename = s.filename "
         "GROUP BY s.filename"
     ).fetchall()
+    # Drums / 5-fret bests count too: a song's stars are its best accuracy
+    # on ANY part (real guitar arrangement or controller/kit run).
+    best = {r[0]: list(r) for r in rows}
+    for filename, acc, title, artist in _part_rows(
+            "SELECT p.filename, MAX(p.best_accuracy), "
+            "       COALESCE(MAX(sg.title), ''), COALESCE(MAX(sg.artist), '') "
+            "FROM part_stats p JOIN songs sg ON sg.filename = p.filename "
+            "GROUP BY p.filename"):
+        cur = best.get(filename)
+        if cur is None:
+            best[filename] = [filename, acc, title, artist]
+        elif (acc or 0.0) > (cur[1] or 0.0):
+            cur[1] = acc
     per_song = {}
     detail = []
-    for filename, acc, title, artist in rows:
+    for filename, acc, title, artist in best.values():
         acc = acc or 0.0
         stars, next_at = _star_progress(acc, thresholds)
         if stars:
@@ -231,19 +247,32 @@ def _played_by_instrument_genre():
         f"      {_genre_expr(db)} "
         "FROM song_stats s JOIN songs ON songs.filename = s.filename"
     ).fetchall()
+    # Drums / 5-fret bests (part_stats): the part's instrument ('drums',
+    # 'five_fret', ...) is the passport instrument; only ones in the passport
+    # config get a wall. Play time stays on song_stats (no seconds here).
+    part_rows = _part_rows(
+        "SELECT p.filename, p.part, p.best_accuracy, p.last_played_at, 0, "
+        "       songs.title, songs.artist, NULL, "
+        f"      {_genre_expr(db)} "
+        "FROM part_stats p JOIN songs ON songs.filename = p.filename")
     arrs_cache = {}
     out = {}
     seconds = {}
-    for filename, arrangement, acc, played_at, secs, title, artist, arrs_json, genre in rows:
+    tagged = [(False, r) for r in rows] + [(True, r) for r in part_rows]
+    for is_part, (filename, arrangement, acc, played_at, secs, title, artist,
+                  arrs_json, genre) in tagged:
         gkey = _genre_key(genre)
         if not gkey:
             continue
-        if filename not in arrs_cache:
-            try:
-                arrs_cache[filename] = json.loads(arrs_json) if arrs_json else None
-            except (TypeError, ValueError):
-                arrs_cache[filename] = None
-        instrument = _instrument_of(arrs_cache[filename], arrangement)
+        if is_part:
+            instrument = instrument_for_part(arrangement)
+        else:
+            if filename not in arrs_cache:
+                try:
+                    arrs_cache[filename] = json.loads(arrs_json) if arrs_json else None
+                except (TypeError, ValueError):
+                    arrs_cache[filename] = None
+            instrument = _instrument_of(arrs_cache[filename], arrangement)
         key = (instrument, gkey)
         seconds[key] = seconds.get(key, 0.0) + (secs or 0.0)
         acc = acc or 0.0
@@ -265,6 +294,18 @@ def _played_by_instrument_genre():
             stub["best_accuracy"] = round(acc, 4)
             stub["stars"], stub["next_star_at"] = _star_progress(acc, thresholds)
     return out, seconds
+
+
+def _part_rows(sql, args=()):
+    """Rows from the core per-part tables (part_stats / play_runs); [] on a
+    db that predates them, so career never breaks on an older core."""
+    db = _state["meta_db"]
+    if db is None:
+        return []
+    try:
+        return db.conn.execute(sql, args).fetchall()
+    except sqlite3.OperationalError:
+        return []
 
 
 def _star_progress(acc, thresholds):
@@ -896,10 +937,16 @@ def setup(app, context):
             title = filename
             accuracy = None
             if db is not None:
+                # A drums (or other part-instrument) gig reads that part's
+                # newest run, written by the set's own play:result.
+                part_run = _part_rows(
+                    "SELECT accuracy FROM play_runs WHERE filename = ? "
+                    "AND (part = ? OR part LIKE ?) ORDER BY id DESC LIMIT 1",
+                    (filename, inst, inst + ":%"))
                 # The NEWEST row is the set's own just-recorded play — a
                 # MAX(last_accuracy) across arrangements would happily log a
                 # stale higher score from another instrument's old session.
-                row = db.conn.execute(
+                row = part_run[0] if part_run else db.conn.execute(
                     "SELECT last_accuracy FROM song_stats WHERE filename = ? "
                     "ORDER BY last_played_at DESC LIMIT 1",
                     (filename,)).fetchone()

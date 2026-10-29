@@ -15,11 +15,125 @@ from fastapi.responses import JSONResponse
 
 import appstate
 from metadata_db import _as_int
+from play_parts import instrument_for_part, normalize_difficulty, normalize_part
 from reqfields import _clean_str
 
 log = logging.getLogger("feedBack.server")
 
 router = APIRouter()
+
+
+def _lenient_count(v):
+    """A non-negative int, or None for anything else (never raises)."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = _as_int(v)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if 0 <= n < 2**31 else None
+
+
+def _opt_str(v, max_len):
+    """(value, ok): None/'' -> (None, True); a short str -> (str, True)."""
+    if v is None or v == "":
+        return None, True
+    if not isinstance(v, str) or len(v) > max_len:
+        return None, False
+    return v, True
+
+
+def _record_part_session(data: dict, filename: str, part: str):
+    """Scored run for a non-guitar part (play-layer contract §3 `play:result`,
+    one POST per player). Writes part_stats + play_runs (never song_stats),
+    then the same XP / streak / `song_completed` side-effects as guitar."""
+    def bad(msg):
+        return JSONResponse({"error": msg}, status_code=400)
+
+    difficulty = normalize_difficulty(data.get("difficulty"))
+    if difficulty is None:
+        return bad("difficulty must be easy, medium, hard or expert")
+    score, accuracy = data.get("score"), data.get("accuracy")
+    if score is None or accuracy is None:
+        return bad("a part run needs score and accuracy")
+    if isinstance(score, bool) or isinstance(accuracy, bool):
+        return bad("score/accuracy must be finite numbers")
+    try:
+        score = float(score)
+        accuracy = float(accuracy)
+        if not (math.isfinite(score) and math.isfinite(accuracy)):
+            raise ValueError("non-finite")
+        score = int(round(score))
+    except (TypeError, ValueError, OverflowError):
+        return bad("score/accuracy must be finite numbers")
+    if not (0 <= score < 2**63):
+        return bad("score out of range")
+    if not (0 <= accuracy <= 1):
+        return bad("accuracy must be between 0 and 1")
+    counts = {}
+    for key in ("hits", "misses", "bestStreak", "stars"):
+        v = data.get(key)
+        if v is None:
+            counts[key] = None
+            continue
+        n = _lenient_count(v)
+        if n is None:
+            return bad(f"{key} must be a non-negative integer")
+        counts[key] = n
+    arrangement = data.get("arrangement")
+    if arrangement is not None:
+        n = _lenient_count(arrangement)
+        if n is None:
+            return bad("arrangement must be a non-negative integer")
+        _acount = appstate.meta_db.arrangement_count(filename)
+        if _acount and n >= _acount:
+            return bad("arrangement out of range for this song")
+        arrangement = n
+    session_id, ok1 = _opt_str(data.get("session_id"), 128)
+    player, ok2 = _opt_str(data.get("player"), 32)
+    input_kind, ok3 = _opt_str(data.get("input"), 16)
+    if not (ok1 and ok2 and ok3):
+        return bad("session_id/player/input must be short strings")
+    full_combo = data.get("full_combo") is True and accuracy >= 1
+
+    result = appstate.meta_db.record_part_session(
+        filename, part, difficulty, score=score, accuracy=accuracy,
+        hits=counts["hits"], misses=counts["misses"], best_streak=counts["bestStreak"],
+        full_combo=full_combo, arrangement=arrangement, stars=counts["stars"],
+        input=input_kind, session_id=session_id, player=player)
+    if result["duplicate"]:
+        return {**result, "progress": None, "progression": None}
+
+    # XP + progression score on the guitar recorder's scale (hits*100*acc), so
+    # a drum chart's big RHS points total doesn't out-earn an equal guitar run.
+    from song_score import score as parity_score
+    xp_score = (parity_score(counts["hits"], counts["misses"] or 0)
+                if counts["hits"] is not None else score)
+    progress = None
+    try:
+        from xp import xp_for_run
+        from datetime import date
+        appstate.meta_db.award_xp(xp_for_run(xp_score))
+        appstate.meta_db.record_active_day(date.today().isoformat())
+        progress = appstate.meta_db.get_progress()
+    except Exception:
+        log.warning("part stats side-effects (xp/streak) failed", exc_info=True)
+    progression_summary = None
+    try:
+        progression_summary = appstate.meta_db.record_progression_event(
+            "song_completed",
+            {
+                "filename": filename,
+                "instrument": instrument_for_part(part),
+                "accuracy": accuracy,
+                "score": xp_score,
+                "is_diagnostic": False,
+            },
+            appstate.get_progression_content(),
+        )
+    except Exception:
+        log.warning("part stats side-effects (progression) failed", exc_info=True)
+    return {**result, "progress": progress, "progression": progression_summary}
 
 
 @router.post("/api/xp/award")
@@ -52,6 +166,15 @@ def api_record_stats(data: dict):
     # key so stored rows line up with `songs` (and so the arrangement-count bound
     # below resolves the real song). See MetadataDB._canonical_song_filename.
     filename = appstate.meta_db._canonical_song_filename(filename)
+    # A `part` (drums / 5-fret / vocals, from RockHeroSmith's play:result) is a
+    # separate scored path with its own bests + history; no part = real guitar,
+    # unchanged below.
+    part = normalize_part(data.get("part"))
+    if part is None:
+        return JSONResponse({"error": "part must look like 'drums' or 'five_fret:bass'"},
+                            status_code=400)
+    if part:
+        return _record_part_session(data, filename, part)
     arr_raw = data.get("arrangement", 0)
     if arr_raw is None:
         arrangement = 0
@@ -157,6 +280,17 @@ def api_record_stats(data: dict):
         # A full combo means every note hit — trust the flag only when the
         # accuracy it rides with agrees.
         row = _count_play(row, full_combo and accuracy >= 1)
+        # Run history (GET /api/stats/history, part ''). Optional counts are
+        # read leniently: the guitar path's validation stays as it was.
+        try:
+            appstate.meta_db.add_play_run(
+                filename, "", "", score=score, accuracy=accuracy,
+                arrangement=arrangement, hits=_lenient_count(data.get("hits")),
+                misses=_lenient_count(data.get("misses")),
+                best_streak=_lenient_count(data.get("bestStreak")),
+                full_combo=bool(full_combo and accuracy >= 1))
+        except Exception:
+            log.warning("stats run-history write failed", exc_info=True)
         # Unified XP + streak side-effects — never let these drop the stat write.
         progress = None
         try:
@@ -291,6 +425,45 @@ def api_top_stats(limit: int = 5):
             "art_url": f"/api/song/{quote(r['filename'])}/art",
         })
     return out
+
+
+@router.get("/api/stats/history")
+def api_stats_history(filename: str = "", part: str = "", difficulty: str | None = None,
+                      arrangement: int | None = None, limit: int = 10):
+    """Personal best(s) + newest runs for one song/part — the results screen's
+    "best / last runs" panel. part '' = real guitar (best from song_stats).
+    Defined before the {filename} catch-all."""
+    filename = _clean_str(filename)
+    if not filename:
+        return JSONResponse({"error": "filename required"}, status_code=400)
+    filename = appstate.meta_db._canonical_song_filename(filename)
+    norm_part = normalize_part(part)
+    if norm_part is None:
+        return JSONResponse({"error": "invalid part"}, status_code=400)
+    diff = None
+    if difficulty:
+        diff = normalize_difficulty(difficulty)
+        if not diff:
+            return JSONResponse({"error": "invalid difficulty"}, status_code=400)
+    if arrangement is not None and arrangement < 0:
+        return JSONResponse({"error": "invalid arrangement"}, status_code=400)
+    db = appstate.meta_db
+    if norm_part:
+        bests = db.part_bests(filename, norm_part)
+        best = db.part_best(filename, norm_part, diff) if diff is not None else None
+    else:
+        bests = []
+        if arrangement is not None:
+            best = db._stats_row(filename, arrangement)
+        else:
+            agg = db.get_song_stats(filename)
+            agg.pop("arrangements", None)
+            best = agg if agg.get("plays") else None
+    runs = db.play_runs(filename, norm_part,
+                        difficulty=diff if norm_part else None,
+                        arrangement=arrangement, limit=limit)
+    return {"filename": filename, "part": norm_part, "difficulty": diff,
+            "arrangement": arrangement, "best": best, "bests": bests, "runs": runs}
 
 
 @router.get("/api/stats/{filename:path}")
