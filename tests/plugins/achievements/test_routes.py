@@ -88,3 +88,23 @@ def test_report_criterion_counts_distinct(client):
     assert client.post(url, json={"criterion_id": "x", "token": "a"}).json()["count"] == 1
     assert client.post(url, json={"criterion_id": "x", "token": "a"}).json()["count"] == 1  # dup
     assert client.post(url, json={"criterion_id": "x", "token": "b"}).json()["count"] == 2
+
+
+def test_controller_feats_unlock_from_play_activity(client):
+    res = client.post("/api/plugins/achievements/activity", json={
+        "full_combos": 1, "expert_clears": 1, "controller_streak": 100}).json()
+    ids = sorted(u["id"] for u in res["unlocked"])
+    assert ids == ["play_expert_clear", "play_full_combo", "play_streak"]
+    # 250 streak advances the streak feat to its second tier.
+    res = client.post("/api/plugins/achievements/activity",
+                      json={"controller_streak": 250}).json()
+    assert [(u["id"], u["tier"]) for u in res["unlocked"]] == [("play_streak", 1)]
+    res = client.post("/api/plugins/achievements/activity",
+                      json={"pro_drums_clears": 1}).json()
+    assert [u["id"] for u in res["unlocked"]] == ["drums_pro_clear"]
+
+
+def test_play_activity_does_not_count_a_song(client):
+    res = client.post("/api/plugins/achievements/activity",
+                      json={"full_combos": 1}).json()
+    assert res["counters"]["songs_done"] == 0

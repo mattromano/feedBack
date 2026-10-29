@@ -15,7 +15,8 @@ from __future__ import annotations
 # Counter keys the activity model owns. `*_max` keys take the running maximum;
 # everything else is a cumulative running total. Kept here (not in routes) so a
 # test can assert the contract without standing up a DB.
-MAX_COUNTERS = frozenset({"notes_session_max", "streak_insong_max", "chart_encore_max"})
+MAX_COUNTERS = frozenset({"notes_session_max", "streak_insong_max", "chart_encore_max",
+                          "play_streak_max"})
 
 
 def tier_index_for(tiers, value):
@@ -81,6 +82,11 @@ def apply_activity(counters, delta):
       session_notes    -> notes_session_max      (max)
       in_song_streak   -> streak_insong_max      (max)
       chart_play_count -> chart_encore_max       (max)
+    Drums / 5-fret runs (RockHeroSmith ``play:result``):
+      full_combos       -> play_full_combos       (+=)
+      expert_clears     -> play_expert_clears     (+=)
+      controller_streak -> play_streak_max        (max)
+      pro_drums_clears  -> drums_pro_clears       (+=)
     """
     out = dict(counters or {})
 
@@ -101,6 +107,10 @@ def apply_activity(counters, delta):
     out["time_total_seconds"] = _cur("time_total_seconds") + _int(delta.get("seconds"))
     out["notes_session_max"] = max(_cur("notes_session_max"), _int(delta.get("session_notes")))
     out["streak_insong_max"] = max(_cur("streak_insong_max"), _int(delta.get("in_song_streak")))
+    out["play_full_combos"] = _cur("play_full_combos") + _int(delta.get("full_combos"))
+    out["play_expert_clears"] = _cur("play_expert_clears") + _int(delta.get("expert_clears"))
+    out["play_streak_max"] = max(_cur("play_streak_max"), _int(delta.get("controller_streak")))
+    out["drums_pro_clears"] = _cur("drums_pro_clears") + _int(delta.get("pro_drums_clears"))
     if delta.get("chart_play_count") is not None:
         out["chart_encore_max"] = max(_cur("chart_encore_max"), _int(delta.get("chart_play_count")))
     return out

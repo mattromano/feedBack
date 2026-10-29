@@ -89,3 +89,21 @@ class TestConsecutiveRun:
 
     def test_dedup_and_unsorted(self):
         assert engine.consecutive_run_length(["2026-06-03", "2026-06-01", "2026-06-02", "2026-06-02"]) == 3
+
+
+class TestPlayResultCounters:
+    """Drums / 5-fret feats fed from RockHeroSmith's play:result."""
+
+    def test_play_counters_accumulate_and_streak_takes_max(self):
+        c = engine.apply_activity({}, {"full_combos": 1, "expert_clears": 2,
+                                       "controller_streak": 120, "pro_drums_clears": 1})
+        c = engine.apply_activity(c, {"full_combos": 1, "controller_streak": 80})
+        assert c["play_full_combos"] == 2
+        assert c["play_expert_clears"] == 2
+        assert c["play_streak_max"] == 120
+        assert c["drums_pro_clears"] == 1
+        assert "play_streak_max" in engine.MAX_COUNTERS
+
+    def test_old_activity_posts_leave_play_counters_alone(self):
+        c = engine.apply_activity({"play_full_combos": 3}, {"notes": 5})
+        assert c["play_full_combos"] == 3

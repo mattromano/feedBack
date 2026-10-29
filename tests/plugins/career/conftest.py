@@ -30,6 +30,19 @@ class FakeMetaDb:
                    seconds_total REAL NOT NULL DEFAULT 0
                )"""
         )
+        # Per-part bests + run history (core metadata_db, drums / 5-fret).
+        self.conn.execute(
+            """CREATE TABLE part_stats (
+                   filename TEXT, part TEXT, difficulty TEXT,
+                   best_accuracy REAL, last_played_at TEXT
+               )"""
+        )
+        self.conn.execute(
+            """CREATE TABLE play_runs (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT,
+                   part TEXT, difficulty TEXT, accuracy REAL, played_at TEXT
+               )"""
+        )
         self.conn.execute(
             """CREATE TABLE songs (
                    filename TEXT, title TEXT, artist TEXT,
@@ -52,6 +65,23 @@ class FakeMetaDb:
                  genre,
                  json.dumps(arrangements) if arrangements is not None else None,
                  filename))
+        self.conn.commit()
+
+    def add_part(self, filename, part, best_accuracy, genre="", difficulty="expert",
+                 last_played_at=None, in_library=True):
+        """A drums / 5-fret best (part_stats) and its run (play_runs)."""
+        self.conn.execute("INSERT INTO part_stats VALUES (?, ?, ?, ?, ?)",
+                          (filename, part, difficulty, best_accuracy, last_played_at))
+        self.conn.execute(
+            "INSERT INTO play_runs (filename, part, difficulty, accuracy, played_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (filename, part, difficulty, best_accuracy, last_played_at or ""))
+        if in_library:
+            self.conn.execute(
+                "INSERT INTO songs SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                "(SELECT 1 FROM songs WHERE filename = ?)",
+                (filename, filename.replace(".feedpak", "").title(), "Test Artist",
+                 genre, None, filename))
         self.conn.commit()
 
     def add_song_only(self, filename, genre=""):
