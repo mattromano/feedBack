@@ -93,6 +93,24 @@ _DRUMS_NAME_LIKES = (
 )
 
 
+# A keys part, for the library's Parts facet (`arrangements_has=Keys` /
+# `arrangements_lacks=Keys`). The index keeps only arrangement names (not the
+# manifest `type`) and keys parts never get a smart name, so this matches the
+# lowercased name word-bounded, like _DRUMS_NAME_LIKES.
+_KEYS_NAME_LIKES = tuple(
+    pat for word in ("keys", "piano", "keyboard", "keyboards")
+    for pat in (word, f"{word} %", f"% {word}", f"% {word} %")
+)
+
+
+def _has_keys_sql(alias: str) -> tuple[str, list]:
+    """SQL that is true when the song has an arrangement named like keys."""
+    likes = " OR ".join(["lower(json_extract(value, '$.name')) LIKE ?"] * len(_KEYS_NAME_LIKES))
+    sql = (f"EXISTS (SELECT 1 FROM json_each(IFNULL({alias}.arrangements, '[]')) "
+           f"WHERE {likes})")
+    return sql, list(_KEYS_NAME_LIKES)
+
+
 def _has_drums_sql(alias: str) -> tuple[str, list]:
     """SQL that is true when the song has a drum chart: a `drum_tab`
     (has_drum_tab = 1) or an arrangement named like drums. `has_drums=0` is
@@ -4019,6 +4037,19 @@ class MetadataDB:
                 where += (f" AND NOT EXISTS (SELECT 1 FROM json_each({alias}.arrangements) "
                           f"WHERE json_extract(value, '$.name') IN ({placeholders}))")
                 params += arr_lacks
+        # "Keys" is not a guitar arrangement name (the allowlist above drops
+        # it): it is the Parts facet's keys part, its own axis, so it ANDs with
+        # the Lead/Rhythm/Bass picks instead of widening them.
+        keys_has = "Keys" in (arrangements_has or [])
+        keys_lacks = "Keys" in (arrangements_lacks or [])
+        if keys_has or keys_lacks:
+            keys_sql, keys_params = _has_keys_sql(alias)
+            if keys_has:
+                where += f" AND {keys_sql}"
+                params += keys_params
+            if keys_lacks:
+                where += f" AND NOT {keys_sql}"
+                params += keys_params
         stems_h = [s for s in (stems_has or []) if s in self._ALLOWED_STEM_IDS]
         if stems_h:
             placeholders = ",".join(["?"] * len(stems_h))

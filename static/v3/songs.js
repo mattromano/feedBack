@@ -70,7 +70,7 @@
         artist: '', album: '',
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
-        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
+        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', drums: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' },
         page: 0, total: 0, loading: false, built: false, accuracy: {}, plays: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
@@ -132,7 +132,7 @@
     function activeFilterCount() {
         const f = state.filters;
         return f.arr_has.length + f.arr_lacks.length + f.stem_has.length + f.stem_lacks.length +
-            (f.lyrics ? 1 : 0) + (f.tuningMatch === 'playable' ? 1 : f.tunings.length) + (f.mastery ? f.mastery.length : 0) +
+            (f.lyrics ? 1 : 0) + (f.drums ? 1 : 0) + (f.tuningMatch === 'playable' ? 1 : f.tunings.length) + (f.mastery ? f.mastery.length : 0) +
             (f.match ? f.match.length : 0) + (f.genre ? f.genre.length : 0) + (f.ff ? f.ff.length : 0) +
             (state.artist ? 1 : 0) + (state.album ? 1 : 0);
     }
@@ -156,6 +156,7 @@
                 stem_has: [...(f.stem_has || [])].sort(),
                 stem_lacks: [...(f.stem_lacks || [])].sort(),
                 lyrics: f.lyrics || '',
+                drums: f.drums || '',
                 tunings: [...(f.tunings || [])].sort(),
                 ff: [...(f.ff || [])].sort(),
                 mastery: [...(f.mastery || [])].sort(),
@@ -188,9 +189,11 @@
             // the filter drawer indexes f.mastery/f.match/f.genre unconditionally,
             // so dropping them here breaks the drawer for anyone with saved prefs.
             state.filters = {
-                arr_has: arr(f.arr_has).filter((a) => ARRANGEMENTS.includes(a)), arr_lacks: arr(f.arr_lacks).filter((a) => ARRANGEMENTS.includes(a)),
+                // 'Keys' is the Parts facet's keys part, not an Arrangements pill.
+                arr_has: arr(f.arr_has).filter((a) => ARRANGEMENTS.includes(a) || a === 'Keys'), arr_lacks: arr(f.arr_lacks).filter((a) => ARRANGEMENTS.includes(a) || a === 'Keys'),
                 stem_has: arr(f.stem_has), stem_lacks: arr(f.stem_lacks),
                 lyrics: f.lyrics || '', tunings: arr(f.tunings),
+                drums: (f.drums === '1' || f.drums === '0') ? f.drums : '',
                 ff: arr(f.ff).filter((i) => FIVE_FRET.some((x) => x[0] === i)),
                 mastery: [], match: [], genre: [],
             };
@@ -220,6 +223,7 @@
                     stem_has: [...f.stem_has], stem_lacks: [...f.stem_lacks],
                     lyrics: f.lyrics || '', tunings: [...f.tunings],
                     ...(f.ff && f.ff.length ? { ff: [...f.ff] } : {}),
+                    ...(f.drums ? { drums: f.drums } : {}),
                 },
             }));
         } catch (_) { /* best-effort */ }
@@ -320,6 +324,12 @@
         return f.ff.map((i) => (auto ? i : i + ':chart')).join(',');
     }
 
+    // Parts → Drums chart: '' (any) | '1' (has a drum chart) | '0' (has none),
+    // sent as has_drums (lib/metadata_db.py _has_drums_sql). The chip cycles
+    // any → has → lacks → any like the other tri-state pills.
+    function nextDrumsFlag(v) { return v === '1' ? '0' : v === '0' ? '' : '1'; }
+    function drumsTri(v) { return v === '1' ? 'has' : v === '0' ? 'lacks' : 'any'; }
+
     function queryParams(extra, opts) {
         const f = state.filters;
         const skipArtistAlbum = opts && opts.catalog;
@@ -335,6 +345,7 @@
         if (f.stem_has.length) p.set('stems_has', f.stem_has.join(','));
         if (f.stem_lacks.length) p.set('stems_lacks', f.stem_lacks.join(','));
         if (f.lyrics) p.set('has_lyrics', f.lyrics);
+        if (f.drums) p.set('has_drums', f.drums);
         if (fiveFretParam(f)) p.set('five_fret', fiveFretParam(f));
         // The two modes answer different questions, so only one filters at a
         // time: sending both would silently intersect them.
@@ -369,6 +380,7 @@
         if (f.stem_has.length) r.stems_has = f.stem_has.join(',');
         if (f.stem_lacks.length) r.stems_lacks = f.stem_lacks.join(',');
         if (f.lyrics) r.has_lyrics = f.lyrics;
+        if (f.drums) r.has_drums = f.drums;
         if (fiveFretParam(f)) r.five_fret = fiveFretParam(f);
         if (f.tunings.length) r.tunings = f.tunings.join(',');
         if (state.sort && state.sort !== 'artist') r.sort = state.sort;
@@ -3293,9 +3305,24 @@
                     + '" title="Songs you can sing: synced lyrics with vocal pitch and a separated vocals track">'
                     + (on ? '✕ ' : '') + 'Karaoke-ready</button>';
             })()) +
-            // Rock Band / Guitar Hero 5-fret parts — multi-select; a song must
+            // Parts — the instrument parts a song carries beyond the guitar
+            // arrangements. Drums chart and Keys are tri-state (any → has →
+            // lacks); Vocal pitch is has_lyrics=pitch, the same state as the
+            // Lyrics/Karaoke facets (the server has no "lacks pitch" value).
+            // Rock Band / Guitar Hero 5-fret parts are multi-select; a song must
             // have every picked part (the Parts column's green G / R / B).
-            section('Rock Band / Guitar Hero', FIVE_FRET.map((it) => '<button data-ff="' + it[0] + '" title="Songs with a 5-fret ' + it[1].toLowerCase() + ' chart" class="px-2 py-1 rounded-md text-xs border ' + ((f.ff || []).includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + ((f.ff || []).includes(it[0]) ? '✕ ' : '') + it[1] + '</button>').join('')) +
+            section('Parts',
+                triPill('drums', '1', 'Drums chart', drumsTri(f.drums), 'Songs with a drum chart (click again: songs without one)') +
+                (() => {
+                    const on = f.lyrics === 'pitch';
+                    return '<button data-vocal-pitch class="px-2 py-1 rounded-md text-xs border '
+                        + (on ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700')
+                        + '" title="Songs with synced lyrics and per-syllable vocal pitch">'
+                        + (on ? '✓ ' : '') + 'Vocal pitch</button>';
+                })() +
+                triPill('arr', 'Keys', 'Keys', triState(f.arr_has, f.arr_lacks, 'Keys'), 'Songs with a keys or piano part (click again: songs without one)') +
+                '<div class="w-full text-xs text-fb-textDim mt-2">Rock Band / Guitar Hero</div>' +
+                FIVE_FRET.map((it) => '<button data-ff="' + it[0] + '" title="Songs with a 5-fret ' + it[1].toLowerCase() + ' chart" class="px-2 py-1 rounded-md text-xs border ' + ((f.ff || []).includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + ((f.ff || []).includes(it[0]) ? '✕ ' : '') + it[1] + '</button>').join('')) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
             section('Progress', [['mastered', 'Mastered'], ['in_progress', 'In progress'], ['not_started', 'Not started']].map((it) => '<button data-mastery="' + it[0] + '" class="px-2 py-1 rounded-md text-xs border ' + (f.mastery.includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + it[1] + '</button>').join('')) +
             // Match (P8) — the song's metadata-match lifecycle state, a triage
@@ -3378,6 +3405,7 @@
             const g = b.getAttribute('data-tri'), v = b.getAttribute('data-val');
             if (g === 'arr') cycleTri(f.arr_has, f.arr_lacks, v);
             else if (g === 'stem') cycleTri(f.stem_has, f.stem_lacks, v);
+            else if (g === 'drums') f.drums = nextDrumsFlag(f.drums);
             else if (g === 'tuning') { const i = f.tunings.indexOf(v); if (i >= 0) f.tunings.splice(i, 1); else f.tunings.push(v); }
             renderDrawer();
         }));
@@ -3393,6 +3421,7 @@
             if (!on) f.stem_lacks.push(...STEMS);
             renderDrawer();
         });
+        d.querySelector('[data-vocal-pitch]')?.addEventListener('click', () => { f.lyrics = f.lyrics === 'pitch' ? '' : 'pitch'; renderDrawer(); });
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
         d.querySelectorAll('[data-karaoke]').forEach((b) => b.addEventListener('click', () => {
             if (f.lyrics === 'pitch' && f.stem_has.includes('vocals')) {
@@ -3418,7 +3447,7 @@
         d.querySelector('[data-drawer-tidy]')?.addEventListener('click', openArtistTidyUp);
         d.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         d.querySelector('[data-drawer-clear]')?.addEventListener('click', async () => {
-            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' };
+            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', drums: '', tunings: [], ff: [], mastery: [], match: [], genre: [], tuningMatch: 'exact' };
             state.artist = '';
             state.album = '';
             renderDrawer();
@@ -4650,6 +4679,7 @@
             if (f.stem_has.length)  p.set('stems_has',          f.stem_has.join(','));
             if (f.stem_lacks.length) p.set('stems_lacks',       f.stem_lacks.join(','));
             if (f.lyrics)           p.set('has_lyrics',         f.lyrics);
+            if (f.drums)            p.set('has_drums',          f.drums);
             if (f.tunings.length)   p.set('tunings',            f.tunings.join(','));
             if (fiveFretParam(f))   p.set('five_fret',          fiveFretParam(f));
             return p.toString();
