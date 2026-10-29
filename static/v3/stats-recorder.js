@@ -290,6 +290,7 @@
     sm.on('play:result', (e) => {
         const d = (e && e.detail) || {};
         if (!d.filename || d.practice === true || !Array.isArray(d.players)) return;
+        const pending = [];
         for (const p of d.players) {
             if (!p || p.instrument === 'guitar') continue;
             const part = partKey(p);
@@ -314,17 +315,24 @@
                 input: p.input || undefined,
             };
             if (p.fullCombo === true && misses === 0) body.full_combo = true;
-            post(body).then(async (response) => {
-                if (response == null) { postedRuns.delete(runKey); return; }
+            pending.push(post(body).then(async (response) => {
+                if (response == null) { postedRuns.delete(runKey); return null; }
                 // Not a calibration attempt: that flow is real guitar only.
                 await notifyProgression(response, body, false);
-                if (window.v3Profile && typeof window.v3Profile.refresh === 'function') window.v3Profile.refresh();
-                sm.emit('stats:recorded', {
-                    filename: body.filename, arrangement: body.arrangement,
-                    part, difficulty: body.difficulty, player: body.player,
-                });
-            });
+                return { part, difficulty: body.difficulty, player: body.player, arrangement: body.arrangement };
+            }));
         }
+        if (!pending.length) return;
+        // ONE stats:recorded per result, after every player's post settles: a
+        // band must not fire N venue-crowd stingers. Top-level fields mirror the
+        // first recorded player (consumers read filename/arrangement); `parts`
+        // lists every recorded player.
+        Promise.all(pending).then((rows) => {
+            const parts = rows.filter(Boolean);
+            if (!parts.length) return;
+            if (window.v3Profile && typeof window.v3Profile.refresh === 'function') window.v3Profile.refresh();
+            sm.emit('stats:recorded', Object.assign({ filename: d.filename }, parts[0], { parts }));
+        });
     });
 
     // ── Play-time clock ───────────────────────────────────────────────────--

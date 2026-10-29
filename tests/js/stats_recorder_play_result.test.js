@@ -140,3 +140,20 @@ test('a drums play:result does not disturb the guitar note tally', async () => {
     assert.equal(guitar[0].body.misses, 1);
     assert.equal(r.posts.filter((p) => p.body.part === 'drums').length, 1);
 });
+
+test('a band result emits stats:recorded once, after every post settles', async () => {
+    const r = boot();
+    r.fire('play:result', result([
+        player(),
+        player({ player: 'ctl1', instrument: 'five_fret', part: 'bass', input: 'controller', arrangement: 2 }),
+        player({ player: 'vocals', instrument: 'vocals', part: 'vocals', input: 'mic' }),
+    ]));
+    await r.flush();
+    await r.flush();
+    assert.equal(r.posts.length, 3);
+    const rec = r.emitted.filter((e) => e.ev === 'stats:recorded');
+    assert.equal(rec.length, 1, 'one venue-crowd reaction per result, not per player');
+    assert.equal(rec[0].detail.filename, 'song.feedpak');
+    assert.equal(rec[0].detail.parts.map((p) => p.part).join(','), 'drums,five_fret:bass,vocals');
+    assert.equal(r.notified.length, 3);
+});
