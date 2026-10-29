@@ -35,5 +35,6 @@ test('Karaoke filter toggles lyrics-with-pitch plus the vocals stem', () => {
 
 test('restored filters drop arrangement names the facet no longer offers', () => {
     assert.match(src,
-        /arr_has: arr\(f\.arr_has\)\.filter\(\(a\) => ARRANGEMENTS\.includes\(a\)\), arr_lacks: arr\(f\.arr_lacks\)\.filter\(\(a\) => ARRANGEMENTS\.includes\(a\)\),/);
+        // ('Keys' is kept too: it is the Parts facet's keys part.)
+        /arr_has: arr\(f\.arr_has\)\.filter\(\(a\) => ARRANGEMENTS\.includes\(a\) \|\| a === 'Keys'\), arr_lacks: arr\(f\.arr_lacks\)\.filter\(\(a\) => ARRANGEMENTS\.includes\(a\) \|\| a === 'Keys'\),/);
 });

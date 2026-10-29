@@ -204,3 +204,70 @@ def test_has_drums_named_arrangement_in_grouped_mode(client):
     titles = {s.get("title") for s in rows}
     assert "named.sloppak" in titles
     assert "sticks.sloppak" not in titles
+
+
+# ── The library drawer's Parts facet: both drum sides on the table view, and a
+#    Keys part through arrangements_has / arrangements_lacks ────────────────
+
+def _table_files(client, **kw):
+    body = client.get("/api/library/table", params=kw).json()
+    i = body["cols"].index("filename")
+    return {r[i] for r in body["rows"]}
+
+
+def test_has_drums_both_sides_on_the_table_view(client):
+    assert _table_files(client, has_drums="1") == {"kit.sloppak"}
+    assert _table_files(client, has_drums="0") == {"gtr.sloppak", "bare.sloppak"}
+    # The table and the grid agree on both sides.
+    assert _table_files(client, has_drums="0") == _files(client, has_drums="0")
+
+
+_KEYS = (
+    ("keys.sloppak", ["Lead", "Keys"]),
+    ("piano.sloppak", ["Piano"]),
+    ("prokeys.sloppak", ["Bass", "Pro Keys"]),
+    ("keyboard.sloppak", ["Keyboard"]),
+    # Not keys: a word that merely contains "keys"/"piano".
+    ("monkeys.sloppak", ["Monkeys Lead"]),
+)
+
+
+def _put_keys(client):
+    import server
+    for fn, names in _KEYS:
+        server.meta_db.put(fn, 1.0, 1, {
+            "title": fn, "artist": "K", "album": "Album K", "format": "sloppak",
+            "arrangements": [{"index": i, "name": n} for i, n in enumerate(names)]})
+
+
+_KEYS_HITS = {"keys.sloppak", "piano.sloppak", "prokeys.sloppak", "keyboard.sloppak"}
+
+
+@pytest.mark.parametrize("naming_mode", ["legacy", "smart"])
+def test_arrangements_has_keys_matches_keys_named_parts(client, naming_mode):
+    _put_keys(client)
+    assert _files(client, arrangements_has="Keys", naming_mode=naming_mode) == _KEYS_HITS
+    assert _table_files(client, arrangements_has="Keys", naming_mode=naming_mode) == _KEYS_HITS
+
+
+@pytest.mark.parametrize("naming_mode", ["legacy", "smart"])
+def test_arrangements_lacks_keys_is_the_complement(client, naming_mode):
+    _put_keys(client)
+    everything = _files(client)
+    no = _files(client, arrangements_lacks="Keys", naming_mode=naming_mode)
+    assert no == everything - _KEYS_HITS
+    assert "monkeys.sloppak" in no
+
+
+def test_keys_ands_with_the_guitar_arrangements(client):
+    # Keys sits in its own drawer section (Parts), so it narrows a Lead pick
+    # instead of widening it like a second arrangement name would.
+    _put_keys(client)
+    assert _files(client, arrangements_has="Lead,Keys") == {"keys.sloppak"}
+
+
+def test_keys_reaches_every_endpoint(client):
+    _put_keys(client)
+    q = {"arrangements_has": "Keys"}
+    assert client.get("/api/library/stats", params=q).json()["total_songs"] == len(_KEYS_HITS)
+    assert client.get("/api/library/artists", params=q).json()["total_artists"] == 1
