@@ -153,6 +153,16 @@ def _loads_list(raw) -> list:
     return val if isinstance(val, list) else []
 
 
+def _put_drum_tier(v) -> int:
+    """A meta drum_tier for the column: 0-6, else -1 (no drum chart / unrated)."""
+    return int(v) if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 6 else -1
+
+
+def _drum_tier(raw) -> int | None:
+    """The column as the library reads it: 0-6, else None (none, or not yet rated)."""
+    return int(raw) if isinstance(raw, int) and raw >= 0 else None
+
+
 # ── The custom-tuning group key ──────────────────────────────────────────────
 #
 # Named tunings group by NAME, which is already serialization-agnostic. Custom
@@ -645,6 +655,13 @@ class MetadataDB:
             # Whether the pack's only arrangements are 5-fret parts (no real
             # guitar/bass chart, no drum tab). Same NULL-marker contract.
             "ALTER TABLE songs ADD COLUMN five_fret_only INTEGER",
+            # Overall drum difficulty 0-6 (lib/drum_rating.py), -1 with no drum
+            # chart; NULL marks a pre-migration row the scanner re-extracts.
+            # drum_tier_estimated: computed from the chart, not authored (song.ini).
+            # drum_levels_generated: Easy/Medium/Hard reduced by software.
+            "ALTER TABLE songs ADD COLUMN drum_tier INTEGER",
+            "ALTER TABLE songs ADD COLUMN drum_tier_estimated INTEGER",
+            "ALTER TABLE songs ADD COLUMN drum_levels_generated INTEGER",
         ):
             try:
                 self.conn.execute(ddl)
@@ -662,6 +679,9 @@ class MetadataDB:
                           "WHERE five_fret_parts IS NULL AND format != 'sloppak'")
         self.conn.execute("UPDATE songs SET five_fret_only = 0 "
                           "WHERE five_fret_only IS NULL AND format != 'sloppak'")
+        # ...and a drum tier (has_drum_tab = 0 rows have nothing to rate either).
+        self.conn.execute("UPDATE songs SET drum_tier = -1, drum_tier_estimated = 0, drum_levels_generated = 0 "
+                          "WHERE drum_tier IS NULL AND (format != 'sloppak' OR has_drum_tab = 0)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title COLLATE NOCASE)")
         # Composite (sort col, filename) indexes cover the grid's ORDER BY +
@@ -3440,7 +3460,7 @@ class MetadataDB:
     # when extracted-but-absent, NULL only when the column predates the row.
     _EXTRACTION_MARKER_COLS = tuple(
         p.column(suffix) for p in ROLE_PERSPECTIVES for suffix in ("name", "key")
-    ) + ("has_vocal_pitch", "has_drum_tab", "five_fret_parts", "five_fret_only")
+    ) + ("has_vocal_pitch", "has_drum_tab", "five_fret_parts", "five_fret_only", "drum_tier")
 
     def get(self, filename: str, mtime: float, size: int) -> dict | None:
         cache_key = str(filename)
@@ -3449,7 +3469,8 @@ class MetadataDB:
             row = self.conn.execute(
                 "SELECT mtime, size, title, artist, album, year, duration, tuning, arrangements, has_lyrics, "
                 "format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, "
-                f"has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only, {pcols} "
+                f"has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only, {pcols}, "
+                "drum_tier, drum_tier_estimated, drum_levels_generated "
                 "FROM songs WHERE filename = ?", (cache_key,)
             ).fetchone()
         if row and row[0] == mtime and row[1] == size and row[2]:
@@ -3478,6 +3499,12 @@ class MetadataDB:
                     out[col] = int(val or 0)
                 else:
                     out[col] = val or ""
+            n = len(self._PERSPECTIVE_COLS)
+            # Raw: NULL drives re-extraction, -1 is "no drum chart" (the
+            # library reads give None for both, _drum_tier()).
+            out["drum_tier"] = row[20 + n]
+            out["drum_tier_estimated"] = bool(row[21 + n])
+            out["drum_levels_generated"] = bool(row[22 + n])
             return out
         return None
 
@@ -3487,8 +3514,9 @@ class MetadataDB:
                 "INSERT OR REPLACE INTO songs "
                 "(filename, mtime, size, title, artist, album, year, duration, tuning, arrangements, "
                 "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre, track_number, disc, "
-                "has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only, " + ", ".join(self._PERSPECTIVE_COLS) + ") "
-                "VALUES (" + ", ".join(["?"] * (24 + len(self._PERSPECTIVE_COLS))) + ")",
+                "has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only, " + ", ".join(self._PERSPECTIVE_COLS) + ", "
+                "drum_tier, drum_tier_estimated, drum_levels_generated) "
+                "VALUES (" + ", ".join(["?"] * (27 + len(self._PERSPECTIVE_COLS))) + ")",
                 (filename, mtime, size, meta.get("title", ""), meta.get("artist", ""),
                  meta.get("album", ""), meta.get("year", ""), meta.get("duration", 0),
                  meta.get("tuning", ""), json.dumps(meta.get("arrangements", [])),
@@ -3512,7 +3540,10 @@ class MetadataDB:
                  # low_pitch is the exception: NULL there means "this tuning
                  # has no computable pitch" (unusable offsets), and the
                  # playable filter treats unknown as not-playable.
-                 *[_put_perspective_value(meta, col) for col in self._PERSPECTIVE_COLS]),
+                 *[_put_perspective_value(meta, col) for col in self._PERSPECTIVE_COLS],
+                 _put_drum_tier(meta.get("drum_tier")),
+                 1 if meta.get("drum_tier_estimated") else 0,
+                 1 if meta.get("drum_levels_generated") else 0),
             )
             self.conn.commit()
             # A song's identity may have changed → the grouping read-model is stale.
@@ -4783,7 +4814,8 @@ class MetadataDB:
             cols = ("SELECT filename, title, artist, album, year, duration, tuning, "
                     "arrangements, has_lyrics, mtime, format, stem_count, stem_ids, "
                     "tuning_name, tuning_offsets, bass_tuning_name, bass_tuning_offsets, "
-                    "rhythm_tuning_name, rhythm_tuning_offsets, has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only "
+                    "rhythm_tuning_name, rhythm_tuning_offsets, has_vocal_pitch, has_drum_tab, five_fret_parts, five_fret_only, "
+                    "drum_tier, drum_tier_estimated, drum_levels_generated "
                     "FROM songs ")
             cursor = _decode_cursor(after) if after else None
             eff_sort = _effective_keyset_sort(sort, direction)
@@ -4827,6 +4859,9 @@ class MetadataDB:
                 "has_vocal_pitch": bool(r[19]), "has_drum_tab": bool(r[20]),
                 "five_fret_parts": _loads_list(r[21]),
                 "five_fret_only": bool(r[22]),
+                "drum_tier": _drum_tier(r[23]),
+                "drum_tier_estimated": bool(r[24]),
+                "drum_levels_generated": bool(r[25]),
                 "has_estd": r[0] in estd, "favorite": r[0] in favs,
             })
         # PROVENANCE (non-default perspectives): a row shown to a bass or
@@ -4941,7 +4976,8 @@ class MetadataDB:
             "SELECT mw.effective_work_key, m.filename, m.title, m.duration, m.tuning, "
             "m.arrangements, m.has_lyrics, m.mtime, m.format, m.stem_count, m.stem_ids, "
             "m.tuning_name, m.tuning_offsets, m.bass_tuning_name, m.bass_tuning_offsets, "
-            "m.has_vocal_pitch, m.has_drum_tab, m.five_fret_parts, m.five_fret_only "
+            "m.has_vocal_pitch, m.has_drum_tab, m.five_fret_parts, m.five_fret_only, "
+            "m.drum_tier, m.drum_tier_estimated, m.drum_levels_generated "
             "FROM songs m JOIN work_display mw ON mw.filename = m.filename "
             f"WHERE mw.effective_work_key IN ({ph}){intrinsic_frag} "
             "ORDER BY mw.is_group_representative DESC, m.mtime DESC, m.filename",
@@ -4966,6 +5002,9 @@ class MetadataDB:
                 "has_vocal_pitch": bool(m[15]), "has_drum_tab": bool(m[16]),
                 "five_fret_parts": _loads_list(m[17]),
                 "five_fret_only": bool(m[18]),
+                "drum_tier": _drum_tier(m[19]),
+                "drum_tier_estimated": bool(m[20]),
+                "drum_levels_generated": bool(m[21]),
             }
 
     def query_artists(self, letter: str = "", q: str = "",

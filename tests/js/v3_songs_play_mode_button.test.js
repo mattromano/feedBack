@@ -30,7 +30,7 @@ const MODE_BTNS = "const modeBtns = modeActs.length ? window.v3PlayModes.cardBut
 
 test('songCard puts the mode buttons first in the chips row', () => {
     assert.ok(fnBody('songCard').includes(
-        '\'<div class="v3-card-chips flex gap-1 mt-1">\' + modeBtns + chartsChip + arrChips + \'</div>\''));
+        '\'<div class="v3-card-chips flex gap-1 mt-1">\' + modeBtns + chartsChip + drumChip + arrChips + \'</div>\''));
 });
 
 test('songCard guards cardActions(shown) with !pickOn() && !state.selectMode', () => {

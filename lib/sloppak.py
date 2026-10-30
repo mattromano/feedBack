@@ -64,6 +64,7 @@ from song import (
     _finite_float,
     sanitize_tempos,
 )
+import drum_rating
 import drums as drums_mod
 import fivefret as fivefret_mod
 import notation as notation_mod
@@ -1664,8 +1665,34 @@ def _five_fret_parts_for_meta(path: Path, arr_list: list) -> list[tuple[str, str
     return parts
 
 
+def _drum_rating_for_meta(path: Path, manifest: dict, arr_list: list) -> tuple[int | None, bool]:
+    """(estimated 0-6 tier, levels generated) for the pack's primary drum part —
+    the song-level `drum_tab`, else the first drums arrangement's — for the
+    library's drum badges (lib/drum_rating.py). (None, False) without a readable
+    drum tab."""
+    rel = manifest.get("drum_tab")
+    if not (isinstance(rel, str) and rel.strip()):
+        rel = next((e.get("drum_tab") for e in arr_list
+                    if isinstance(e, dict) and isinstance(e.get("drum_tab"), str)
+                    and str(e.get("type") or "").strip().lower() in ("drums", "drum")), None)
+    if not (isinstance(rel, str) and rel.strip()):
+        return None, False
+    try:
+        raw = read_member_bytes(path, rel)
+        if raw is None:
+            return None, False
+        tab = parse_jsonc(raw.decode("utf-8")) if rel.strip().lower().endswith(".jsonc") else json.loads(raw)
+    except Exception as e:
+        log.debug("sloppak: drum meta: cannot read %r in %s (%s)", rel, path, e)
+        return None, False
+    if not isinstance(tab, dict):
+        return None, False
+    hits = tab.get("hits") if isinstance(tab.get("hits"), list) else []
+    return drum_rating.estimate_tier(hits), drum_rating.levels_generated(tab)
+
+
 def extract_meta(path: Path) -> dict:
-    """Fast metadata for the library scanner. Reads only the manifest."""
+    """Fast metadata for the library scanner. Reads the manifest (and the drum tab, to rate it)."""
     manifest = load_manifest(path)
     arr_list = manifest.get("arrangements", []) or []
 
@@ -1712,6 +1739,8 @@ def extract_meta(path: Path) -> dict:
         isinstance(e, dict) and str(e.get("type") or "").strip().lower() == "five_fret"
         for e in arr_list
     )
+    drum_tier, drum_levels_generated = (_drum_rating_for_meta(path, manifest, arr_list)
+                                        if has_drum_tab else (None, False))
     tuning_offsets = _tuning_for_meta(arr_list)
     # Per-role tunings alongside the song-level one, so the library can answer
     # for whichever arrangement the player actually plays.
@@ -1763,6 +1792,12 @@ def extract_meta(path: Path) -> dict:
         # mode scores against, so the library's Karaoke-ready filter keys on it.
         "has_vocal_pitch": bool(manifest.get("vocal_pitch")),
         "has_drum_tab": has_drum_tab,
+        # Overall drum difficulty, 0-6 (None: no drum chart). Packs carry no
+        # authored tier, so it is estimated from the Expert chart.
+        "drum_tier": drum_tier,
+        "drum_tier_estimated": drum_tier is not None,
+        # Easy/Medium/Hard reduced from Expert by software (drum tab `levels`).
+        "drum_levels_generated": drum_levels_generated,
         # ["guitar:chart", "bass:auto", ...] — the library's five_fret filter.
         "five_fret_parts": list(dict.fromkeys(tag for tag, _name in five_fret_parts)),
         # True when the pack has 5-fret parts and nothing else to play: every
