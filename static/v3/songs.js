@@ -1002,6 +1002,9 @@
             : '';
         const arrChips = arrChipsHtml(shown);
         const chartsChip = chartsChipHtml(song);
+        // Drum difficulty pips + AUTO (generated levels), shared with the table.
+        const tbl = window.v3SongsTable;
+        const drumChip = (tbl && typeof tbl.drumBadgeHtml === 'function') ? tbl.drumBadgeHtml(shown, 'v3-drum-chip') : '';
         // Play-mode buttons (chips row, outside the play hitbox). Asked about the
         // displayed chart; none while picking or selecting.
         const pms = playModeState();
@@ -1057,7 +1060,7 @@
             // Always emit the chip row (even when empty) at a FIXED single-line
             // height — uniform card height is what makes the windowed grid's
             // absolute-position math exact (.v3-card-chips in v3.css).
-            '<div class="v3-card-chips flex gap-1 mt-1">' + modeBtns + chartsChip + arrChips + '</div>' +
+            '<div class="v3-card-chips flex gap-1 mt-1">' + modeBtns + chartsChip + drumChip + arrChips + '</div>' +
             '</div>';
     }
 

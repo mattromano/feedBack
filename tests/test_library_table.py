@@ -133,3 +133,16 @@ def test_table_rows_carry_play_as_facts(client, server):
     assert plain["arr_index"] == [0, 1]
     assert plain["has_drum_tab"] is False and plain["has_vocal_pitch"] is False
     assert plain["five_fret_parts"] == [] and plain["stem_ids"] == []
+
+
+def test_table_rows_carry_drum_badges(client, server):
+    server.meta_db.put("d.sloppak", 0, 0, {
+        "title": "Drums", "artist": "X", "has_drum_tab": True,
+        "drum_tier": 5, "drum_tier_estimated": True, "drum_levels_generated": True,
+    })
+    _put(server, "plain.sloppak", "Plain", "X")
+    _, rows = _table(client)
+    d = rows["d.sloppak"]
+    assert (d["drum_tier"], d["drum_tier_estimated"], d["drum_levels_generated"]) == (5, True, True)
+    p = rows["plain.sloppak"]
+    assert (p["drum_tier"], p["drum_tier_estimated"], p["drum_levels_generated"]) == (None, False, False)

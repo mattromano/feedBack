@@ -306,7 +306,8 @@ TABLE_MAX_ROWS = 20000
 TABLE_COLS = ["filename", "play_filename", "artist", "title", "album", "year", "duration",
               "tuning", "arrangements", "format", "plays", "best_accuracy", "full_combos",
               "last_played", "seconds", "arr_index", "has_drum_tab", "has_vocal_pitch",
-              "five_fret_parts", "five_fret_only", "stem_ids"]
+              "five_fret_parts", "five_fret_only", "stem_ids",
+              "drum_tier", "drum_tier_estimated", "drum_levels_generated"]
 
 
 @router.get("/api/library/table")
@@ -375,6 +376,8 @@ async def library_table(q: str = "", favorites: int = 0, format: str = "",
             bool(part_src.get("has_drum_tab")), bool(part_src.get("has_vocal_pitch")),
             list(part_src.get("five_fret_parts") or []), bool(part_src.get("five_fret_only")),
             list(part_src.get("stem_ids") or []),
+            part_src.get("drum_tier"), bool(part_src.get("drum_tier_estimated")),
+            bool(part_src.get("drum_levels_generated")),
         ])
     return {"cols": TABLE_COLS, "rows": rows, "total": total,
             "truncated": total > len(rows)}

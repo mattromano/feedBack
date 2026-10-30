@@ -28,6 +28,7 @@ import threading
 import time
 from pathlib import Path, PurePosixPath
 
+import drum_rating
 import drumchart
 import fivefretchart
 import sngfile
@@ -289,6 +290,10 @@ def index_meta(src: Path) -> dict:
         "has_lyrics": "vocals" in parts,
         "has_vocal_pitch": "vocals" in parts,
         "has_drum_tab": drums,
+        # song.ini's authored tier; the chart's levels are only known once converted.
+        "drum_tier": drum_rating.ini_tier(ini) if drums else None,
+        "drum_tier_estimated": False,
+        "drum_levels_generated": False,
         "five_fret_parts": [f"{p}:chart" for p in five],
         "five_fret_only": bool(five) and not drums,
         "stem_count": len(stem_ids),
@@ -419,8 +424,13 @@ def prepare_for_play(filename: str, dlc: Path) -> Path:
         from scan_worker import _extract_meta_sloppak
         try:
             meta = _extract_meta_sloppak(pack)
+            ini = _read_source(src)[0]
             if not meta.get("genre"):
-                meta["genre"] = _read_source(src)[0].get("genre", "")
+                meta["genre"] = ini.get("genre", "")
+            # song.ini's authored tier beats the estimate from the converted chart.
+            tier = drum_rating.ini_tier(ini) if meta.get("has_drum_tab") else None
+            if tier is not None:
+                meta["drum_tier"], meta["drum_tier_estimated"] = tier, False
             appstate.meta_db.put(filename, *source_stat(src), meta)
         except Exception as e:
             log.warning("clonehero: could not refresh the library row for %s: %s", filename, e)
