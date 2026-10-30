@@ -43,6 +43,7 @@ from song import (
 )
 from audio import find_wem_files, convert_wem
 import sloppak as sloppak_mod
+import clonehero as clonehero_mod
 import drums as drums_mod
 import fivefret as fivefret_mod
 import notation as notation_mod
@@ -236,7 +237,10 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         await websocket.send_json({"error": "forbidden"})
         await websocket.close()
         return
-    if not song_path.exists():
+    # A Clone Hero song's pack is converted on first play (lib/clonehero.py),
+    # below with the keepalives running, so it need not exist yet.
+    is_ch = clonehero_mod.is_key(filename)
+    if not song_path.exists() and not is_ch:
         await websocket.send_json({"error": "File not found"})
         await websocket.close()
         return
@@ -269,6 +273,10 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         try:
             loop = asyncio.get_running_loop()
             _ctx = contextvars.copy_context()
+            if is_ch:
+                await websocket.send_json({"type": "loading", "stage": "Converting Clone Hero song..."})
+                await loop.run_in_executor(
+                    None, lambda: _ctx.run(clonehero_mod.prepare_for_play, filename, dlc))
             if is_slop:
                 appstate.sloppak_cache_dir.mkdir(parents=True, exist_ok=True)
                 loaded_slop = await loop.run_in_executor(

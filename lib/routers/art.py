@@ -21,6 +21,7 @@ import appstate
 import enrichment
 import loosefolder as loosefolder_mod
 import sloppak as sloppak_mod
+import clonehero as clonehero_mod
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
 
 import logging
@@ -111,7 +112,10 @@ async def get_song_art(filename: str, request: Request = None, source: str = "")
     song_path = _resolve_dlc_path(dlc, filename)
     if song_path is None:
         return JSONResponse({"error": "forbidden"}, 403)
-    if not song_path.exists():
+    # A Clone Hero song not played yet has no pack: its art comes from the
+    # Clone Hero folder / .sng (lib/clonehero.py).
+    ch_src = None if song_path.exists() else clonehero_mod.source_for_filename(filename)
+    if not song_path.exists() and ch_src is None:
         return JSONResponse({"error": "not found"}, 404)
 
     pack_only = source == "pack"
@@ -134,7 +138,10 @@ async def get_song_art(filename: str, request: Request = None, source: str = "")
         # is correct for both dir- and zip-form. Raw byte Response lacks
         # FileResponse's validators, so we attach the ETag + honor If-None-Match.
         try:
-            art = await asyncio.to_thread(sloppak_mod.read_cover_bytes, song_path)
+            if ch_src is not None:
+                art = await asyncio.to_thread(clonehero_mod.source_cover, ch_src)
+            else:
+                art = await asyncio.to_thread(sloppak_mod.read_cover_bytes, song_path)
         except Exception:
             art = None
         if art is not None:

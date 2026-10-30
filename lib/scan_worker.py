@@ -34,6 +34,7 @@ from tunings import (
 )
 import sloppak as sloppak_mod
 import loosefolder as loosefolder_mod
+import clonehero as clonehero_mod
 
 log = logging.getLogger("feedBack.scan_worker")
 
@@ -108,6 +109,10 @@ def _extract_meta_sloppak(path: Path) -> dict:
     meta["tuning_offsets"] = " ".join(str(o) for o in offsets)
     _apply_song_low_pitch(meta, offsets)
     _apply_role_tunings(meta)
+    return _finish_pack_meta(meta)
+
+
+def _finish_pack_meta(meta: dict) -> dict:
     meta["format"] = "sloppak"
     # `extract_meta` already populates `stem_ids` (feedBack#129);
     # default to empty for older callers / mocks.
@@ -122,6 +127,21 @@ def _extract_meta_sloppak(path: Path) -> dict:
         for a, sn in zip(arrs, _smart):
             a["smart_name"] = sn
     return meta
+
+
+def _extract_meta_clonehero(src: Path) -> dict:
+    """Metadata for a Clone Hero song folder / .sng from its song.ini — the shape
+    the converted pack will have (format sloppak, E Standard: no pitched parts)."""
+    meta = clonehero_mod.index_meta(src)
+    offsets = [0] * 6
+    name = tuning_name(offsets)
+    meta["tuning"] = name
+    meta["tuning_name"] = name
+    meta["tuning_sort_key"] = 0
+    meta["tuning_offsets"] = " ".join(str(o) for o in offsets)
+    _apply_song_low_pitch(meta, offsets)
+    _apply_role_tunings(meta)
+    return _finish_pack_meta(meta)
 
 
 def _extract_meta_loosefolder(path: Path, dlc_root: Path | None) -> dict:
@@ -205,3 +225,10 @@ def _scan_one(item):
     log.debug("scanning %s", f.name)
     meta = _extract_meta_for_file(f, dlc)
     return _relpath(f, dlc), mtime, size, meta
+
+
+def _scan_one_ch(item):
+    """Process-pool worker for a Clone Hero song: ``item`` is (source, mtime, size,
+    library filename)."""
+    src, mtime, size, key = item
+    return key, mtime, size, _extract_meta_clonehero(src)

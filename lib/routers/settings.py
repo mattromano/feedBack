@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 import appstate
 import sloppak as sloppak_mod
+import clonehero as clonehero_mod
 from appconfig import _load_config
 from metadata_db import _as_int, _sqlite_file_integrity_ok
 from tunings import (
@@ -39,7 +40,12 @@ _settings_lock = threading.Lock()
 @router.get("/api/settings")
 def get_settings():
     cfg = _load_config(appstate.config_dir / "config.json")
-    return settings_with_instrument_profiles(cfg if cfg is not None else appstate.default_settings())
+    out = settings_with_instrument_profiles(cfg if cfg is not None else appstate.default_settings())
+    # The Clone Hero songs folder the library actually scans (the setting, or the
+    # default it fell back to), so Settings can show it.
+    ch = clonehero_mod.songs_dir(cfg)
+    out["clonehero_dir_active"] = str(ch) if ch else ""
+    return out
 
 
 @router.post("/api/settings")
@@ -95,6 +101,16 @@ def save_settings(data: dict):
     # here. Matches the dlc_dir pattern above:
     # null is no-op, empty string clears, non-string is a structured
     # error that preserves the on-disk value.
+    if clonehero_mod.CONFIG_KEY in data:
+        raw = data[clonehero_mod.CONFIG_KEY]
+        if raw is None:
+            pass
+        elif not isinstance(raw, str):
+            return {"error": "clonehero_dir must be a string path or empty"}
+        elif raw.strip() and not Path(raw.strip()).expanduser().is_dir():
+            dlc_warnings.append(f"Clone Hero songs folder not found: {raw.strip()}")
+        else:
+            updates[clonehero_mod.CONFIG_KEY] = raw.strip()
     for key in ("default_arrangement", "demucs_server_url"):
         if key in data:
             raw = data[key]
@@ -438,7 +454,7 @@ def _validate_server_config_types(cfg: dict) -> str | None:
         v = cfg["dlc_dir"]
         if v is not None and not isinstance(v, str):
             return "server_config.dlc_dir must be a string"
-    for key in ("default_arrangement", "demucs_server_url"):
+    for key in ("default_arrangement", "demucs_server_url", clonehero_mod.CONFIG_KEY):
         if key in cfg:
             v = cfg[key]
             if v is not None and not isinstance(v, str):

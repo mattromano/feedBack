@@ -798,6 +798,18 @@
                             <button onclick="saveSettings()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Save</button>
                         </div>
                     </div>
+                    <!-- Clone Hero / YARG songs folder (lib/clonehero.py) -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Clone Hero / YARG songs folder</div>
+                            <div class="fb-srow-desc">Songs in this folder (song folders with song.ini, or .sng files) join your library with their drums, 5-fret guitar / bass and vocals. Each is converted the first time you play it. Leave empty to use the Clone Hero default folder when it exists.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <input type="text" id="clonehero-path" placeholder="~/Documents/Clone Hero/Songs"
+                                onchange="saveCloneHeroDir(this.value.trim())"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:border-accent/50 outline-none">
+                        </div>
+                    </div>
                     <!-- Library rescan -->
                     <div class="fb-srow fb-srow-stack">
                         <div class="fb-srow-main">

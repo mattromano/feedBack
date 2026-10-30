@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Clone Hero / YARG songs folder: set it in Settings → Library (or leave it empty to use `~/Documents/Clone Hero/Songs` / `~/Clone Hero/Songs` when present) and its song folders and `.sng` files join the library with their drums, 5-fret guitar / rhythm / bass and vocals parts, so the Drums, Rock Band / Guitar Hero and Karaoke filters find them. Songs are indexed from `song.ini` alone (thousands scan in about a second) and each is converted to a feedpak in `<library>/clonehero-cache/` the first time it is played (a few seconds; the converter is `scripts/ch_to_sloppak.py`'s, now in `lib/ch_convert.py`).
 - Songs table: the Parts column shows Rock Band / Guitar Hero 5-fret parts as green G / R / B pills after the real-instrument letters (auto charts dashed, only while the five-fret "Show auto charts" setting is on), and D / V whenever a song has a drum chart or vocal pitch.
 - "Play as" menu: clicking a song in the table (or "Play as…" in the card ⋮ menu) lists every way to play it — Play, each real-instrument arrangement, and the entries plugins add (drums, vocals, 5-fret parts, RockHeroSmith). Enter, double-click and gamepad A still just play. A view an entry sets (e.g. 5-fret) lasts for that play only.
 - Library filters: a **Rock Band / Guitar Hero** section (Guitar / Rhythm / Bass) keeps songs with those 5-fret parts (real charts, plus auto charts while "Show auto charts" is on).
@@ -506,6 +507,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- Songs whose path contains `#` or `?` (e.g. Clone Hero's `#Green Day Rock Band DLC` folders) now load: the highway WebSocket URL encodes each path segment.
 - **Songs loaded from an unpacked Rocksmith tree keep their cent offset.**
   `song.load_song()` read arrangement names and path flags from the manifest
   JSON but not `CentOffset`, and arrangement XML decoded from a binary chart has
