@@ -746,7 +746,10 @@ export async function playSong(filename, arrangement, options) {
     if (arrangement !== undefined) wsParams.set('arrangement', arrangement);
     else if (_queueDriven && _arrHint) wsParams.set('arrangement_name', _arrHint);
     wsParams.set('naming_mode', _getArrangementNamingMode());
-    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/highway/${decodeURIComponent(filename)}?${wsParams.toString()}`;
+    // Re-encode each path segment: a raw `#` or `?` in a folder name (Clone Hero
+    // packs live in folders like `#Green Day Rock Band DLC`) would end the path.
+    const wsPath = decodeURIComponent(filename).split('/').map(encodeURIComponent).join('/');
+    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/highway/${wsPath}?${wsParams.toString()}`;
     window.highway.connect(wsUrl);
     _resetSectionPracticeLog();
     _scheduleSectionPracticeRetries();

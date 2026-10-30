@@ -3191,7 +3191,8 @@ function createHighway() {
             wsParams.set('naming_mode', namingMode);
             const qs = wsParams.toString();
             // filename might already be encoded from data-play attribute
-            const decoded = decodeURIComponent(filename);
+            // ...then re-encoded per segment, so a `#` / `?` in a folder name survives
+            const decoded = decodeURIComponent(filename).split('/').map(encodeURIComponent).join('/');
             const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/highway/${decoded}${qs ? '?' + qs : ''}`;
             console.log('reconnect:', wsUrl);
             this.connect(wsUrl, hwState._connectOpts);
