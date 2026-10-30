@@ -19,7 +19,7 @@
 // app.js — the root, which imports both — wires it. That is exactly what the seam is for.
 import { setAllHighwaysAvOffset } from './highway-av-offset.js';
 import { hwcInitSettingsUI } from './highway-colors.js';
-import { _getArrangementNamingMode, _setLibraryProfile } from './library.js';
+import { _getArrangementNamingMode, _setLibraryProfile, rescanLibrary } from './library.js';
 import {
     _applyMastery, _autoplayExitEnabled, _exitConfirmEnabled, _showUpNextEnabled,
 } from './player-controls.js';
@@ -110,6 +110,11 @@ export async function loadSettings() {
     // from throwing and aborting the rest of the hydration.
     const dlcEl = document.getElementById('dlc-path');
     if (dlcEl) dlcEl.value = data.dlc_dir || '';
+    const chEl = document.getElementById('clonehero-path');
+    if (chEl) {
+        chEl.value = data.clonehero_dir || '';
+        chEl.placeholder = data.clonehero_dir_active || '~/Documents/Clone Hero/Songs';
+    }
     _defaultArrangement = data.default_arrangement || '';
     _syncDefaultArrangementSelect(_defaultArrangement);
     // Feed the library its tuning PERSPECTIVE (lead / rhythm / bass) — the
@@ -732,6 +737,13 @@ export async function saveSettings() {
 // the server-side config.json lock is what keeps those from racing the
 // dropdown writes (see save_settings() in server.py).
 export let _settingSaveChain = Promise.resolve();
+
+// The Clone Hero / YARG songs folder is part of the library scan, so a change
+// rescans once the setting is on disk.
+export async function saveCloneHeroDir(value) {
+    await persistSetting('clonehero_dir', value);
+    await rescanLibrary();
+}
 
 export function persistSetting(key, value) {
     const next = _settingSaveChain.then(() => _postSetting(key, value));

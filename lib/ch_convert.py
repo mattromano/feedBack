@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Clone Hero / YARG / Rock Band song folder (or .sng) -> a drums / 5-fret feedpak.
 
-Usage:
-    python scripts/ch_to_sloppak.py SONG_FOLDER_OR_SNG OUT.sloppak
-           [--title T --artist A --album X --year N] [--dir] [-v]
+Shared by scripts/ch_to_sloppak.py (command line) and lib/clonehero.py (the library's
+Clone Hero songs folder, converted on first play).
 
 SONG_FOLDER holds ``notes.mid`` (PART DRUMS and/or PART GUITAR / RHYTHM / BASS) or
 ``notes.chart`` ([ExpertDrums], [ExpertSingle] / [ExpertDoubleRhythm] / [ExpertDoubleBass]),
@@ -39,31 +38,26 @@ else is mixed / transcoded with ffmpeg. Parsing rules: lib/drumchart.py.
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_ROOT / "lib"))
+import yaml
 
-import yaml  # noqa: E402
+import audio
+import drumchart
+import drumchart_gen
+import fivefret
+import fivefretchart
+import sngfile
+import vocalchart
 
-import audio  # noqa: E402
-import drumchart  # noqa: E402
-import drumchart_gen  # noqa: E402
-import fivefret  # noqa: E402
-import fivefretchart  # noqa: E402
-import sngfile  # noqa: E402
-import vocalchart  # noqa: E402
-
-log = logging.getLogger("feedBack.scripts.ch_to_sloppak")
+log = logging.getLogger("feedBack.ch_convert")
 
 # The format version this converter writes: five-fret parts (1.21.0, fork only).
 FEEDPAK_VERSION = "1.21.0"
@@ -272,33 +266,3 @@ def convert(src: Path, out: Path, title=None, artist=None, album=None, year=None
             "stems": [s["id"] for s in stems], "duration": manifest["duration"],
             "lyrics": len(vocals.notes) if vocals else 0, "vocal_pitch": len(pitch["notes"]),
             "vocal_phrases": len(vocals.phrases) if vocals else 0}
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("src", type=Path, help="CH/YARG song folder or .sng package")
-    ap.add_argument("out", type=Path)
-    ap.add_argument("--title")
-    ap.add_argument("--artist")
-    ap.add_argument("--album")
-    ap.add_argument("--year", type=int)
-    ap.add_argument("--dir", action="store_true", help="write the directory form instead of a zip")
-    ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
-    a = ap.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(levelname)s %(message)s")
-    try:
-        s = convert(a.src, a.out, a.title, a.artist, a.album, a.year, a.dir)
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
-        log.error("%s", e)
-        return 1
-    log.info("wrote %s: %d drum notes (%s), %d star power, %d fills, %d solos, %d sections, "
-             "delay %+.3fs, generated levels %s, stems %s; 5-fret: %s; vocals: %d syllables, %d pitched, "
-             "%d phrases", s["out"], s["notes"], s["format"], s["star_power"], s["fills"], s["solos"],
-             s["sections"], s["delay"], ", ".join(s["levels_generated"]) or "none", ", ".join(s["stems"]),
-             ", ".join(f"{p} {n} notes" for p, n in s["five_fret"].items()) or "none",
-             s["lyrics"], s["vocal_pitch"], s["vocal_phrases"])
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

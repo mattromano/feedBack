@@ -41,13 +41,14 @@ from pathlib import Path
 
 import appstate
 import builtin_content
+import clonehero as clonehero_mod
 import enrichment
 import loosefolder as loosefolder_mod
 import sloppak as sloppak_mod
 from appconfig import _load_config
 from dlc_paths import _get_dlc_dir
 from env_compat import getenv_compat
-from scan_worker import _relpath, _scan_one
+from scan_worker import _relpath, _scan_one, _scan_one_ch
 
 log = logging.getLogger("feedBack.scan")
 
@@ -86,13 +87,16 @@ def _load_dir_signature() -> dict | None:
     return None
 
 
-def _save_dir_signature(dlc: Path, dirs: dict[str, int]) -> None:
+def _save_dir_signature(dlc: Path, dirs: dict[str, int], ch_root: Path | None = None,
+                        ch_dirs: dict[str, int] | None = None) -> None:
     # Keyed by the DLC path so switching libraries never matches a stale
     # signature. Best-effort: a failed write just means the next scan is a full
-    # one, never a wrong one.
+    # one, never a wrong one. The Clone Hero songs folder (lib/clonehero.py) is a
+    # second tree with its own dirs, keyed by its own path the same way.
     try:
         _dir_signature_file().write_text(
-            json.dumps({"dlc": str(dlc), "dirs": dirs}), encoding="utf-8")
+            json.dumps({"dlc": str(dlc), "dirs": dirs, "ch_root": str(ch_root or ""),
+                        "ch_dirs": ch_dirs or {}}), encoding="utf-8")
     except OSError as e:
         log.debug("scan: could not persist dir signature: %s", e)
 
@@ -147,10 +151,11 @@ def _has_unextracted_columns() -> bool:
     return row is not None
 
 
-def _record_dir_signature(all_songs, dlc: Path) -> None:
+def _record_dir_signature(all_songs, dlc: Path, ch_root: Path | None = None, ch_songs=()) -> None:
     sig = _stat_dirs(dlc, _library_dirs(all_songs, dlc))
-    if sig is not None:   # a dir vanished mid-scan → skip; next scan is full
-        _save_dir_signature(dlc, sig)
+    ch_sig = _stat_dirs(ch_root, _library_dirs(ch_songs, ch_root)) if ch_root else {}
+    if sig is not None and ch_sig is not None:   # a dir vanished mid-scan → skip; next scan is full
+        _save_dir_signature(dlc, sig, ch_root, ch_sig)
 
 
 def _stat_dirs(dlc: Path, rels) -> dict[str, int] | None:
@@ -246,9 +251,13 @@ def background_scan(force: bool = False):
     # perturb the mtimes on a settled library.
     if not force and not _has_unextracted_columns():
         stored = _load_dir_signature()
-        if stored is not None and stored.get("dlc") == str(dlc):
+        ch_root = clonehero_mod.songs_dir(_cfg)
+        if (stored is not None and stored.get("dlc") == str(dlc)
+                and stored.get("ch_root", "") == str(ch_root or "")):
             current = _stat_dirs(dlc, stored["dirs"].keys())
-            if current is not None and current == stored["dirs"]:
+            ch_stored = stored.get("ch_dirs") or {}
+            ch_current = _stat_dirs(ch_root, ch_stored.keys()) if ch_root else {}
+            if current is not None and current == stored["dirs"] and ch_current == ch_stored:
                 _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete"}
                 log.info("Scan: library tree unchanged (%d dirs) — skipped the full listing/stat pass",
                          len(current))
@@ -267,8 +276,11 @@ def background_scan(force: bool = False):
         #     drills here). Cached/reused per exercise, never browsed.
         # Both are kept out of the scan; _resolve_dlc_path still loads them by
         # path for playback.
+        # clonehero-cache/ holds the converted Clone Hero packs; those songs are
+        # listed from the Clone Hero folder itself (below), not from here.
         def _is_excluded_from_library(p: Path) -> bool:
-            return "tutorials-builtin" in p.parts or "minigames-builtin" in p.parts
+            return ("tutorials-builtin" in p.parts or "minigames-builtin" in p.parts
+                    or clonehero_mod.CACHE_DIR in p.parts)
         # Sloppaks: match both file (zip) and directory form, across both the
         # `.feedpak` and legacy `.sloppak` suffixes.
         _cands = sorted(p for ext in sloppak_mod.SONG_EXTS for p in dlc.rglob(f"*{ext}"))
@@ -311,7 +323,24 @@ def background_scan(force: bool = False):
     log.info("Scan: listed %d sloppaks and %d loose folders in %s",
              len(sloppaks), len(loose_songs), dlc)
 
-    current_files = {_relpath(f, dlc) for f in all_songs}
+    # Clone Hero / YARG songs folder: indexed from song.ini, converted on play.
+    ch_root = clonehero_mod.songs_dir(_cfg)
+    ch_songs: list[Path] = []
+    ch_listed = False
+    if ch_root:
+        try:
+            ch_songs = clonehero_mod.list_songs(ch_root)
+            ch_listed = True
+            log.info("Scan: listed %d Clone Hero songs in %s", len(ch_songs), ch_root)
+        except OSError as e:
+            log.warning("Scan: cannot list the Clone Hero folder %s: %s", ch_root, e)
+    ch_keys = {clonehero_mod.library_key(f, ch_root): f for f in ch_songs}
+    if ch_listed or not ch_root:
+        removed_packs = clonehero_mod.prune_cache(dlc, set(ch_keys))
+        if removed_packs:
+            log.info("Scan: removed %d converted Clone Hero packs whose song is gone", removed_packs)
+
+    current_files = {_relpath(f, dlc) for f in all_songs} | set(ch_keys)
 
     # Clean up stale DB entries. delete_missing reports both deltas (rows pruned
     # + genuinely-new files) so the scan can surface an added/removed summary.
@@ -341,7 +370,7 @@ def background_scan(force: bool = False):
             log.warning("scan cache lookup failed for %s: %s", cache_key, e)
             cached = None
         if not cached:
-            to_scan.append((f, mtime, size, dlc))
+            to_scan.append((_scan_one, (f, mtime, size, dlc)))
         elif any(cached.get(c) is None for c in appstate.meta_db._EXTRACTION_MARKER_COLS):
             # Row predates one of the per-perspective tuning columns (NULL
             # from the additive migration), so that perspective's tuning was
@@ -350,7 +379,7 @@ def background_scan(force: bool = False):
             # forever — mtime/size still match, so nothing else would ever
             # bring the row back through extraction. Converges: put() always
             # writes '' (never NULL), so a rescanned row is never re-queued.
-            to_scan.append((f, mtime, size, dlc))
+            to_scan.append((_scan_one, (f, mtime, size, dlc)))
         elif cached.get("arrangements") and any(
             "smart_name" not in a for a in cached["arrangements"]
         ):
@@ -362,31 +391,47 @@ def background_scan(force: bool = False):
             # the arrangement (e.g. a name outside the recognised set with
             # zero path flags), so rescanning would produce the same null
             # forever and never converge.
-            to_scan.append((f, mtime, size, dlc))
+            to_scan.append((_scan_one, (f, mtime, size, dlc)))
+    for key, src in ch_keys.items():
+        try:
+            mtime, size = clonehero_mod.source_stat(src)
+            cached = appstate.meta_db.get(key, mtime, size)
+        except Exception as e:
+            log.debug("scan: Clone Hero song %s: %s", src, e)
+            cached = None
+        if not cached or any(cached.get(c) is None for c in appstate.meta_db._EXTRACTION_MARKER_COLS):
+            try:
+                to_scan.append((_scan_one_ch, (src, *clonehero_mod.source_stat(src), key)))
+            except OSError as e:
+                log.debug("scan: skipping Clone Hero song %s (%s)", src, e)
 
+    total_songs = len(all_songs) + len(ch_keys)
     if not to_scan:
         # Full pass completed with the DB already up to date — record the tree
         # signature so the next startup can take the fast path.
-        _record_dir_signature(all_songs, dlc)
+        _record_dir_signature(all_songs, dlc, ch_root if ch_listed else None, ch_songs)
         _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete", "added": added, "removed": removed}
-        log.info("Scan: nothing new to scan (%d songs, all cached)", len(all_songs))
+        log.info("Scan: nothing new to scan (%d songs, all cached)", total_songs)
         return
 
     # Refine: all discovered songs need scanning → treat as first-time import
     # (covers moved DLC folder / fully-stale DB as well as a genuinely empty DB).
-    is_first_scan = bool(all_songs) and len(to_scan) == len(all_songs)
+    is_first_scan = bool(total_songs) and len(to_scan) == total_songs
     _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "scanning", "total": len(to_scan),
                     "is_first_scan": is_first_scan}
-    log.info("Library: %d sloppaks + %d loose folders, %d cached, %d to scan",
-             len(sloppaks), len(loose_songs), len(all_songs) - len(to_scan), len(to_scan))
+    log.info("Library: %d sloppaks + %d loose folders + %d Clone Hero songs, %d cached, %d to scan",
+             len(sloppaks), len(loose_songs), len(ch_keys), total_songs - len(to_scan), len(to_scan))
 
     with _make_scan_executor() as executor:
-        futures = {executor.submit(_scan_one, item): item[0].name for item in to_scan}
+        futures = {executor.submit(fn, item): item[0].name for fn, item in to_scan}
         for future in concurrent.futures.as_completed(futures):
             fname = futures[future]
             try:
                 name, mtime, size, meta = future.result()
-                appstate.meta_db.put(name, mtime, size, meta)
+                # A Clone Hero song with neither drums nor a 5-fret part: the
+                # converter would refuse it, so it never becomes a library row.
+                if meta.pop("playable", True):
+                    appstate.meta_db.put(name, mtime, size, meta)
             except Exception as e:
                 log.warning("scan failed for %s: %s", fname, e)
             _scan_status["done"] += 1
@@ -394,7 +439,7 @@ def background_scan(force: bool = False):
 
     # Record the tree signature after a completed full pass so the next startup
     # can skip it when nothing has changed.
-    _record_dir_signature(all_songs, dlc)
+    _record_dir_signature(all_songs, dlc, ch_root if ch_listed else None, ch_songs)
     log.info("Scan complete: %d songs cached", len(to_scan))
     _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete", "added": added, "removed": removed}
 

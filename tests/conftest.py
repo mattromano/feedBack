@@ -167,3 +167,14 @@ def reset_scan_state():
         scan._scan_status = saved_status
         scan._scan_thread = saved_thread
         scan._scan_rescan_pending = saved_pending
+
+
+# ── Clone Hero songs folder ─────────────────────────────────────────────────────
+#
+# lib/clonehero.py falls back to the default Clone Hero folders under $HOME when no
+# `clonehero_dir` is configured, so on a machine with Clone Hero installed every scan
+# test would pick up the developer's real songs. Tests opt in to a folder explicitly.
+@pytest.fixture(autouse=True)
+def _no_default_clonehero_dir(monkeypatch):
+    import clonehero
+    monkeypatch.setattr(clonehero, "DEFAULT_DIRS", ())

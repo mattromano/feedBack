@@ -622,6 +622,9 @@ of a code comment.)
 - `lib/sloppak_convert.py` — sloppak assembly pipeline, Demucs stem splitting
 - `lib/song.py` — shared data models (`Note`, `Chord`, `Arrangement`, `Song`) and wire format serialization used by both formats
 
+### Clone Hero / YARG songs folder
+Not a format of its own: `lib/clonehero.py` lists the songs folder (setting `clonehero_dir`, else the default CH folders) during the library scan and indexes each song folder / `.sng` from `song.ini` (`diff_*` keys; the chart is only sniffed when a key is missing). Its library filename is `clonehero-cache/<path in the songs folder>.feedpak` — the DLC-relative path of the pack `lib/ch_convert.py` writes on first play (WS highway, or `GET /api/song/{f}?stems=1`), so every filename route resolves it like any directory-form pack. `clonehero-cache/` is excluded from the DLC scan; packs whose song is gone are pruned. Rows are keyed on the source's stat and refreshed from the real pack after conversion.
+
 ## Frontend Conventions
 
 - **No frameworks** — vanilla JS, fetch API, DOM manipulation

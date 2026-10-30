@@ -23,8 +23,9 @@ import appstate
 import enrichment
 import loosefolder as loosefolder_mod
 import sloppak as sloppak_mod
+import clonehero as clonehero_mod
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
-from scan_worker import _extract_meta_for_file
+from scan_worker import _extract_meta_clonehero, _extract_meta_for_file
 
 import logging
 log = logging.getLogger("feedBack.server")
@@ -892,7 +893,13 @@ async def get_song_info(filename: str, stems: int = 0):
     song_path = _resolve_dlc_path(dlc, filename)
     if song_path is None:
         return JSONResponse({"error": "forbidden"}, 403)
-    if not song_path.exists():
+    # A Clone Hero song (lib/clonehero.py): its row is keyed on the source's
+    # stat, and `?stems=1` (the play-time caller) converts it so stems exist.
+    ch_src = clonehero_mod.source_for_filename(filename)
+    if ch_src is not None and stems:
+        await asyncio.get_event_loop().run_in_executor(
+            None, clonehero_mod.prepare_for_play, filename, dlc)
+    if not song_path.exists() and ch_src is None:
         return JSONResponse({"error": "File not found"}, 404)
 
     # Canonicalise the cache key against the resolved path so two URL
@@ -904,7 +911,10 @@ async def get_song_info(filename: str, stems: int = 0):
     except ValueError:
         cache_key = filename
 
-    mtime, size = appstate.stat_for_cache(song_path)
+    if ch_src is not None:
+        mtime, size = clonehero_mod.source_stat(ch_src)
+    else:
+        mtime, size = appstate.stat_for_cache(song_path)
     cached = appstate.meta_db.get(cache_key, mtime, size)
     loop = asyncio.get_event_loop()
 
@@ -924,7 +934,11 @@ async def get_song_info(filename: str, stems: int = 0):
 
     # Extract in thread pool
     def _extract():
-        meta = _extract_meta_for_file(song_path, dlc)
+        if ch_src is not None and not song_path.exists():
+            meta = _extract_meta_clonehero(ch_src)
+            meta.pop("playable", None)
+        else:
+            meta = _extract_meta_for_file(song_path, dlc)
         appstate.meta_db.put(cache_key, mtime, size, meta)
         return meta
 
