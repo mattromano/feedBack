@@ -675,8 +675,13 @@ export function setAvOffsetMs(ms, skipPersist, source) {
         hud.classList.toggle('hidden', _avOffsetMs === 0);
     }
     if (!skipPersist) _persistAvOffset();
+    try { window.feedBack?.emit?.('settings:av-offset', { ms: _avOffsetMs, source: source || null, locked: _avUserOverride }); } catch (_) { /* bus optional */ }
     return true;
 }
+
+// True while the A/V offset is hand-set (or applied by Calibrate): automatic
+// tools (Note Detection's auto-calibrate) must leave it alone.
+export function isAvOffsetLocked() { return _avUserOverride; }
 
 export function _persistAvOffset() {
     // Debounced persist — POST only the one field; the server merges.
