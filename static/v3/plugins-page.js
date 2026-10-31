@@ -123,6 +123,8 @@
     }
 
     function thumbUrl(p) {
+        // A plugin skipped at startup (turned off) has no asset route: its icon would 404.
+        if (p && p.status === 'disabled') return DEFAULT_THUMB;
         if (p && typeof p.icon === 'string' && p.icon) {
             var rel = p.icon.replace(/^assets\//, '');
             return '/api/plugins/' + encodeURIComponent(p.id) + '/assets/' + encodeURI(rel);

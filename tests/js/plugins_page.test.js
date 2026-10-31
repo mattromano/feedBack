@@ -188,3 +188,10 @@ test('listSectionHtml: rows sorted by name and an on / total count', () => {
     assert.ok(html.indexOf('alpha') < html.indexOf('Mid') && html.indexOf('Mid') < html.indexOf('Zed'));
     assert.equal(t.searchText({ id: 'note_detect', name: 'Note Detection', description: 'Pitch' }), 'note detection note_detect pitch');
 });
+
+test('thumbUrl: a plugin turned off at startup uses the default icon (its asset route is not mounted)', () => {
+    const { t } = loadPage();
+    assert.equal(t.thumbUrl({ id: 'piano', icon: 'assets/thumb.svg', status: 'disabled', enabled: false }), '/static/v3/pedal-default.svg');
+    assert.equal(t.thumbUrl({ id: 'piano', icon: 'assets/thumb.svg', enabled: false }), '/api/plugins/piano/assets/thumb.svg',
+        'turned off this session: still mounted until restart');
+});

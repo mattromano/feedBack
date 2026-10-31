@@ -263,7 +263,7 @@
         '<p class="text-fb-textDim mt-2">Play along to your library, track your accuracy, and rank up.</p>' +
         '<div class="flex gap-3 mt-5">' +
         '<button id="v3-start" class="bg-fb-primary hover:bg-fb-primaryHi text-white px-6 py-2 rounded-md font-medium shadow-lg shadow-fb-primary/20">Start Playing</button>' +
-        '<button id="v3-lessons-btn" class="bg-transparent border border-fb-textDim hover:border-white text-white px-6 py-2 rounded-md font-medium">Lessons</button>' +
+        '<button id="v3-lessons-btn" data-v3-backed="lessons" class="bg-transparent border border-fb-textDim hover:border-white text-white px-6 py-2 rounded-md font-medium">Lessons</button>' +
         '</div></div></div>';
     }
 
