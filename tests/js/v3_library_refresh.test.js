@@ -34,6 +34,18 @@ test('songs.js handles library:changed — reload when active, else mark dirty',
     assert.match(m[0], /_libraryDirty\s*=\s*true/, 'marks dirty when off-screen');
 });
 
+test('the Songs Refresh button reloads the grid even when the scan finished before the first poll', () => {
+    const m = SONGS.match(/function _watchScan\(opts\)[\s\S]*?\r?\n    \}\r?\n/);
+    assert.ok(m, '_watchScan present');
+    // A ~0.5 s incremental scan was over before a 1 s poll saw it running, so the
+    // grid never reloaded and new songs only showed after leaving Songs.
+    assert.match(SONGS, /const SCAN_POLL_MS = (\d+);/);
+    assert.ok(+SONGS.match(/const SCAN_POLL_MS = (\d+);/)[1] <= 250, 'polls fast enough to catch a short scan');
+    assert.match(m[0], /\}, SCAN_POLL_MS\);/);
+    assert.match(m[0], /if \(\(sawRunning \|\| announce\) && window\.feedBack\)[^\n]*library:changed/,
+        'a user Refresh always emits library:changed when it finishes');
+});
+
 test('onV3SongsScreenEnter forces a reload when the library is dirty', () => {
     const m = SONGS.match(/function onV3SongsScreenEnter\(\)[\s\S]{0,400}?\{/);
     assert.ok(m, 'onV3SongsScreenEnter present');

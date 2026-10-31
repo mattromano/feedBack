@@ -4392,6 +4392,9 @@
     // completion, emit library:changed (grid reloads via the listener below) and,
     // for a user-initiated refresh (announce), show the toast. announce:false is
     // used when we only attached to a scan we didn't start.
+    // Polls every 250 ms: an incremental scan of a large library can finish in
+    // well under a second, before a 1 s poll ever sees it running.
+    const SCAN_POLL_MS = 250;
     function _watchScan(opts) {
         if (_refreshPoll) return;
         const announce = !opts || opts.announce !== false;
@@ -4402,20 +4405,23 @@
             try { const r = await fetch('/api/scan-status'); if (r.ok) sd = await r.json(); } catch (e) { /* */ }
             _setRefreshState(sd);
             if (sd && sd.running) sawRunning = true;
-            // A user-initiated refresh that never saw a running scan = nothing to
-            // do (already up to date); give prompt feedback instead of waiting.
-            const noopDone = announce && !sawRunning && ticks >= 3;
-            if ((sawRunning && sd && !sd.running) || noopDone || ticks >= 180) {
+            // A user-initiated refresh whose scan was over before any poll saw
+            // it running (fast scan) or that had nothing to do: done after ~1 s.
+            const quickDone = announce && !sawRunning && ticks >= 4 && !(sd && sd.running);
+            if ((sawRunning && sd && !sd.running) || quickDone || ticks >= 720) {
                 clearInterval(_refreshPoll); _refreshPoll = null;
                 _setRefreshState(null);
                 const hasDelta = sd && (((sd.added || 0) > 0) || ((sd.removed || 0) > 0));
-                if (sawRunning && window.feedBack) { try { window.feedBack.emit('library:changed', { reason: 'rescan', added: (sd && sd.added) || 0, removed: (sd && sd.removed) || 0 }); } catch (e) { /* */ } }
+                // Reload the grid after any scan we saw and after every Refresh the
+                // user clicked: a fast scan can add songs without ever being seen
+                // running, and the reload is cheap.
+                if ((sawRunning || announce) && window.feedBack) { try { window.feedBack.emit('library:changed', { reason: 'rescan', added: (sd && sd.added) || 0, removed: (sd && sd.removed) || 0 }); } catch (e) { /* */ } }
                 // A user-initiated refresh always confirms; a scan we only attached
                 // to (background / Settings) toasts just when it changed something,
                 // so a periodic no-op pass stays silent.
                 if (announce || hasDelta) _scanCompleteToast(sd);
             }
-        }, 1000);
+        }, SCAN_POLL_MS);
     }
     async function refreshLibrary() {
         if (_refreshPoll) return;                 // a scan is already in progress
