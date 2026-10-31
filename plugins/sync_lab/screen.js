@@ -229,7 +229,7 @@
 
     const API = '/api/plugins/sync_lab';
     const LS = { ref: 'synclab_av_ref_v1', follow: 'synclab_follow_v1', last: 'synclab_last_v1', prevSplit: 'synclab_prev_split_v1',
-        pending: 'synclab_pending_v1', lock: 'synclab_lock_v1' };
+        pending: 'synclab_pending_v1', lock: 'synclab_lock_v1', ndRestore: 'synclab_nd_restore_v1' };
     const COL = { early: '#5fb6ff', late: '#ff9a40', ok: '#5dffa8', dim: '#6b7280', warn: '#ffc531' };
     const bus = window.feedBack || window.slopsmith;
 
@@ -675,6 +675,8 @@
         if (window.__drumsRefreshParams) window.__drumsRefreshParams();
         try { if (fiveFret() && fiveFret().refreshParams) fiveFret().refreshParams(); } catch (_) { /* ignore */ }
         // Note Detection's end-of-song A/V sweep must not move A/V under the results.
+        // Remembered, so a reload or crash mid-run still turns it back on.
+        if (prevNdAuto) lsSet(LS.ndRestore, true);
         setNdAuto(false);
         if (ui.card) { ui.card.remove(); ui.card = null; }
     }
@@ -686,6 +688,7 @@
         try { if (fiveFret() && fiveFret().refreshParams) fiveFret().refreshParams(); } catch (_) { /* ignore */ }
         // Locked (applied now or before): auto-calibrate stays off; else back as it was.
         if (run && run.prevNdAuto && !run.applied && !lsGet(LS.lock, null)) setNdAuto(true);
+        lsDel(LS.ndRestore);
         run = null;
         lsDel(LS.pending);
         removeUi();
@@ -708,7 +711,9 @@
         for (const row of rows) {
             row.change = Number.isFinite(row.now) ? row.want - row.now : NaN;
             row.same = Number.isFinite(row.change) && Math.abs(row.change) < 5;
-            row.limit = row.wanted !== row.want;
+            // Clamped to the setting's range (not just rounded to its step).
+            const spec = targetSpec(row.id);
+            row.limit = !!spec && Number.isFinite(row.wanted) && (row.wanted < spec.min || row.wanted > spec.max);
             if (!(row.id in run.picked)) run.picked[row.id] = row.conf.rating !== 'unreliable' && !row.same;
         }
         return rows;
@@ -814,10 +819,10 @@
                 h += '<tr style="border-top:1px solid #1f2937">' +
                     '<td style="padding:6px"><input type="checkbox" data-pick="' + esc(r.id) + '"' + (run.picked[r.id] ? ' checked' : '') + (done ? ' disabled' : '') + '></td>' +
                     '<td style="padding:6px"><div style="color:#fff;font-weight:600">' + esc(r.label) + '</div><div style="color:' + COL.dim + ';font-size:11px">' + esc(r.what) + '</div></td>' +
-                    '<td style="padding:6px">' + ms(r.now) + '</td>' +
-                    '<td style="padding:6px;color:#fff;font-weight:700">' + ms(r.want) +
+                    '<td style="padding:6px;white-space:nowrap">' + ms(r.now) + '</td>' +
+                    '<td style="padding:6px;color:#fff;font-weight:700;white-space:nowrap">' + ms(r.want) +
                     (r.limit ? '<div style="color:' + COL.late + ';font-size:11px;font-weight:400">limit reached (wanted ' + r.wanted + ')</div>' : '') + '</td>' +
-                    '<td style="padding:6px">' + chg + '</td>' +
+                    '<td style="padding:6px;white-space:nowrap">' + chg + '</td>' +
                     '<td style="padding:6px;color:' + CONF_COL[r.conf.rating] + '">' + esc(r.conf.words) + '</td>' +
                     '<td style="padding:6px;text-align:right">' + (done ? '<span style="color:' + COL.ok + '">✓ applied</span>'
                         : r.same ? '' : '<button data-act="one" data-id="' + esc(r.id) + '" style="' + BTN + '">Apply</button>') + '</td></tr>';
@@ -939,13 +944,13 @@
         if (!box) return;
         let h = '';
         if (wiz.step === 'pick') {
-            h += '<div class="sl-step">Step 1 of 2</div><h3 class="sl-h">What are you calibrating?</h3>' +
+            h += '<div class="sl-step">Step 1 of 2</div><div class="sl-h">What are you calibrating?</div>' +
                 '<p class="sl-p">Pick one. Pick two to calibrate two players at once in split view.</p>' +
                 '<div class="sl-tiles">' + wiz.tiles.map(tileHtml).join('') + '</div>' +
                 '<div class="sl-actions"><button data-act="refresh">Refresh controllers</button>' +
                 '<button class="sl-main" data-act="next"' + (wiz.picks.length ? '' : ' disabled') + '>Next</button></div>';
         } else {
-            h += '<div class="sl-step">Step 2 of 2</div><h3 class="sl-h">Get ready</h3>' +
+            h += '<div class="sl-step">Step 2 of 2</div><div class="sl-h">Get ready</div>' +
                 '<p class="sl-p">One 64-second song in three parts. Use the headphones or speakers you normally play with, volume up.</p>' +
                 '<div class="sl-parts">' +
                 '<div class="sl-part"><div class="sl-part-n">1</div><b>Listen</b><span>The screen goes black. Close your eyes and play on every click.</span></div>' +
@@ -1141,6 +1146,14 @@
             if (id === 'plugin-sync_lab' || !id) { wireScreen(); refreshTiles(); } else stopLiveCheck();
         });
     }
+    // A run that never ended (reload / crash mid-song) left auto-calibrate off: put it back
+    // once Note Detection is up, unless a calibration has been applied (locked) since.
+    (function restoreNdAuto(tries) {
+        if (!lsGet(LS.ndRestore, false) || run) return;
+        if (!window.noteDetect) { if (tries < 60) setTimeout(() => restoreNdAuto(tries + 1), 500); return; }
+        if (!lsGet(LS.lock, null)) setNdAuto(true);
+        lsDel(LS.ndRestore);
+    })(0);
     loadPlan();
     setInterval(tick, 50);
     (function waitScreen() { if (document.getElementById('sync-lab-root')) wireScreen(); else setTimeout(waitScreen, 500); })();

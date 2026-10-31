@@ -1,7 +1,6 @@
 <!-- Calibrate screen (main menu → Calibrate; the Sync Lab plugin). screen.js renders the wizard and the settings list. Styles are inline (no Tailwind classes needed). -->
 <style>
-#sync-lab-root { max-width: 52rem; margin: 0 auto; padding: 6rem 1.5rem 4rem; color: #d1d5db; font-family: system-ui, sans-serif; }
-#sync-lab-root h2 { font-size: 1.875rem; font-weight: 700; color: #fff; margin: 0 0 .35rem; }
+#sync-lab-root { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; color: #d1d5db; font-family: system-ui, sans-serif; }
 #sync-lab-root .sl-lead { color: #9ca3af; font-size: .9rem; margin: 0 0 1.75rem; line-height: 1.5; }
 #sync-lab-root .sl-card { background: rgb(16 16 30 / .6); border: 1px solid #1f2937; border-radius: .9rem; padding: .25rem 1.25rem 1rem; margin-bottom: 1.25rem; }
 #sync-lab-root .sl-card > h3 { font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #60a0ff; margin: .9rem 0 .5rem; }
@@ -9,7 +8,7 @@
 #sync-lab-root .sl-h { font-size: 1.3rem; font-weight: 700; color: #fff; margin: .2rem 0 .2rem; }
 #sync-lab-root .sl-p { color: #9ca3af; font-size: .875rem; margin: 0 0 1rem; line-height: 1.45; }
 #sync-lab-root .sl-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: .6rem; }
-#sync-lab-root .sl-tile { position: relative; text-align: left; padding: .85rem .9rem; border-radius: .7rem; border: 1px solid #374151; background: #111827; color: #e5e7eb; cursor: pointer; }
+#sync-lab-root .sl-tile { position: relative; text-align: left; padding: .85rem 2.2rem .85rem .9rem; border-radius: .7rem; border: 1px solid #374151; background: #111827; color: #e5e7eb; cursor: pointer; }
 #sync-lab-root .sl-tile:hover:not([disabled]) { border-color: #60a0ff; }
 #sync-lab-root .sl-tile.on { border-color: #3b82f6; background: rgb(37 99 235 / .18); box-shadow: 0 0 0 1px #3b82f6 inset; }
 #sync-lab-root .sl-tile[disabled] { opacity: .45; cursor: not-allowed; }
@@ -46,7 +45,6 @@
 @media (max-width: 640px) { #sync-lab-root .sl-parts { grid-template-columns: 1fr; } }
 </style>
 <div id="sync-lab-root">
-    <h2>Calibrate</h2>
     <p class="sl-lead">Line up picture, sound and every instrument once, then just play. It plays a short test song
         through the normal game, measures how late each input registers and how far the picture and sound are apart,
         and suggests every offset for you.</p>
