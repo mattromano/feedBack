@@ -1569,3 +1569,76 @@ html.fb-immersive #v3-main > .screen.active {
     outline: 2px solid #38bdf8;
     outline-offset: 2px;
 }
+
+/* ── Plugins page: list view (static/v3/plugins-page.js) ──────────────────
+   The default Plugins view: a plain settings list, one row per plugin,
+   grouped by category, with an on/off switch. Palette mirrors the board CSS. */
+.v3-plist-views { display: inline-flex; border: 1px solid rgba(51, 65, 85, .6); border-radius: .5rem; overflow: hidden; }
+.v3-plist-view {
+    font: inherit; font-size: .8rem; font-weight: 600; padding: .35rem .8rem;
+    background: rgba(15, 23, 42, .6); color: #94a3b8; cursor: pointer; border: 0;
+}
+.v3-plist-view + .v3-plist-view { border-left: 1px solid rgba(51, 65, 85, .6); }
+.v3-plist-view:hover { color: #e2e8f0; }
+.v3-plist-view.is-active { background: #243150; color: #fff; }
+.v3-plist-search {
+    font: inherit; font-size: .85rem; width: 14rem; max-width: 60vw;
+    padding: .4rem .7rem; border-radius: .5rem; outline: none;
+    background: rgba(15, 23, 42, .7); color: #e2e8f0; border: 1px solid rgba(51, 65, 85, .6);
+}
+.v3-plist-search:focus { border-color: #0ea5e9; }
+.v3-plist-restart {
+    margin: -.75rem 0 1.25rem; padding: .55rem .8rem; border-radius: .5rem; font-size: .82rem;
+    background: rgba(14, 165, 233, .12); color: #bae6fd; border: 1px solid rgba(14, 165, 233, .35);
+}
+.v3-plist-restart.hidden { display: none; }
+.v3-plist-section { margin-bottom: 1.25rem; }
+.v3-plist-head {
+    display: flex; align-items: center; gap: .5rem; width: 100%; padding: .35rem .25rem; margin-bottom: .35rem;
+    font: inherit; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: #cbd5e1; background: none; border: 0; cursor: pointer; text-align: left;
+}
+.v3-plist-head:hover { color: #fff; }
+.v3-plist-section.collapsed .v3-board-chevron { transform: rotate(-90deg); }
+.v3-plist-section.collapsed .v3-plist-rows { display: none; }
+.v3-plist-rows {
+    border: 1px solid rgba(51, 65, 85, .55); border-radius: .75rem; overflow: hidden;
+    background: rgba(15, 23, 42, .55);
+}
+.v3-plist-row {
+    display: flex; align-items: center; gap: .9rem; padding: .7rem 1rem;
+    border-top: 1px solid rgba(51, 65, 85, .4);
+}
+.v3-plist-row:first-child { border-top: 0; }
+.v3-plist-row:hover { background: rgba(36, 49, 80, .35); }
+.v3-plist-thumb { width: 36px; height: 36px; flex: none; border-radius: .45rem; object-fit: cover; background: #1c2740; }
+.v3-plist-main { flex: 1; min-width: 0; }
+.v3-plist-name { font-weight: 600; color: #f1f5f9; font-size: .92rem; display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.v3-plist-desc { color: #94a3b8; font-size: .8rem; margin-top: .1rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.v3-plist-err { color: #fca5a5; font-size: .75rem; margin-top: .2rem; }
+.v3-plist-tag { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; background: rgba(51, 65, 85, .55); border-radius: 999px; padding: .05rem .4rem; }
+.v3-plist-row .v3-pedal-pill { position: static; }
+.v3-plist-off .v3-plist-thumb { filter: grayscale(1) brightness(.6); }
+.v3-plist-off .v3-plist-name, .v3-plist-off .v3-plist-desc { opacity: .5; }
+.v3-plist-ctl { display: flex; align-items: center; gap: .75rem; flex: none; }
+.v3-plist-open {
+    font: inherit; font-size: .78rem; font-weight: 600; padding: .3rem .7rem; border-radius: .45rem; cursor: pointer;
+    background: rgba(36, 49, 80, .7); color: #e2e8f0; border: 1px solid rgba(51, 65, 85, .7);
+}
+.v3-plist-open:hover { background: #2d3d63; color: #fff; }
+.v3-plist-switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: none; cursor: pointer; }
+.v3-plist-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.v3-plist-switch span {
+    position: absolute; inset: 0; border-radius: 999px; background: #334155; transition: background .15s ease; pointer-events: none;
+}
+.v3-plist-switch span::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: #e2e8f0; transition: transform .15s ease;
+}
+.v3-plist-switch input:checked + span { background: #22c55e; }
+.v3-plist-switch input:checked + span::after { transform: translateX(18px); }
+.v3-plist-switch input:focus-visible + span { outline: 2px solid #0ea5e9; outline-offset: 2px; }
+@media (max-width: 640px) {
+    .v3-plist-row { flex-wrap: wrap; }
+    .v3-plist-ctl { width: 100%; justify-content: flex-end; }
+}

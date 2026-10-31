@@ -2641,6 +2641,10 @@ function createHighway() {
                             for (const k of ['star_power', 'fills', 'solos']) {
                                 if (Array.isArray(msg[k])) hwState.drumTab[k] = msg[k];
                             }
+                            // Set when the server built this tab from a legacy
+                            // guitar-encoded drums arrangement; the drums
+                            // plugin then plays the tab over that arrangement.
+                            if (typeof msg.derived === 'string' && msg.derived) hwState.drumTab.derived = msg.derived;
                             if (msg.levels && typeof msg.levels === 'object' && !Array.isArray(msg.levels)) {
                                 const levels = {};
                                 for (const id of ['easy', 'medium', 'hard']) {

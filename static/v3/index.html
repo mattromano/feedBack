@@ -525,6 +525,22 @@
                             </select>
                         </div>
                     </div>
+                    <!-- Miss sound (static/js/miss-audio.js; per browser) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zM17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Miss sound</div>
+                            <div class="fb-srow-desc">Rock Band-style audio when you miss. Clunk: a short dull note. Clunk + dropout: your instrument's track also drops out of the song until your next hit. Band mode keeps its own.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="setting-miss-audio"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="off">Off</option>
+                                <option value="clunk">Clunk</option>
+                                <option value="dropout">Clunk + dropout</option>
+                            </select>
+                        </div>
+                    </div>
                     <!-- Countdown before song -->
                     <div class="fb-srow">
                         <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m-3 5a9 9 0 100-18 9 9 0 000 18z"/></svg></span>
@@ -1336,6 +1352,7 @@
     <script defer src="/static/v3/stats-recorder.js"></script>
     <script defer src="/static/v3/live-performance-hud.js"></script>
     <script defer src="/static/v3/scoreboard-pref.js"></script>
+    <script defer src="/static/js/miss-audio.js"></script>
     <script defer src="/static/v3/venue-viz.js"></script>
     <script defer src="/static/v3/venue-instrument-pov.js"></script>
     <!-- venue-mood-fx must load before venue-scene-3d: the scene bridge reads

@@ -348,6 +348,138 @@ def levels_to_wire(levels: object) -> dict[str, dict]:
     return out
 
 
+# ── Legacy guitar-encoded drums arrangements ──────────────────────────────────
+#
+# Packs joined by the old (0.2.x) drumjoin carry their drums as a fretted
+# arrangement — each hit packed as a note with GM number `s * 24 + f` — plus a
+# `drums` block holding the chart metadata the new drum_tab keeps at top level:
+#   {"version": 1, "star_power": [[a, b], ...], "fills": [...], "solos": [...],
+#    "levels": {"easy": [[t, gm, flag], ...], ...}, "levels_generated": [...]}
+# where `flag` is 1 accent / 2 ghost. Rather than rewrite those packs, the
+# loader turns them into an in-memory drum_tab so they get star power, fills
+# and their hand-charted lower levels like any feedpak 1.20.0 pack.
+
+LEGACY_DERIVED = "legacy_arrangement"
+
+GM_KICK2X = 35
+
+# GM notes the old joiner mapped to a pad but PIECES doesn't name.
+_LEGACY_GM_ALIASES = {39: "snare", 58: "tom_low"}
+
+
+def _legacy_piece(gm: int) -> str | None:
+    return midi_to_piece(gm) or _LEGACY_GM_ALIASES.get(gm)
+
+
+def _legacy_ranges(ranges: object) -> list[dict]:
+    out: list[dict] = []
+    if not isinstance(ranges, list):
+        return out
+    for r in ranges:
+        if isinstance(r, dict):
+            out.append(r)
+        elif isinstance(r, (list, tuple)) and len(r) >= 2:
+            out.append({"start_time": r[0], "end_time": r[1]})
+    return out
+
+
+def _legacy_hit(t: object, gm: int, *, accent: bool, ghost: bool, top: bool) -> dict | None:
+    t = _finite(t)
+    p = _legacy_piece(gm)
+    if t is None or p is None:
+        return None
+    hit: dict = {"t": round(t, 3), "p": p}
+    if ghost:
+        hit["g"] = True
+    elif accent:
+        hit["a"] = True
+    if top and gm == GM_KICK2X:
+        hit["x2"] = True
+    return hit
+
+
+def _dedupe_hits(hits: list[dict]) -> list[dict]:
+    seen: set[tuple[float, str]] = set()
+    out: list[dict] = []
+    for h in sorted(hits, key=lambda h: (h["t"], h["p"])):
+        key = (h["t"], h["p"])
+        if key not in seen:
+            seen.add(key)
+            out.append(h)
+    return out
+
+
+def tab_from_legacy_arrangement(data: object) -> dict | None:
+    """Build a drum_tab from a legacy guitar-encoded drums arrangement.
+
+    Returns None unless `data` carries a version-1 `drums` block and at least
+    one hit maps to a known piece. Unmapped GM notes are dropped, like any
+    unknown note in an imported chart.
+    """
+    if not isinstance(data, dict):
+        return None
+    block = data.get("drums")
+    if not isinstance(block, dict) or block.get("version") != 1:
+        return None
+
+    notes: list = list(data.get("notes") or [])
+    for ch in data.get("chords") or []:
+        if isinstance(ch, dict):
+            notes.extend(ch.get("notes") or [])
+    hits: list[dict] = []
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        try:
+            gm = int(n.get("s", 0)) * 24 + int(n.get("f", 0))
+        except (TypeError, ValueError):
+            continue
+        h = _legacy_hit(n.get("t"), gm, accent=bool(n.get("ac")), ghost=bool(n.get("mt")), top=True)
+        if h is not None:
+            hits.append(h)
+    hits = _dedupe_hits(hits)
+    if not hits:
+        return None
+
+    tab: dict = {
+        "version": SCHEMA_VERSION,
+        "name": "Drums",
+        "kit": [{"id": p} for p in dict.fromkeys(h["p"] for h in hits)],
+        "hits": hits,
+    }
+    for key in RANGE_KEYS:
+        ranges = _legacy_ranges(block.get(key))
+        if ranges:
+            tab[key] = ranges
+
+    generated = block.get("levels_generated")
+    generated = set(generated) if isinstance(generated, list) else set()
+    levels: dict = {}
+    raw_levels = block.get("levels")
+    for lid in LEVEL_IDS:
+        rows = raw_levels.get(lid) if isinstance(raw_levels, dict) else None
+        if not isinstance(rows, list):
+            continue
+        lv_hits: list[dict] = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            try:
+                gm = int(row[1])
+            except (TypeError, ValueError):
+                continue
+            flag = row[2] if len(row) > 2 else 0
+            h = _legacy_hit(row[0], gm, accent=flag == 1, ghost=flag == 2, top=False)
+            if h is not None:
+                lv_hits.append(h)
+        lv_hits = _dedupe_hits(lv_hits)
+        if lv_hits:
+            levels[lid] = {"hits": lv_hits, "generated": lid in generated}
+    if levels:
+        tab["levels"] = levels
+    return tab
+
+
 def normalise_kit(kit: list | None) -> list[dict]:
     """Normalise the `kit[]` legend: each entry becomes `{"id": str, "name":
     str}`. Unknown piece-ids are kept (forward-compat) with a title-cased

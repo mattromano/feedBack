@@ -724,6 +724,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             _wire_part_id = _drum_part_id_for_wire(loaded_slop.drum_parts, _dt_part_id)
             if _wire_part_id is not None:
                 _dt_msg["part_id"] = _wire_part_id
+            # Tells the drums plugin this tab was built from a legacy
+            # guitar-encoded drums arrangement, so it plays the tab (with its
+            # star power and levels) instead of decoding the arrangement notes.
+            if loaded_slop.drum_tab_derived:
+                _dt_msg["derived"] = loaded_slop.drum_tab_derived
             # Drum gameplay metadata (feedpak 1.20.0). The range lists are
             # small and ride on the `drum_tab` frame itself; each key is sent
             # only when the tab has entries, so a pre-1.20.0 tab keeps its

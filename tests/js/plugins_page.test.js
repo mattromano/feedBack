@@ -152,3 +152,39 @@ test('DRAG_THRESHOLD is a small positive pixel budget', () => {
     assert.equal(typeof t.DRAG_THRESHOLD, 'number');
     assert.ok(t.DRAG_THRESHOLD > 0 && t.DRAG_THRESHOLD < 20);
 });
+
+test('list view is the default; the pedalboard choice is remembered', () => {
+    const { t, store } = loadPage();
+    assert.equal(t.loadView(), 'list');
+    t.saveView('pedals');
+    assert.equal(store[t.VIEW_KEY], 'pedals');
+    assert.equal(t.loadView(), 'pedals');
+    t.saveView('nonsense');
+    assert.equal(t.loadView(), 'list');
+});
+
+test('rowHtml: name, description, Open button, switch reflecting enabled, escaped', () => {
+    const { t } = loadPage();
+    const on = t.rowHtml({ id: 'drums', name: 'Drum Highway', description: 'Drums <b>3D</b>', has_screen: true });
+    assert.ok(on.includes('data-switch="drums" checked'));
+    assert.ok(on.includes('>Open</button>'));
+    assert.ok(on.includes('Drums &lt;b&gt;3D&lt;/b&gt;'), 'description is escaped');
+    assert.ok(!on.includes('v3-plist-off'));
+    const off = t.rowHtml({ id: 'flappy_bend', name: 'Flappy Bend', enabled: false, has_settings: true });
+    assert.ok(off.includes('v3-plist-off'));
+    assert.ok(!off.includes('checked'));
+    assert.ok(!off.includes('data-open'), 'a plugin that is off has nothing to open');
+    assert.ok(t.rowHtml({ id: 'tuner', name: 'Tuner', has_settings: true }).includes('>Settings</button>'));
+    const bare = t.rowHtml({ id: 'x', name: 'X' });
+    assert.ok(!bare.includes('data-open'), 'nothing to open: no button');
+});
+
+test('listSectionHtml: rows sorted by name and an on / total count', () => {
+    const { t } = loadPage();
+    const html = t.listSectionHtml('game', [
+        { id: 'b', name: 'Zed' }, { id: 'a', name: 'alpha', enabled: false }, { id: 'c', name: 'Mid' },
+    ], false);
+    assert.ok(html.includes('2 / 3 on'));
+    assert.ok(html.indexOf('alpha') < html.indexOf('Mid') && html.indexOf('Mid') < html.indexOf('Zed'));
+    assert.equal(t.searchText({ id: 'note_detect', name: 'Note Detection', description: 'Pitch' }), 'note detection note_detect pitch');
+});
