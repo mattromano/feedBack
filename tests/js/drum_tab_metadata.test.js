@@ -95,3 +95,11 @@ test('a new drum_tab frame resets the previous song\'s metadata', () => {
     assert.equal(dt.star_power, undefined);
     assert.equal(dt.levels, undefined);
 });
+
+test('drum_tab keeps the derived flag of a tab built from a legacy arrangement', () => {
+    const ctx = makeDispatcher();
+    ctx.feed({ type: 'drum_tab', version: 1, name: 'Drums', kit: [], total: 0, derived: 'legacy_arrangement' });
+    assert.equal(ctx.hwState.drumTab.derived, 'legacy_arrangement');
+    ctx.feed({ type: 'drum_tab', version: 1, name: 'Drums', kit: [], total: 0, derived: 7 });
+    assert.equal(ctx.hwState.drumTab.derived, undefined);
+});

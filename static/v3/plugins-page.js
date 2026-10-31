@@ -297,7 +297,11 @@
     // (the desired enabled state) + an optimistic class; one request is in flight
     // at a time, and if the user's intent changed while it ran we resend, so the
     // final state always matches the latest click (no stale-response overwrite).
-    function flushFoot(pedal, id) {
+    // `pedal` is a pedal or a list row; showOff(el, off) paints its on/off look
+    // (default: the pedal's dimmed class).
+    function showPedalOff(el, off) { el.classList.toggle('v3-pedal-off', off); }
+    function flushFoot(pedal, id, showOff) {
+        var paint = showOff || showPedalOff;
         pedal._pending = true;
         var sending = pedal._want;
         fetch('/api/plugins/' + encodeURIComponent(id) + '/enabled', {
@@ -306,8 +310,8 @@
         }).then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
           .then(function (res) {
               if (pedal._plugin) pedal._plugin.enabled = res.enabled;   // last known server state
-              if (pedal._want !== res.enabled) { flushFoot(pedal, id); return; }   // intent changed → resend
-              pedal.classList.toggle('v3-pedal-off', res.enabled === false);
+              if (pedal._want !== res.enabled) { flushFoot(pedal, id, showOff); return; }   // intent changed → resend
+              paint(pedal, res.enabled === false);
               pedal._pending = false;
           })
           .catch(function () {
@@ -315,9 +319,108 @@
               // revert optimistic UI to the last known-good server state
               var known = pedal._plugin ? pedal._plugin.enabled !== false : true;
               pedal._want = known;
-              pedal.classList.toggle('v3-pedal-off', !known);
+              paint(pedal, !known);
               toast('Could not toggle this plugin.');
           });
+    }
+
+    // ---- list view ----------------------------------------------------------
+    // A plain settings list: one row per plugin (icon, name, description, Open,
+    // on/off switch), grouped by category, with a search box. The default view;
+    // the pedalboard stays one click away (persisted per browser).
+
+    var VIEW_KEY = 'v3.plugins.view';
+    function loadView() {
+        try { return window.localStorage.getItem(VIEW_KEY) === 'pedals' ? 'pedals' : 'list'; } catch (e) { return 'list'; }
+    }
+    function saveView(v) { try { window.localStorage.setItem(VIEW_KEY, v === 'pedals' ? 'pedals' : 'list'); } catch (e) { /* */ } }
+
+    function byName(a, b) {
+        return String(a.name || a.id).toLowerCase().localeCompare(String(b.name || b.id).toLowerCase());
+    }
+
+    // Lowercased text a search matches against (name, id, description).
+    function searchText(p) {
+        return [p.name, p.id, p.description].filter(Boolean).join(' ').toLowerCase();
+    }
+
+    function rowHtml(p) {
+        var off = p.enabled === false;
+        var kind = settingsTarget(p).kind;
+        // A plugin that's off has no screen or settings to open until it's back on.
+        var open = kind === 'none' || off ? '' :
+            '<button type="button" class="v3-plist-open" data-open="' + esc(p.id) + '">' + (kind === 'screen' ? 'Open' : 'Settings') + '</button>';
+        return '<div class="v3-plist-row' + (off ? ' v3-plist-off' : '') + '" data-id="' + esc(p.id) + '" data-search="' + esc(searchText(p)) + '">' +
+            '<img class="v3-plist-thumb" alt="" loading="lazy" src="' + esc(thumbUrl(p)) + '">' +
+            '<div class="v3-plist-main">' +
+            '<div class="v3-plist-name">' + esc(p.name || p.id) +
+            (p.bundled ? ' <span class="v3-plist-tag">core</span>' : '') + statusPill(p) + '</div>' +
+            (p.description ? '<div class="v3-plist-desc">' + esc(p.description) + '</div>' : '') +
+            (p.status === 'failed' && p.error ? '<div class="v3-plist-err">' + esc(p.error) + '</div>' : '') +
+            '</div>' +
+            '<div class="v3-plist-ctl">' + open +
+            '<label class="v3-plist-switch" title="Turn this plugin on/off">' +
+            '<input type="checkbox" role="switch" data-switch="' + esc(p.id) + '"' + (off ? '' : ' checked') +
+            ' aria-label="' + esc((p.name || p.id) + ' on') + '"><span aria-hidden="true"></span></label>' +
+            '</div></div>';
+    }
+
+    function listSectionHtml(cat, list, collapsed) {
+        var ec = esc(cat);
+        var on = list.filter(function (p) { return p.enabled !== false; }).length;
+        return '<section class="v3-plist-section' + (collapsed ? ' collapsed' : '') + '" data-category="' + ec + '">' +
+            '<button type="button" class="v3-plist-head" data-toggle="' + ec + '" aria-expanded="' + (!collapsed) + '">' +
+            '<svg class="v3-board-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>' +
+            '<span>' + esc(BOARD_LABEL[cat] || cat) + '</span>' +
+            '<span class="v3-board-count">' + on + ' / ' + list.length + ' on</span></button>' +
+            '<div class="v3-plist-rows">' + list.slice().sort(byName).map(rowHtml).join('') + '</div></section>';
+    }
+
+    function showRowOff(row, off) {
+        row.classList.toggle('v3-plist-off', off);
+        var sw = row.querySelector('[data-switch]');
+        if (sw) sw.checked = !off;
+    }
+
+    // Hide rows that don't match `q` and sections left empty.
+    function applySearch(root, q) {
+        q = String(q || '').trim().toLowerCase();
+        root.querySelectorAll('.v3-plist-section').forEach(function (sec) {
+            var shown = 0;
+            sec.querySelectorAll('.v3-plist-row').forEach(function (row) {
+                var hit = !q || (row.getAttribute('data-search') || '').indexOf(q) !== -1;
+                row.style.display = hit ? '' : 'none';
+                if (hit) shown++;
+            });
+            sec.style.display = shown ? '' : 'none';
+            if (q) sec.classList.remove('collapsed');
+        });
+    }
+
+    function wireList(root, byId) {
+        root.querySelectorAll('.v3-plist-row').forEach(function (row) {
+            row._plugin = byId[row.getAttribute('data-id')];
+        });
+        root.querySelectorAll('[data-open]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var p = byId[btn.getAttribute('data-open')];
+                if (p) openPluginSettings(p);
+            });
+        });
+        root.querySelectorAll('[data-switch]').forEach(function (sw) {
+            sw.addEventListener('change', function () {
+                var row = sw.closest('.v3-plist-row');
+                if (!row) return;
+                row._want = sw.checked;
+                row.classList.toggle('v3-plist-off', !sw.checked);   // optimistic
+                if (!row._pending) flushFoot(row, sw.getAttribute('data-switch'), showRowOff);
+                var note = root.querySelector('#v3-plist-restart');
+                if (note) note.classList.remove('hidden');
+            });
+        });
+        var search = root.querySelector('#v3-plist-search');
+        if (search) search.addEventListener('input', function () { applySearch(root, search.value); });
     }
 
     // Position every pedal on a board from saved layout (clamped) or default
@@ -445,24 +548,54 @@
         Object.keys(byCat).forEach(function (c) { if (cats.indexOf(c) === -1) cats.push(c); });
 
         var collapsed = loadCollapsed();
-        var boardsHtml = cats.map(function (c) { return boardHtml(c, byCat[c], !!collapsed[c]); }).join('');
+        var view = loadView();
+        var on = plugins.filter(function (p) { return p.enabled !== false; }).length;
+        var btn = 'text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 px-3 py-1.5 rounded-md';
+        var viewBtn = function (v, label) {
+            return '<button type="button" class="v3-plist-view' + (view === v ? ' is-active' : '') + '" data-view="' + v + '" aria-pressed="' + (view === v) + '">' + label + '</button>';
+        };
+        var bodyHtml = view === 'list'
+            ? cats.map(function (c) { return listSectionHtml(c, byCat[c], !!collapsed[c]); }).join('')
+            : cats.map(function (c) { return boardHtml(c, byCat[c], !!collapsed[c]); }).join('');
 
         root.innerHTML =
             '<div class="v3-pedalboards-wrap px-6 md:px-8 pb-10">' +
             '<div class="flex items-center justify-between gap-3 mb-6 flex-wrap">' +
-            '<span class="text-lg font-medium text-fb-good">' + active + ' active</span>' +
-            '<div class="flex items-center gap-2">' +
-            '<button id="v3-pedal-reset" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-textDim hover:text-fb-text px-3 py-1.5 rounded-md" title="Reset pedal positions and re-roll skins">Reset</button>' +
+            '<span class="text-lg font-medium text-fb-good">' + (view === 'list'
+                ? on + ' on <span class="text-fb-textDim text-sm font-normal">· ' + (plugins.length - on) + ' off</span>'
+                : active + ' active') + '</span>' +
+            '<div class="flex items-center gap-2 flex-wrap">' +
+            (view === 'list' ? '<input id="v3-plist-search" type="search" placeholder="Search plugins" aria-label="Search plugins" class="v3-plist-search">' : '') +
+            '<div class="v3-plist-views" role="group" aria-label="Plugins view">' + viewBtn('list', 'List') + viewBtn('pedals', 'Pedalboard') + '</div>' +
+            (view === 'pedals' ? '<button id="v3-pedal-reset" class="' + btn + ' text-fb-textDim hover:text-fb-text" title="Reset pedal positions and re-roll skins">Reset</button>' : '') +
             (inspectorPresent
-                ? '<button id="v3-open-inspector" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1.5 rounded-md">Capability Inspector →</button>'
+                ? '<button id="v3-open-inspector" class="' + btn + ' text-fb-text">Capability Inspector →</button>'
                 : '') +
             '</div></div>' +
-            (boardsHtml || '<p class="text-fb-textDim text-sm">No plugins installed.</p>') +
+            (view === 'list' ? '<div id="v3-plist-restart" class="v3-plist-restart hidden">Plugins you turn off stop loading the next time you start feedBack; ones you turn on load then too.</div>' : '') +
+            (bodyHtml || '<p class="text-fb-textDim text-sm">No plugins installed.</p>') +
             '</div>';
 
-        // Bind plugin objects to pedal elements + lay them out + wire drag.
         var byId = Object.create(null);
         plugins.forEach(function (p) { byId[p.id] = p; });
+        root.querySelectorAll('[data-view]').forEach(function (b) {
+            b.addEventListener('click', function () {
+                var v = b.getAttribute('data-view');
+                if (v === loadView()) return;
+                saveView(v);
+                render();
+            });
+        });
+        if (view === 'list') {
+            if (window.v3PedalCables) window.v3PedalCables.destroy();
+            wireList(root, byId);
+            wireCollapse(root);
+            var insp0 = root.querySelector('#v3-open-inspector');
+            if (insp0) insp0.addEventListener('click', openInspector);
+            return;
+        }
+
+        // Bind plugin objects to pedal elements + lay them out + wire drag.
         var layout = loadLayout();
         root.querySelectorAll('.v3-pedalboard').forEach(function (boardEl) {
             var cat = boardEl.getAttribute('data-category');
@@ -488,28 +621,7 @@
             window.v3PedalCables.markActive(root.classList.contains('active'));
         }
 
-        // Collapsible boards: toggle on title click, persist per category.
-        root.querySelectorAll('[data-toggle]').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var cat = btn.getAttribute('data-toggle');
-                var sec = btn.closest('.v3-board-section');
-                if (!sec) return;
-                var nowCollapsed = !sec.classList.contains('collapsed');
-                sec.classList.toggle('collapsed', nowCollapsed);
-                btn.setAttribute('aria-expanded', String(!nowCollapsed));
-                var c = loadCollapsed();
-                if (nowCollapsed) c[cat] = true; else delete c[cat];
-                saveCollapsed(c);
-                // While collapsed the board is display:none, so its pedals were
-                // laid out against a 0-width board. Re-flow on expand now that it
-                // has a real width.
-                if (!nowCollapsed) {
-                    var board = sec.querySelector('.v3-pedalboard');
-                    if (board) layoutBoard(board, cat, loadLayout());
-                }
-                if (window.v3PedalCables) window.v3PedalCables.refresh();
-            });
-        });
+        wireCollapse(root);
 
         // Footswitch → enable/disable the plugin (POST /api/plugins/<id>/enabled).
         // stopPropagation so it neither starts a drag nor opens settings.
@@ -536,10 +648,36 @@
             render();
         });
         var insp = root.querySelector('#v3-open-inspector');
-        if (insp) insp.addEventListener('click', function () {
-            if (window.showScreen && document.getElementById('plugin-capability_inspector')) {
-                window.showScreen('plugin-capability_inspector');
-            }
+        if (insp) insp.addEventListener('click', openInspector);
+    }
+
+    function openInspector() {
+        if (window.showScreen && document.getElementById('plugin-capability_inspector')) {
+            window.showScreen('plugin-capability_inspector');
+        }
+    }
+
+    // Collapsible boards / list sections: toggle on title click, persist per
+    // category (one map for both views).
+    function wireCollapse(root) {
+        root.querySelectorAll('[data-toggle]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var cat = btn.getAttribute('data-toggle');
+                var sec = btn.closest('.v3-board-section, .v3-plist-section');
+                if (!sec) return;
+                var nowCollapsed = !sec.classList.contains('collapsed');
+                sec.classList.toggle('collapsed', nowCollapsed);
+                btn.setAttribute('aria-expanded', String(!nowCollapsed));
+                var c = loadCollapsed();
+                if (nowCollapsed) c[cat] = true; else delete c[cat];
+                saveCollapsed(c);
+                // While collapsed the board is display:none, so its pedals were
+                // laid out against a 0-width board. Re-flow on expand now that it
+                // has a real width.
+                var board = !nowCollapsed && sec.querySelector('.v3-pedalboard');
+                if (board) layoutBoard(board, cat, loadLayout());
+                if (window.v3PedalCables) window.v3PedalCables.refresh();
+            });
         });
     }
 
@@ -554,6 +692,8 @@
             loadCollapsed: loadCollapsed, saveCollapsed: saveCollapsed, COLLAPSE_KEY: COLLAPSE_KEY,
             DRAG_THRESHOLD: DRAG_THRESHOLD, LS_KEY: LS_KEY, CURATED: CURATED,
             BOARD_ORDER: BOARD_ORDER, PEDAL_FRAMES: PEDAL_FRAMES, FRAMES_KEY: FRAMES_KEY,
+            loadView: loadView, saveView: saveView, VIEW_KEY: VIEW_KEY,
+            rowHtml: rowHtml, listSectionHtml: listSectionHtml, searchText: searchText,
         },
     };
     if (sm && typeof sm.on === 'function') {

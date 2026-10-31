@@ -718,6 +718,12 @@ class LoadedSloppak:
     # parse). The drums plugin reads this through the highway WS rather than
     # the file directly — see server.py highway_ws for the wire shape.
     drum_tab: dict | None = None
+    # Set when `drum_tab` wasn't read from the pack but derived from something
+    # else in it — `drums.LEGACY_DERIVED` for a legacy guitar-encoded drums
+    # arrangement's `drums` block. Streamed as the `drum_tab` frame's
+    # `derived` key so the drums plugin knows the tab, not the arrangement's
+    # notes, is the chart to play.
+    drum_tab_derived: str | None = None
     # Parsed `song_timeline.json` payload when the manifest carries a
     # `song_timeline:` key pointing at a readable, schema-valid file.
     # When present, its beats/sections take priority over any beats/sections
@@ -1050,6 +1056,7 @@ def load_song(
     arrangement_ids_acc: list[str | None] = []  # parallel to song.arrangements
     drum_pointer_entries: list[dict] = []  # feedpak 1.17.0 drum-part pointers
     five_fret_entries: list[dict] = []  # `type: five_fret` part pointers
+    legacy_drum_tab: dict | None = None  # from an old guitar-encoded drums arrangement
     for entry in manifest.get("arrangements", []) or []:
         if not isinstance(entry, dict):
             log.warning("sloppak: non-dict arrangement entry skipped (%r)", type(entry).__name__)
@@ -1100,6 +1107,8 @@ def load_song(
                 log.debug("sloppak: failed to parse arrangement %r: %s", rel, e)
                 continue
             arr = arrangement_from_wire(data)
+            if legacy_drum_tab is None:
+                legacy_drum_tab = drums_mod.tab_from_legacy_arrangement(data)
         else:
             arr = arrangement_from_wire({
                 "notes": [], "chords": [], "anchors": [],
@@ -1213,6 +1222,13 @@ def load_song(
         source_dir, drum_tab_rel, drum_tab_data, drum_pointer_entries,
         drum_tones_data,
     )
+    # A legacy drums arrangement stands in only when the pack has no real
+    # drum tab or drum parts. It stays a plain fretted arrangement (indices
+    # and the editor are untouched) and gets no drum_parts entry.
+    drum_tab_derived: str | None = None
+    if drum_tab_data is None and not drum_parts and legacy_drum_tab is not None:
+        drum_tab_data = legacy_drum_tab
+        drum_tab_derived = drums_mod.LEGACY_DERIVED
 
     # Five-fret parts: load each pointed-at side file with the same permissive
     # posture as drum parts — a bad entry disables that part only.
@@ -1571,6 +1587,7 @@ def load_song(
         manifest=manifest,
         feedpak_version=_fpv if isinstance(_fpv, str) and _fpv else None,
         drum_tab=drum_tab_data,
+        drum_tab_derived=drum_tab_derived,
         drum_parts=drum_parts,
         five_fret_parts=five_fret_parts,
         song_timeline=song_timeline_data,

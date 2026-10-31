@@ -68,6 +68,9 @@
         { navKey: 'audio_engine', pluginId: 'audio_engine', slotId: 'v3-nav-audio-engine', anchorAfter: 'settings' },
         { navKey: 'rockherosmith', pluginId: 'rockherosmith', slotId: 'v3-nav-rockherosmith', anchorAfter: 'home' },
     ];
+    // Built-in nav entries that are a front end for one plugin: hidden (by
+    // renderPromotedNav) while that plugin is missing or turned off.
+    const PLUGIN_BACKED_NAV = { feedbarcade: 'minigames', lessons: 'tutorials' };
     const TOPBAR_KEYS = ['home', 'songs', 'plugins', 'settings'];
     const SIDEBAR_GROUPS = ['HOME', 'LIBRARY'];
 
@@ -313,13 +316,20 @@
             const entry = byKey(promo.navKey);
             if (!host || !entry) continue;
             const plugin = list.find((p) => p && p.id === promo.pluginId);
-            if (!plugin) continue; // not installed → empty slot
+            // Not installed, or turned off on the Plugins page → empty slot.
+            if (!plugin || plugin.enabled === false) { host.innerHTML = ''; continue; }
             // Use the plugin's own nav label (manifest), falling back to the
             // static NAV label. navItemHTML escapes it.
             const label = (plugin.nav && plugin.nav.label) || plugin.name || entry.label;
             host.innerHTML = '<div class="space-y-0.5">' + navItemHTML(entry, label) + '</div>';
             const a = host.querySelector('a[data-v3-nav]');
             if (a) a.addEventListener('click', (e) => { e.preventDefault(); go(entry.screen); });
+        }
+        // Built-in hubs that front a plugin hide when that plugin is missing or off.
+        for (const key of Object.keys(PLUGIN_BACKED_NAV)) {
+            const plugin = list.find((p) => p && p.id === PLUGIN_BACKED_NAV[key]);
+            const show = !!plugin && plugin.enabled !== false;
+            document.querySelectorAll('a[data-v3-nav="' + key + '"]').forEach((a) => { a.style.display = show ? '' : 'none'; });
         }
     }
 
