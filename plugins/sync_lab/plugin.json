@@ -1,15 +1,20 @@
 {
   "id": "sync_lab",
   "name": "_Sync Lab",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "private": true,
-  "nav": { "label": "Sync", "screen": "plugin-sync_lab" },
+  "nav": {
+    "label": "Calibrate",
+    "screen": "plugin-sync_lab"
+  },
   "screen": "screen.html",
   "script": "screen.js",
   "routes": "routes.py",
   "category": "tools",
-  "description": "Measured calibration of A/V offset, guitar latency and drum input offset (single player and split view).",
+  "description": "Calibrate: one guided test that measures and sets the A/V offset and every instrument's input offset (guitar, bass, drum kit, drum controllers, 5-Fret controllers), then locks them.",
   "diagnostics": {
-    "server_files": ["sync_lab/sync_log.jsonl"]
+    "server_files": [
+      "sync_lab/sync_log.jsonl"
+    ]
   }
 }

@@ -53,6 +53,7 @@
         { key: 'editor',      screen: 'plugin-editor',      label: 'Song Editor', group: null,      icon: 'edit' },
         { key: 'audio_engine', screen: 'plugin-audio_engine', label: 'Audio', group: null,        icon: 'amp' },
         { key: 'rockherosmith', screen: 'plugin-rockherosmith', label: 'RockHeroSmith', group: null, icon: 'bolt' },
+        { key: 'calibrate',   screen: 'plugin-sync_lab',    label: 'Calibrate',   group: null,      icon: 'sync' },
         // Not in the sidebar groups, but routable (profile badge → here).
         { key: 'profile',   screen: 'v3-profile',   label: 'Profile',         group: null,      icon: 'user' },
     ];
@@ -65,6 +66,7 @@
         { navKey: 'career',      pluginId: 'career',      slotId: 'v3-nav-career',      anchorAfter: 'feedbarcade' },
         { navKey: 'rig_builder', pluginId: 'rig_builder', slotId: 'v3-nav-rig-builder', anchorAfter: 'saved' },
         { navKey: 'editor',      pluginId: 'editor',      slotId: 'v3-nav-editor',     anchorAfter: 'songs' },
+        { navKey: 'calibrate',   pluginId: 'sync_lab',    slotId: 'v3-nav-calibrate',   anchorAfter: 'settings' },
         { navKey: 'audio_engine', pluginId: 'audio_engine', slotId: 'v3-nav-audio-engine', anchorAfter: 'settings' },
         { navKey: 'rockherosmith', pluginId: 'rockherosmith', slotId: 'v3-nav-rockherosmith', anchorAfter: 'home' },
     ];
@@ -91,6 +93,7 @@
         amp: 'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm11 4a3 3 0 100 6 3 3 0 000-6zM6.5 8.5h.01M9 8.5h.01',
         target: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 4a5 5 0 100 10 5 5 0 000-10zm0 4a1 1 0 100 2 1 1 0 000-2z',
         bolt: 'M13 2L4 14h7l-1 8 9-12h-7l1-8z',
+        sync: 'M12 8v5l3 2M9 2h6M12 4a9 9 0 100 18 9 9 0 000-18z',
         edit: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z',
     };
     function iconSvg(name) {

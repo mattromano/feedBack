@@ -5,7 +5,7 @@ library as <dlc>/sloppak/_Sync_Calibration_v<N>.sloppak (or the DLC root when
 there's no sloppak folder), so it goes through exactly the same clock,
 highway, Note Detection and drum engine as any song, in single player and
 split view. 100 BPM, one note per beat (open A string on Lead and Bass, snare
-on Drums), three sections:
+on Drums, an open strum on the 5-fret guitar part), three sections:
 
   listen  clicks + notes, screen blanked by screen.js: play by ear
   watch   notes, no clicks: play by eye
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from fastapi import Request
 
-VERSION = 3
+VERSION = 4
 NAME = f"_Sync_Calibration_v{VERSION}.sloppak"
 TITLE = "Sync Calibration"
 ARTIST = "feedBack Sync Lab"
@@ -48,6 +48,8 @@ PLAN = [
 END_BEAT = 103
 DURATION = round(T0 + END_BEAT * BEAT, 3)
 ARRANGEMENTS = [("lead", "Lead"), ("bass", "Bass"), ("drums", "Drums")]
+FIVE_FRET_ID = "ff_guitar"
+FIVE_FRET_FILE = "five_fret_guitar.json"
 
 MAX_LOG_BYTES = 2 * 1024 * 1024
 _log_lock = threading.Lock()
@@ -74,6 +76,8 @@ def plan(file=None):
         # Screen blanked from the first count-in click to the end of listen.
         "blank": [_bt(0) - 0.3, _bt(36) - 0.15],
         "arrangements": [n for _i, n in ARRANGEMENTS],
+        "five_fret_parts": [FIVE_FRET_ID],
+        "beats_per_section": {name: b - a for name, a, b, _c in PLAN if name != "count"},
         "file": file or "sloppak/" + NAME,
     }
 
@@ -156,6 +160,18 @@ def _drums_arr():
     }
 
 
+def _five_fret_part():
+    # Open notes (f = 0): a pure strum on a plastic guitar, the most precise
+    # input. Every level carries the same notes so any difficulty measures.
+    notes = [{"t": t, "f": 0} for t in note_times()]
+    return {
+        "version": 1, "name": "Guitar (5-fret)", "instrument": "guitar",
+        "source": {"kind": "chart", "origin": "local"},
+        "notes": notes,
+        "levels": {lv: {"notes": list(notes)} for lv in ("easy", "medium", "hard")},
+    }
+
+
 def _manifest():
     lines = [
         f"title: {TITLE}",
@@ -172,6 +188,8 @@ def _manifest():
     for aid, name in ARRANGEMENTS:
         lines += [f"- id: {aid}", f"  name: {name}", f"  file: arrangements/{aid}.json",
                   "  tuning: [0, 0, 0, 0, 0, 0]", "  capo: 0"]
+    lines += [f"- id: {FIVE_FRET_ID}", "  type: five_fret", "  name: Guitar (5-fret)",
+              "  instrument: guitar", f"  five_fret: {FIVE_FRET_FILE}"]
     return "\n".join(lines) + "\n"
 
 
@@ -182,6 +200,7 @@ def build(dest: Path):
         for aid, name in ARRANGEMENTS:
             arr = _drums_arr() if aid == "drums" else _guitar_arr(name)
             z.writestr(f"arrangements/{aid}.json", json.dumps(arr))
+        z.writestr(FIVE_FRET_FILE, json.dumps(_five_fret_part()))
         z.writestr("stems/click.wav", click_track())
     tmp.replace(dest)
 

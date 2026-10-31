@@ -41,7 +41,8 @@ function build() {
         highwayMs: null,
         console: { info() {}, log() {}, warn() {} },
         document: { getElementById: () => null, activeElement: null },
-        window: {},
+        emitted: [],
+        window: { feedBack: { emit(name, detail) { sandbox.emitted.push({ name, detail }); } } },
     };
     vm.createContext(sandbox);
     vm.runInContext(`
@@ -52,7 +53,9 @@ function build() {
         function _persistAvOffset() { globalThis.persisted++; }
         ${setsLine[0]}
         ${extractFunction(src, 'export function setAvOffsetMs(').replace(/^export /, '')}
+        ${extractFunction(src, 'export function isAvOffsetLocked(').replace(/^export /, '')}
         globalThis.set = setAvOffsetMs;
+        globalThis.locked = isAvOffsetLocked;
         globalThis.state = () => ({ ms: _avOffsetMs, manual: _avUserOverride });
         globalThis.seedManual = (v) => { _avUserOverride = v; };
     `, sandbox);
@@ -115,4 +118,18 @@ test('Sync Lab tags its A/V writes (Apply = manual, auto-follow = follow)', () =
     assert.match(src, /window\.setAvOffsetMs\(v, false, source\)/);
     assert.match(src, /function applyAv\(v\) \{ setAv\(v, 'manual'\);/);
     assert.match(src, /setAv\(want, 'follow'\)/);
+});
+
+test('isAvOffsetLocked follows manual / reset, and every applied change is announced on the bus', () => {
+    const sb = build();
+    assert.equal(sb.locked(), false);
+    sb.set(-20, false, 'manual');
+    assert.equal(sb.locked(), true);
+    assert.equal(sb.set(40), false, 'an ignored write');
+    sb.set(0, false, 'reset');
+    assert.equal(sb.locked(), false);
+    assert.deepEqual(sb.emitted.map((e) => [e.name, e.detail.ms, e.detail.source, e.detail.locked]), [
+        ['settings:av-offset', -20, 'manual', true],
+        ['settings:av-offset', 0, 'reset', false],
+    ]);
 });

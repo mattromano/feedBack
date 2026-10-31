@@ -43,6 +43,11 @@ def test_song_loads_with_core_loader(mod, tmp_path):
     assert loaded.drum_tab is None                                          # no song-level drum tab (Auto viz)
     assert [s["id"] for s in loaded.stems] == ["full"]
     assert [s.name for s in song.sections] == ["count", "listen", "count", "watch", "count", "play"]
+    # 5-fret guitar part: an open strum on every note time, not a fretted arrangement.
+    ff = loaded.five_fret_parts
+    assert [(p["id"], p["instrument"], p["source_kind"]) for p in ff] == [(mod.FIVE_FRET_ID, "guitar", "chart")]
+    assert [n["t"] for n in ff[0]["five_fret"]["notes"]] == times
+    assert {n["f"] for n in ff[0]["five_fret"]["notes"]} == {0}
 
 
 def test_plan_matches_the_song(mod):
@@ -53,6 +58,8 @@ def test_plan_matches_the_song(mod):
         assert inside, name
     assert p["blank"][1] <= p["sections"]["watch"][0]
     assert p["arrangements"] == ["Lead", "Bass", "Drums"]
+    assert p["five_fret_parts"] == [mod.FIVE_FRET_ID]
+    assert p["beats_per_section"] == {"listen": 32, "watch": 32, "play": 24}
 
 
 def test_click_track_is_valid_wav(mod):
@@ -67,8 +74,10 @@ def test_old_versions_replaced_and_dlc_root_fallback(mod, tmp_path):
     dlc = tmp_path / "dlc"
     dlc.mkdir()
     (dlc / "_Sync_Calibration_v1.sloppak").write_bytes(b"old")
+    (dlc / "_Sync_Calibration_v3.sloppak").write_bytes(b"old")
     assert mod.ensure_song(dlc) == mod.NAME
     assert not (dlc / "_Sync_Calibration_v1.sloppak").exists()
+    assert not (dlc / "_Sync_Calibration_v3.sloppak").exists()
     assert mod.ensure_song(None) is None
 
 
