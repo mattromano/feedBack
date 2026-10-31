@@ -111,6 +111,10 @@
         }
         const entry = byScreen(screenId);
         if (entry) return entry.label;
+        // A plugin's sub-screen (plugin-rockherosmith-solo) takes its sidebar entry's title.
+        const parent = NAV.find((n) => n.screen && n.screen.indexOf('plugin-') === 0
+            && screenId && screenId.indexOf(n.screen + '-') === 0);
+        if (parent) return parent.label;
         if (screenId && screenId.indexOf('plugin-') === 0) return 'Plugins';
         return '';
     }
@@ -325,12 +329,21 @@
             const a = host.querySelector('a[data-v3-nav]');
             if (a) a.addEventListener('click', (e) => { e.preventDefault(); go(entry.screen); });
         }
-        // Built-in hubs that front a plugin hide when that plugin is missing or off.
-        for (const key of Object.keys(PLUGIN_BACKED_NAV)) {
+        // Built-in hubs that front a plugin hide when that plugin is missing or off: their
+        // sidebar entry and any button marked data-v3-backed (Home's Lessons). A style rule,
+        // so a screen that re-renders its buttons later stays hidden too.
+        const off = Object.keys(PLUGIN_BACKED_NAV).filter((key) => {
             const plugin = list.find((p) => p && p.id === PLUGIN_BACKED_NAV[key]);
-            const show = !!plugin && plugin.enabled !== false;
-            document.querySelectorAll('a[data-v3-nav="' + key + '"]').forEach((a) => { a.style.display = show ? '' : 'none'; });
+            return !plugin || plugin.enabled === false;
+        });
+        let css = document.getElementById('v3-plugin-backed-css');
+        if (!css) {
+            css = document.createElement('style');
+            css.id = 'v3-plugin-backed-css';
+            document.head.appendChild(css);
         }
+        css.textContent = off.map((key) => 'a[data-v3-nav="' + key + '"], [data-v3-backed="' + key + '"]').join(',\n')
+            + (off.length ? ' { display: none !important; }' : '');
     }
 
     // ── Stay in sync with the active screen (idempotent rehydration — design/05) ─
