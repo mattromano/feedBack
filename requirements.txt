@@ -1,4 +1,6 @@
-fastapi>=0.110.0
+# 0.132.0 added strict_content_type (default True): a JSON body without a
+# Content-Type header is no longer parsed, which closes a CSRF hole.
+fastapi>=0.132.0
 uvicorn[standard]>=0.29.0
 websockets>=12.0
 pyguitarpro>=0.10.1

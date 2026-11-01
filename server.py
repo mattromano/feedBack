@@ -1623,6 +1623,11 @@ app.include_router(ws_highway.router)
 # Implementation in lib/routers/ws_sync.py.
 app.include_router(ws_sync.router)
 
+# Mobile offline player (/mobile, /api/mobile/*). Read-only; exposed over
+# tailscale serve only behind lib/mobile_gate.py (FEEDBACK_MOBILE_MODE=1).
+from routers import mobile as mobile_router  # noqa: E402
+app.include_router(mobile_router.router)
+
 
 # ── Audio serving ─────────────────────────────────────────────────────────────
 
@@ -1740,3 +1745,10 @@ def pane_host():
     resp = FileResponse(str(STATIC_DIR / "panes" / "pane.html"))
     resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+# Mobile-mode gate (docs/mobile-offline-plan.md section 9.2). Last, so it is the outermost
+# middleware and sees every route above. A no-op unless FEEDBACK_MOBILE_MODE=1.
+from mobile_gate import install_mobile_gate  # noqa: E402
+
+install_mobile_gate(app)

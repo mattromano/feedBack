@@ -1,0 +1,17 @@
+{
+  "name": "feedBack Mobile",
+  "short_name": "feedBack",
+  "description": "Your feedBack library as a tab player — stream at home, play downloads offline.",
+  "id": "/mobile/",
+  "start_url": "/mobile/",
+  "scope": "/mobile/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    { "src": "/static/mobile/icons/icon-180.png", "type": "image/png", "sizes": "180x180", "purpose": "any" },
+    { "src": "/static/mobile/icons/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "/static/mobile/icons/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" }
+  ]
+}
