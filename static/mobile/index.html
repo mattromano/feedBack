@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b1020">
+    <meta name="color-scheme" content="dark">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="feedBack">
+    <meta name="format-detection" content="telephone=no">
+    <title>feedBack Mobile</title>
+    <link rel="manifest" href="/mobile/manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/mobile/icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/mobile/icons/icon-180.png">
+    <link rel="stylesheet" href="/static/mobile/mobile.css">
+    <script type="module" src="/static/mobile/mobile.js"></script>
+</head>
+<body>
+    <div id="app">
+        <header class="topbar">
+            <h1 class="brand">feedBack</h1>
+            <span id="net" class="net unknown" role="status">Checking…</span>
+        </header>
+
+        <div id="update-banner" class="banner" hidden>
+            <span>New version available.</span>
+            <button id="update-reload" type="button" class="btn small primary">Reload</button>
+        </div>
+
+        <main id="views">
+            <section id="view-library" class="view" aria-labelledby="tab-library">
+                <div class="toolbar">
+                    <input id="lib-search" type="search" placeholder="Search title, artist, album" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search library">
+                    <select id="lib-sort" aria-label="Sort">
+                        <option value="artist">Artist</option>
+                        <option value="title">Title</option>
+                    </select>
+                    <button id="lib-refresh" type="button" class="btn small">Refresh</button>
+                </div>
+                <p id="lib-status" class="status"></p>
+                <ul id="lib-list" class="list"></ul>
+                <button id="lib-more" type="button" class="btn more" hidden>Show more</button>
+            </section>
+
+            <section id="view-downloads" class="view" aria-labelledby="tab-downloads" hidden>
+                <div class="storage">
+                    <div class="storage-row">
+                        <span id="st-text">Storage: …</span>
+                        <span id="st-persist" class="pill"></span>
+                    </div>
+                    <progress id="st-meter" max="1" value="0"></progress>
+                </div>
+                <p id="dl-status" class="status"></p>
+                <ul id="dl-list" class="list"></ul>
+                <button id="dl-delete-all" type="button" class="btn danger" hidden>Delete all downloads</button>
+            </section>
+
+            <section id="view-settings" class="view" aria-labelledby="tab-settings" hidden>
+                <dl class="kv">
+                    <dt>Server</dt><dd id="set-origin">—</dd>
+                    <dt>Signed in as</dt><dd id="set-user">—</dd>
+                    <dt>Server version</dt><dd id="set-version">—</dd>
+                    <dt>App cache</dt><dd id="set-sw">—</dd>
+                </dl>
+                <div class="setting-row">
+                    <label for="set-highway">Highway</label>
+                    <select id="set-highway">
+                        <option value="3d">3D (default)</option>
+                        <option value="2d">2D</option>
+                    </select>
+                </div>
+                <p id="set-highway-note" class="status"></p>
+                <div class="setting-row">
+                    <label for="set-zoom">3D zoom</label>
+                    <select id="set-zoom">
+                        <option value="normal">Normal (desktop)</option>
+                        <option value="close">Close (default)</option>
+                        <option value="closer">Closer</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <label for="set-quality">Resolution</label>
+                    <select id="set-quality">
+                        <option value="sharp">Sharp (default)</option>
+                        <option value="auto">Auto (lower when busy)</option>
+                    </select>
+                </div>
+                <p id="set-status" class="status"></p>
+                <button id="set-check-update" type="button" class="btn">Check for app update</button>
+                <p class="hint">Add this page to your Home Screen before downloading songs: the home-screen app keeps its own storage, separate from Safari.</p>
+            </section>
+        </main>
+
+        <nav class="tabs" role="tablist">
+            <button id="tab-library" type="button" role="tab" class="tab active" aria-selected="true">Library</button>
+            <button id="tab-downloads" type="button" role="tab" class="tab" aria-selected="false">Downloaded</button>
+            <button id="tab-settings" type="button" role="tab" class="tab" aria-selected="false">Settings</button>
+        </nav>
+    </div>
+
+    <div id="player" class="player" hidden>
+        <div id="pl-bar" class="pl-bar">
+            <button id="pl-close" type="button" class="btn icon" aria-label="Close player">Close</button>
+            <div class="pl-meta">
+                <span id="pl-title" class="pl-title"></span>
+                <span id="pl-artist" class="pl-artist"></span>
+            </div>
+            <button id="pl-back" type="button" class="btn icon" aria-label="Back 5 seconds">-5s</button>
+            <button id="pl-play" type="button" class="btn icon primary">Play</button>
+            <button id="pl-fwd" type="button" class="btn icon" aria-label="Forward 5 seconds">+5s</button>
+            <span id="pl-time" class="pl-time">0:00 / 0:00</span>
+            <select id="pl-arr" class="pl-arr" aria-label="Arrangement"></select>
+            <button id="pl-speed-btn" type="button" class="btn icon" aria-label="Speed">100%</button>
+        </div>
+        <div id="pl-speed-panel" class="pl-speed" hidden>
+            <div class="pl-speed-head">
+                <span>Speed <strong id="pl-speed-val">100%</strong></span>
+                <button id="pl-speed-close" type="button" class="btn small">Done</button>
+            </div>
+            <div id="pl-speed-presets" class="chips"></div>
+            <input id="pl-speed-range" type="range" min="40" max="100" step="1" value="100" aria-label="Speed percent">
+        </div>
+        <div id="pl-stage" class="pl-stage">
+            <canvas id="pl-canvas"></canvas>
+        </div>
+        <p id="pl-notice" class="pl-notice" hidden></p>
+        <button id="pl-start" type="button" class="pl-start" disabled>
+            <span id="pl-start-label">Loading…</span>
+        </button>
+        <div class="rotate">
+            <div class="rotate-icon" aria-hidden="true"></div>
+            <p>Rotate your phone to landscape</p>
+            <button id="pl-rotate-close" type="button" class="btn">Close player</button>
+        </div>
+    </div>
+
+    <audio id="audio" preload="auto" playsinline></audio>
+</body>
+</html>

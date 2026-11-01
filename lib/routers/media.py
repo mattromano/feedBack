@@ -109,6 +109,10 @@ def audio_local_path(url: str, request: Request):
         is_loopback = bool(client_host and ipaddress.ip_address(client_host).is_loopback)
     except ValueError:
         is_loopback = client_host == "localhost"
+    # Behind a proxy (tailscale serve, the mobile dev proxy) every request
+    # arrives from 127.0.0.1, so proxy-added headers mark it as remote.
+    if any(k.startswith("tailscale-") or k == "x-forwarded-for" for k in request.headers.keys()):
+        is_loopback = False
     if not is_loopback:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     # Sloppak in-pack file (feedpak full-mix): /api/sloppak/<fn>/file/<rel>.

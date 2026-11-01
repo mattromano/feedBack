@@ -269,3 +269,25 @@ def test_serve_audio_valid_file_is_served(client_and_server, tmp_path):
     audio_file.touch()
     r = client.get("/audio/audio_serve_test.ogg")
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Tailscale-User-Login": "someone@example.com"},
+        {"Tailscale-User-Name": "Someone"},
+        {"X-Forwarded-For": "100.64.0.7"},
+    ],
+)
+def test_rejects_proxied_loopback_request(client_and_server, headers):
+    """A loopback peer carrying proxy headers (tailscale serve) is treated as remote."""
+    client, server = client_and_server
+    audio_file = server.AUDIO_CACHE_DIR / "audio_proxy_test.ogg"
+    audio_file.parent.mkdir(parents=True, exist_ok=True)
+    audio_file.touch()
+    r = client.get(
+        "/api/audio-local-path",
+        params={"url": "/audio/audio_proxy_test.ogg"},
+        headers=headers,
+    )
+    assert r.status_code == 403
