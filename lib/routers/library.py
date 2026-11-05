@@ -411,6 +411,22 @@ async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
     return {"albums": albums, "total": total, "page": page, "size": size}
 
 
+@router.post("/api/library/album-order")
+async def album_track_order(body: dict):
+    """Real track order for an album whose charts have no track numbers, from
+    MusicBrainz (cached per album). Body: {artist, album, songs: [{filename,
+    title}]}. Returns {order: [{filename, disc, position}], missing: [titles],
+    release_title, source}; an empty order when no match / offline."""
+    from album_tracklist import order_songs
+    artist = _clean_str((body or {}).get("artist"))
+    album = _clean_str((body or {}).get("album"))
+    songs = (body or {}).get("songs") or []
+    if not artist or not album or not isinstance(songs, list):
+        raise HTTPException(status_code=400, detail="artist, album and songs are required")
+    songs = [s for s in songs[:500] if isinstance(s, dict)]
+    return await run_in_threadpool(order_songs, artist, album, songs)
+
+
 @router.get("/api/library/artists")
 async def list_artists(letter: str = "", q: str = "", favorites: int = 0, page: int = 0,
                        size: int = 50, format: str = "",
