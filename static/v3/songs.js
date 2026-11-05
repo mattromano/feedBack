@@ -2739,35 +2739,88 @@
             ? new URLSearchParams({ provider: state.provider, artist: a.artist, album: a.album, size: '300', sort: 'track' })
             : queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
         const data = await jget('/api/library?' + p.toString());
-        const songs = (data && data.songs) || [];
-        host.innerHTML =
-            '<button data-albums-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">' + esc(backLabel) + '</button>' +
-            '<div class="flex items-center justify-between gap-3 mb-4">' +
-            '<div class="min-w-0"><h2 class="text-2xl font-bold text-fb-text truncate">' + esc(a.album) + '</h2>' +
-            '<p class="text-sm text-fb-textDim truncate">' + esc(a.artist) + ' · ' + songs.length + ' track' + (songs.length === 1 ? '' : 's') + '</p></div>' +
-            (songs.length
-                ? '<div class="flex gap-2 shrink-0">' +
-                  '<button data-album-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play album</button>' +
-                  '<button data-album-queue title="Add the album to the play queue, in track order" class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">+ Queue album</button>' +
+        const apt = window.feedBack && window.feedBack.albumPlaythrough;
+        // Charts often carry no track number (so the server sorts by title):
+        // use the order the user set on this page, else the real track list
+        // from MusicBrainz (album-playthrough.js).
+        let songs = (data && data.songs) || [];
+        let orderSource = '', orderMissing = [];
+        if (apt) {
+            const o = await apt.orderSongs(a, songs);
+            songs = o.songs; orderSource = o.source; orderMissing = o.missing;
+        }
+        // Album Playthrough: every track on one part, Next-up card between
+        // tracks, scorecard at the end (album-playthrough.js).
+        const aptParts = (apt && songs.length) ? apt.partsFor(songs) : [];
+        let aptPart = aptParts.length ? aptParts[0].name : '';
+        const paint = () => {
+            const aptHtml = (apt && songs.length)
+                ? '<div class="flex flex-wrap items-center gap-2 mb-4 px-3 py-2 rounded-md bg-fb-card/60 border border-fb-border/50">' +
+                  '<span class="text-sm font-medium text-fb-text">Album playthrough</span>' +
+                  '<select data-album-part aria-label="Part to play for the whole album" class="bg-fb-card/60 border border-fb-border/50 text-fb-text text-sm px-2 py-1 rounded-md">' +
+                  aptParts.map((pt) => '<option value="' + esc(pt.name) + '"' + (pt.name === aptPart ? ' selected' : '') + '>' + esc(pt.name) +
+                      (pt.count < songs.length ? ' (' + pt.count + '/' + songs.length + ' tracks)' : '') + '</option>').join('') +
+                  '<option value=""' + (aptPart === '' ? ' selected' : '') + '>Default part</option></select>' +
+                  '<button data-album-playthrough title="Play every track in this order on this part, with a Next-up card between songs and a scorecard at the end" class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">🎸 Start playthrough</button>' +
+                  (orderSource === 'musicbrainz' ? '<span class="text-xs text-fb-textDim" title="Track order from the album\'s MusicBrainz release">Album order</span>' : '') +
+                  (apt.hasSavedOrder(a) ? '<button data-album-order-reset title="Forget the track order you set and go back to the album order" class="text-xs text-fb-textDim hover:text-fb-text px-2 py-1">Reset order</button>' : '') +
+                  (orderMissing.length ? '<span class="w-full text-xs text-fb-textDim">Not in your library: ' + esc(orderMissing.join(', ')) + '</span>' : '') +
                   '</div>'
-                : '') +
-            '</div>' +
-            '<ul class="space-y-1">' + songs.map((s, i) =>
-                '<li><button data-album-track="' + i + '" class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
-                '<span class="text-xs text-fb-textDim w-6 text-right">' + (i + 1) + '</span>' +
-                '<span class="flex-1 truncate text-sm text-fb-text">' + esc(s.title || s.filename) + '</span></button></li>').join('') + '</ul>';
-        host.querySelector('[data-albums-back]')?.addEventListener('click', () => onBack());
-        host.querySelector('[data-album-playall]')?.addEventListener('click', () => {
-            const files = songs.map((s) => s.filename).filter(Boolean);
-            if (!files.length) return;
-            if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: a.album });
-            else if (typeof window.playSong === 'function') window.playSong(enc(files[0]));
-        });
-        host.querySelector('[data-album-queue]')?.addEventListener('click', () => enqueueSongs(songs));
-        host.querySelectorAll('[data-album-track]').forEach((b) => b.addEventListener('click', () => {
-            const s = songs[Number(b.getAttribute('data-album-track'))];
-            if (s && window.playSong) window.playSong(enc(s.filename));
-        }));
+                : '';
+            const arrow = (attr, i, glyph, label, off) => off
+                ? '<span class="w-6"></span>'
+                : '<button ' + attr + '="' + i + '" title="' + label + '" aria-label="' + label + '" class="w-6 text-xs text-fb-textDim hover:text-fb-text">' + glyph + '</button>';
+            host.innerHTML =
+                '<button data-albums-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">' + esc(backLabel) + '</button>' +
+                '<div class="flex items-center justify-between gap-3 mb-4">' +
+                '<div class="min-w-0"><h2 class="text-2xl font-bold text-fb-text truncate">' + esc(a.album) + '</h2>' +
+                '<p class="text-sm text-fb-textDim truncate">' + esc(a.artist) + ' · ' + songs.length + ' track' + (songs.length === 1 ? '' : 's') + '</p></div>' +
+                (songs.length
+                    ? '<div class="flex gap-2 shrink-0">' +
+                      '<button data-album-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play album</button>' +
+                      '<button data-album-queue title="Add the album to the play queue, in track order" class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">+ Queue album</button>' +
+                      '</div>'
+                    : '') +
+                '</div>' + aptHtml +
+                '<ul class="space-y-1">' + songs.map((s, i) =>
+                    '<li class="flex items-center gap-1"><button data-album-track="' + i + '" class="flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
+                    '<span class="text-xs text-fb-textDim w-6 text-right">' + (i + 1) + '</span>' +
+                    '<span class="flex-1 truncate text-sm text-fb-text">' + esc(s.title || s.filename) + '</span></button>' +
+                    (apt ? arrow('data-album-up', i, '▲', 'Move up', i === 0) + arrow('data-album-down', i, '▼', 'Move down', i === songs.length - 1) : '') +
+                    '</li>').join('') + '</ul>';
+            host.querySelector('[data-albums-back]')?.addEventListener('click', () => onBack());
+            host.querySelector('[data-album-playall]')?.addEventListener('click', () => {
+                const files = songs.map((s) => s.filename).filter(Boolean);
+                if (!files.length) return;
+                if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: a.album });
+                else if (typeof window.playSong === 'function') window.playSong(enc(files[0]));
+            });
+            host.querySelector('[data-album-queue]')?.addEventListener('click', () => enqueueSongs(songs));
+            host.querySelector('[data-album-part]')?.addEventListener('change', (e) => { aptPart = e.target.value; });
+            host.querySelector('[data-album-playthrough]')?.addEventListener('click', () => {
+                apt.start({ album: a.album, artist: a.artist, songs, part: aptPart });
+            });
+            host.querySelector('[data-album-order-reset]')?.addEventListener('click', () => {
+                apt.resetOrder(a);
+                openAlbum(a, opts);
+            });
+            const move = (i, d) => {
+                const j = i + d;
+                if (j < 0 || j >= songs.length) return;
+                songs = songs.slice();
+                [songs[i], songs[j]] = [songs[j], songs[i]];
+                apt.saveOrder(a, songs);
+                paint();
+                host.querySelector('[' + (d < 0 ? 'data-album-up' : 'data-album-down') + '="' + j + '"]')?.focus();
+            };
+            host.querySelectorAll('[data-album-up]').forEach((b) => b.addEventListener('click', () => move(Number(b.getAttribute('data-album-up')), -1)));
+            host.querySelectorAll('[data-album-down]').forEach((b) => b.addEventListener('click', () => move(Number(b.getAttribute('data-album-down')), 1)));
+            host.querySelectorAll('[data-album-track]').forEach((b) => b.addEventListener('click', () => {
+                const s = songs[Number(b.getAttribute('data-album-track'))];
+                if (s && window.playSong) window.playSong(enc(s.filename));
+            }));
+        };
+        paint();
     }
 
     // One list-row of a song — shared by the tree view and the artist page's
