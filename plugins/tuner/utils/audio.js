@@ -45,34 +45,101 @@
         return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
     }
 
-    function _handleYinResult(result) {
-        const rms = result ? result.rms : 0;
-        const hasSignal = rms > 0.01;
+    // ── Note lock with hysteresis + decay hold ───────────────────────────────
+    // A plucked string decays 20-30 dB in its first second. The old logic used
+    // one absolute level (-40 dBFS RMS) to both start and end a reading, and a
+    // single quiet or unclear frame (30 ms) blanked the display, so on a
+    // low-gain USB guitar cable the reading died after ~0.3-0.8 s while the
+    // string was still ringing. Now:
+    //   - acquire: a clear frame above _ON_RMS (-44 dBFS);
+    //   - stay locked while the frame is above the higher of an absolute floor
+    //     (-62 dBFS) and 34 dB below the note's own peak, with a laxer clarity
+    //     bar, and within a semitone of the locked pitch (octave-folded);
+    //   - a bad frame doesn't blank: after _MISS_FRAMES in a row the last
+    //     reading is held for _HOLD_MS, then cleared;
+    //   - a new pluck (+6 dB jump) or a clear new pitch re-locks without a blank.
+    const _ON_RMS = 0.006;
+    const _OFF_RMS_ABS = 0.0008;
+    const _OFF_REL = 0.02;
+    const _ON_CONF = 0.5;
+    const _OFF_CONF = 0.25;
+    const _LOCK_CENTS = 100;
+    const _MISS_FRAMES = 3;
+    const _HOLD_MS = 600;
+    const _LOCKED_HISTORY_LEN = 5;
+    let _locked = false;
+    let _peakRms = 0;
+    let _missCount = 0;
+    let _holdUntil = 0;
 
-        if (!result || (!hasSignal && result.confidence < 0.5) || (result.freq < _TUNER_MIN_DETECTABLE_HZ && result.freq !== 0)) {
-            _validFrameCount = 0; _freqHistory = []; _lastFreq = 0;
-            if (_onResult) _onResult({ smoothedFreq: null, rms, hasSignal: false });
-            return;
-        }
+    function _centsBetween(a, b) {
+        return (a > 0 && b > 0) ? 1200 * Math.log2(a / b) : Infinity;
+    }
 
-        if (result.confidence < 0.5 && hasSignal) {
-            _validFrameCount = 0; _freqHistory = []; _lastFreq = 0;
-            if (_onResult) _onResult({ smoothedFreq: null, rms, hasSignal: false });
-            return;
-        }
+    function _resetLock() {
+        _locked = false; _peakRms = 0; _missCount = 0; _holdUntil = 0;
+        _validFrameCount = 0; _freqHistory = []; _lastFreq = 0;
+    }
 
-        _freqHistory.push(_octaveFold(result.freq, _lastFreq));
-        if (_freqHistory.length > _FREQ_HISTORY_LEN) _freqHistory.shift();
-        _validFrameCount++;
-
-        if (_validFrameCount <= _WARMUP_FRAMES) {
-            if (_onResult) _onResult({ smoothedFreq: null, rms, hasSignal });
-            return;
-        }
-
-        const smoothedFreq = _median(_freqHistory);
-        _lastFreq = smoothedFreq;
+    function _emit(smoothedFreq, rms, hasSignal) {
         if (_onResult) _onResult({ smoothedFreq, rms, hasSignal });
+    }
+
+    function _handleYinResult(result) {
+        const now = Date.now();
+        const rms = result ? (result.rms || 0) : 0;
+        const conf = result ? (result.confidence || 0) : 0;
+        const freq = result ? (result.freq || 0) : 0;
+        const pitched = freq >= _TUNER_MIN_DETECTABLE_HZ;
+
+        if (!_locked) {
+            // ── Acquire ──
+            if (!pitched || rms <= _ON_RMS || conf < _ON_CONF) {
+                _validFrameCount = 0; _freqHistory = [];
+                _emit(null, rms, false);
+                return;
+            }
+            _freqHistory.push(_octaveFold(freq, _lastFreq));
+            if (_freqHistory.length > _FREQ_HISTORY_LEN) _freqHistory.shift();
+            _validFrameCount++;
+            if (_validFrameCount <= _WARMUP_FRAMES) { _emit(null, rms, true); return; }
+            _locked = true; _peakRms = rms; _missCount = 0; _holdUntil = 0;
+            _lastFreq = _median(_freqHistory);
+            _emit(_lastFreq, rms, true);
+            return;
+        }
+
+        // ── Locked ──
+        const folded = pitched ? _octaveFold(freq, _lastFreq) : 0;
+        const offRms = Math.max(_OFF_RMS_ABS, _peakRms * _OFF_REL);
+        const near = pitched && Math.abs(_centsBetween(folded, _lastFreq)) <= _LOCK_CENTS;
+        // A fresh pluck or a clearly different note (another string): re-lock
+        // on it straight away, without blanking in between.
+        const repluck = pitched && rms > _peakRms * 2 && conf >= _ON_CONF;
+        const newNote = pitched && !near && rms > _ON_RMS && conf >= _ON_CONF;
+        if (newNote || (repluck && !near)) {
+            _freqHistory = [freq]; _lastFreq = freq; _peakRms = rms; _missCount = 0; _holdUntil = 0;
+            _emit(freq, rms, true);
+            return;
+        }
+        if (near && rms > offRms && conf >= _OFF_CONF) {
+            _peakRms = Math.max(_peakRms * 0.999, rms);
+            _missCount = 0; _holdUntil = 0;
+            _freqHistory.push(folded);
+            while (_freqHistory.length > _LOCKED_HISTORY_LEN) _freqHistory.shift();
+            _lastFreq = _median(_freqHistory);
+            _emit(_lastFreq, rms, true);
+            return;
+        }
+        // A bad frame: keep showing the last stable pitch, then hold, then clear.
+        _missCount++;
+        if (_missCount >= _MISS_FRAMES && !_holdUntil) _holdUntil = now + _HOLD_MS;
+        if (_holdUntil && now >= _holdUntil) {
+            _resetLock();
+            _emit(null, rms, false);
+            return;
+        }
+        _emit(_lastFreq, rms, true);
     }
 
     // True while a frame is being processed by the worker, unless that frame is
@@ -256,9 +323,7 @@
         _processingFrame = false;
         _pendingBuffer = null;
         _accumBuffer = new Float32Array(0);
-        _freqHistory = [];
-        _validFrameCount = 0;
-        _lastFreq = 0;
+        _resetLock();
         if (_processor) { _processor.disconnect(); _processor = null; }
         if (_gainNode) { _gainNode.disconnect(); _gainNode = null; }
         if (_sourceNode) { _sourceNode.disconnect(); _sourceNode = null; }
@@ -280,5 +345,11 @@
             await _doStart(options.deviceId, options.channel, options.audioInputMode || 'auto');
         },
         get usingBridge() { return _usingDesktopBridge; },
+        // Test hook: drive the note-lock logic with synthetic worker results.
+        _feed: function(result, onResult) {
+            if (onResult) _onResult = onResult;
+            _handleYinResult(result);
+        },
+        _reset: function() { _resetLock(); },
     };
 })();
