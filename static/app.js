@@ -1405,7 +1405,19 @@ window.feedBack.playQueue = (function () {
     let _internalPlay = false;
     const active = () => idx >= 0 && idx < list.length;
     const hasNext = () => active() && idx < list.length - 1;
-    function clear() { list = []; idx = -1; source = ''; arrangements = null; }
+    // One advance per finished song. Several things race to move the queue on
+    // when a song ends — the queue-aware close (auto-exit timer, a results
+    // card's release), note_detect's own Up-Next countdown (which calls
+    // advance() directly), RockHeroSmith's Next song — and a SECOND one, or a
+    // late one from the previous song's card, skipped the song that had just
+    // started (a 13-track album playthrough jumped from track 2 to 3 seconds
+    // in). `_endedIdx` is the slot whose song:ended fired; advance() only moves
+    // on from that slot. advance({ force: true }) skips mid-song on purpose.
+    let _endedIdx = -1;
+    function clear() { list = []; idx = -1; source = ''; arrangements = null; _endedIdx = -1; }
+    if (window.feedBack && typeof window.feedBack.on === 'function') {
+        window.feedBack.on('song:ended', () => { if (active()) _endedIdx = idx; });
+    }
     function _emitChanged() {
         const fb = window.feedBack;
         if (fb && typeof fb.emit === 'function') {
@@ -1453,7 +1465,7 @@ window.feedBack.playQueue = (function () {
     function start(files, opts) {
         files = (files || []).filter(Boolean);
         if (!files.length) return false;
-        list = files.slice(); idx = 0;
+        list = files.slice(); idx = 0; _endedIdx = -1;
         source = (opts && opts.source) || '';
         arrangements = (opts && opts.arrangements) ? opts.arrangements.slice() : null;
         if (opts && opts.shuffle && list.length > 1) {
@@ -1472,7 +1484,11 @@ window.feedBack.playQueue = (function () {
         _emitChanged();
         return true;
     }
-    function advance() {
+    function advance(opts) {
+        if (active() && _endedIdx !== idx && !(opts && opts.force)) {
+            console.info('[playQueue] advance ignored: slot', idx, 'has not ended (stale or duplicate next)');
+            return false;
+        }
         if (!hasNext()) { clear(); _emitChanged(); return false; }
         idx++;
         _play(idx);
@@ -1565,6 +1581,8 @@ window.feedBack.playQueue = (function () {
                 ? { filename: list[idx + 1], index: idx + 1, total: list.length }
                 : null;
         },
+        // True once the current slot's song:ended has fired (see advance()).
+        currentEnded: function () { return active() && _endedIdx === idx; },
     };
 })();
 
@@ -1576,6 +1594,15 @@ window.feedBack.playQueue = (function () {
     const realClose = window.closeCurrentSong;
     function queueAwareClose() {
         const q = window.feedBack.playQueue;
+        // A close that arrives while a queued song is still PLAYING is a stale
+        // one (the previous song's results card, a timer that outlived its
+        // song): it must neither skip this song nor quit the set on the last
+        // track. A deliberate exit clears the queue first (note_detect's Exit)
+        // or uses the bareword closeCurrentSong (Esc / ✕), so it isn't caught.
+        if (q && q.active() && typeof q.currentEnded === 'function' && !q.currentEnded()) {
+            console.info('[playQueue] close ignored: the queued song is still playing');
+            return;
+        }
         if (q && q.hasNext()) { q.advance(); return; }
         if (q) q.clear();
         return realClose.apply(this, arguments);
