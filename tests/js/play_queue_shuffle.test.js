@@ -24,13 +24,18 @@ function makeQueue() {
             fbNotify: null,
         },
     };
+    const handlers = {};
+    sandbox.window.feedBack.on = (name, fn) => { (handlers[name] = handlers[name] || []).push(fn); };
     // eslint-disable-next-line no-new-func
     new Function('window', 'encodeURIComponent', iife)(sandbox.window, encodeURIComponent);
-    return { q: sandbox.window.feedBack.playQueue, played };
+    const q = sandbox.window.feedBack.playQueue;
+    q.__endSong = () => (handlers['song:ended'] || []).forEach((fn) => fn({ detail: {} }));
+    return { q, played };
 }
 
+// Each song ends, then the queue moves on (one advance per finished song).
 function drain(q, played) {
-    while (q.hasNext()) q.advance();
+    while (q.hasNext()) { q.__endSong(); q.advance(); }
     return played.map((p) => p.fn);
 }
 

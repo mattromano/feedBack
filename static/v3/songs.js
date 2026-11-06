@@ -2786,6 +2786,7 @@
                     '<li class="flex items-center gap-1"><button data-album-track="' + i + '" class="flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
                     '<span class="text-xs text-fb-textDim w-6 text-right">' + (i + 1) + '</span>' +
                     '<span class="flex-1 truncate text-sm text-fb-text">' + esc(s.title || s.filename) + '</span></button>' +
+                    (apt ? '<button data-album-from="' + i + '" title="Start the album playthrough from this track" class="text-xs text-fb-textDim hover:text-fb-text px-2 py-1 whitespace-nowrap">▶ from here</button>' : '') +
                     (apt ? arrow('data-album-up', i, '▲', 'Move up', i === 0) + arrow('data-album-down', i, '▼', 'Move down', i === songs.length - 1) : '') +
                     '</li>').join('') + '</ul>';
             host.querySelector('[data-albums-back]')?.addEventListener('click', () => onBack());
@@ -2797,9 +2798,14 @@
             });
             host.querySelector('[data-album-queue]')?.addEventListener('click', () => enqueueSongs(songs));
             host.querySelector('[data-album-part]')?.addEventListener('change', (e) => { aptPart = e.target.value; });
-            host.querySelector('[data-album-playthrough]')?.addEventListener('click', () => {
-                apt.start({ album: a.album, artist: a.artist, songs, part: aptPart });
+            // After the set ends (Done / Esc) the scorecard brings you back
+            // here, with its own replay / from-here picks.
+            const aptStart = (from) => apt.start({
+                album: a.album, artist: a.artist, songs, part: aptPart, from,
+                reopen: () => openAlbum(a, opts),
             });
+            host.querySelector('[data-album-playthrough]')?.addEventListener('click', () => aptStart(0));
+            host.querySelectorAll('[data-album-from]').forEach((b) => b.addEventListener('click', () => aptStart(Number(b.getAttribute('data-album-from')))));
             host.querySelector('[data-album-order-reset]')?.addEventListener('click', () => {
                 apt.resetOrder(a);
                 openAlbum(a, opts);
@@ -2817,7 +2823,8 @@
             host.querySelectorAll('[data-album-down]').forEach((b) => b.addEventListener('click', () => move(Number(b.getAttribute('data-album-down')), 1)));
             host.querySelectorAll('[data-album-track]').forEach((b) => b.addEventListener('click', () => {
                 const s = songs[Number(b.getAttribute('data-album-track'))];
-                if (s && window.playSong) window.playSong(enc(s.filename));
+                // One track on its own, on the part picked for the album.
+                if (s && window.playSong) window.playSong(enc(s.filename), apt ? apt.arrIndexFor(s, aptPart) : undefined);
             }));
         };
         paint();

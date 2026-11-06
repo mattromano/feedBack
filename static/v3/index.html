@@ -541,6 +541,20 @@
                             </select>
                         </div>
                     </div>
+                    <!-- Miss sound on real guitar / bass (miss-audio.js GUITAR_KEY; off = Rock Band instruments only) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Miss sound on real guitar &amp; bass</div>
+                            <div class="fb-srow-desc">Off: Miss sound only plays for drums and 5-fret (Rock Band). On: your guitar or bass track also clunks / drops out when you miss a real note.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-miss-audio-guitar">
+                                <span class="fb-switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
                     <!-- Countdown before song -->
                     <div class="fb-srow">
                         <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m-3 5a9 9 0 100-18 9 9 0 000 18z"/></svg></span>
@@ -1208,16 +1222,8 @@
 
             <div id="v3-rail-pop-audio" class="v3-rail-pop hidden" role="group" aria-label="Audio routing">
                 <div id="v3-rail-audio-routing"></div>
-                <div class="v3-pop-row mt-2">
-                    <span class="v3-pop-label">Guitar tone</span>
-                    <select id="player-live-guitar-tone-source"
-                        class="v3-pop-select max-w-[210px]">
-                        <option value="internal">fee[dB]ack internal tone</option>
-                        <option value="external_hardware">External amp / hardware pedalboard</option>
-                        <option value="spark_control_x">Spark LIVE + Spark Control X</option>
-                    </select>
-                </div>
-                <p class="text-xs text-gray-500 px-1 pb-1 leading-snug">External/Spark: hardware supplies tone; no internal amp warning.</p>
+                <!-- The "Guitar tone" source select lives in Settings → Audio only;
+                     the copy here was a duplicate of the same setting. -->
             </div>
 
             <div id="v3-rail-pop-mixer" class="v3-rail-pop hidden" role="group" aria-label="Mixer">

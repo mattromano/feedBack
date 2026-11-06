@@ -35,8 +35,12 @@ function makeQueue(opts) {
     const played = [];
     const events = [];
     const toasts = [];
+    const handlers = {};
     const win = {
-        feedBack: { emit: (name, detail) => events.push({ name, detail }) },
+        feedBack: {
+            emit: (name, detail) => events.push({ name, detail }),
+            on: (name, fn) => { (handlers[name] = handlers[name] || []).push(fn); },
+        },
         playSong: (fn, arr, popts) => played.push({ fn: decodeURIComponent(fn), arr, opts: popts }),
         fbNotify: { show: (t) => toasts.push(t) },
         localStorage: 'storage' in o ? o.storage : memStorage(),
@@ -44,8 +48,14 @@ function makeQueue(opts) {
         _songInfo: o.songInfo || {},
     };
     new Function('window', 'encodeURIComponent', iife)(win, encodeURIComponent);
-    return { q: win.feedBack.playQueue, played, events, toasts, win };
+    const q = win.feedBack.playQueue;
+    // The player's song:ended (the queue moves on once per finished song).
+    q.__endSong = () => (handlers['song:ended'] || []).forEach((fn) => fn({ detail: {} }));
+    return { q, played, events, toasts, win };
 }
+
+// The current song ends, then the queue moves on — what the player does.
+function finish(q) { q.__endSong(); return q.advance(); }
 
 test('enqueue collects into pending without playing, and de-dupes', () => {
     const { q, played, toasts } = makeQueue();
@@ -118,7 +128,7 @@ test('startPending hands the list to start() and empties it', () => {
     assert.strictEqual(q.source(), 'Queue');
     assert.deepStrictEqual(played.map((p) => p.fn), ['a']);
     assert.strictEqual(played[0].opts.fromQueue, true);
-    q.advance(); q.advance();
+    finish(q); finish(q);
     assert.deepStrictEqual(played.map((p) => p.fn), ['a', 'b', 'c']);
     assert.strictEqual(makeQueue().q.startPending(), false, 'nothing queued → nothing starts');
 });
@@ -140,7 +150,7 @@ test('startPending({ shuffle }) shuffles via start()', () => {
         q.enqueue(['a', 'b', 'c'], { silent: true });
         q.startPending({ shuffle: true });
     } finally { Math.random = orig; }
-    while (q.hasNext()) q.advance();
+    while (q.hasNext()) finish(q);
     assert.deepStrictEqual(played.map((p) => p.fn).sort(), ['a', 'b', 'c']);
     assert.notDeepStrictEqual(played.map((p) => p.fn), ['a', 'b', 'c']);
 });
@@ -151,7 +161,7 @@ test('enqueue while a queue is playing appends to the live queue, not pending', 
     assert.strictEqual(q.enqueue(['c', 'b'], { silent: true }), 1, 'b is already coming up');
     assert.deepStrictEqual(q.pending(), []);
     assert.strictEqual(q.remaining(), 2);
-    while (q.hasNext()) q.advance();
+    while (q.hasNext()) finish(q);
     assert.deepStrictEqual(played.map((p) => p.fn), ['a', 'b', 'c']);
 });
 
@@ -171,21 +181,21 @@ test('an advance raises a one-shot arrangement hint from the current song', () =
     const { q, win } = makeQueue({ songInfo: { arrangement: 'PART RHYTHM', arrangement_smart_name: 'Rhythm' } });
     q.start(['a', 'b', 'c']);
     assert.strictEqual(q._consumeArrangementHint(), null, 'the first song keeps the normal default');
-    q.advance();
+    finish(q);
     assert.strictEqual(q._consumeArrangementHint(), 'Rhythm', 'smart name preferred');
     assert.strictEqual(q._consumeArrangementHint(), null, 'consumed once');
     win._songInfo = { arrangement: 'Bass' };
-    q.advance();
+    finish(q);
     assert.strictEqual(q._consumeArrangementHint(), 'Bass', 'falls back to the raw name');
 });
 
 test('a pinned slot arrangement wins over the follow hint', () => {
     const { q, played } = makeQueue({ songInfo: { arrangement_smart_name: 'Rhythm' } });
     q.start(['a', 'b', 'c'], { arrangements: [0, 2, undefined] });
-    q.advance();
+    finish(q);
     assert.strictEqual(played[1].arr, 2);
     assert.strictEqual(q._consumeArrangementHint(), null, 'pinned → no hint');
-    q.advance();
+    finish(q);
     assert.strictEqual(played[2].arr, undefined);
     assert.strictEqual(q._consumeArrangementHint(), 'Rhythm', 'unpinned → follow');
 });
@@ -194,6 +204,6 @@ test('no highway / no song info → no hint (never throws)', () => {
     const { q, win } = makeQueue();
     win.highway = null;
     q.start(['a', 'b']);
-    q.advance();
+    finish(q);
     assert.strictEqual(q._consumeArrangementHint(), null);
 });

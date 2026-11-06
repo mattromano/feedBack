@@ -33,7 +33,7 @@ test('silence (all zeros) returns freq 0', () => {
 });
 
 test('sub-threshold amplitude returns freq 0', () => {
-    // rms < 0.01 must be rejected before any pitch estimation
+    // rms below the worker noise floor (0.0008, -62 dBFS) is rejected before any pitch estimation
     const buf = sine(440, FRAME, 0.001);
     const result = _yinDetect(buf, SAMPLE_RATE);
     assert.equal(result.freq, 0);
