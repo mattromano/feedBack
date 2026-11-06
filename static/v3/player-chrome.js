@@ -52,17 +52,73 @@
     // non-native child into the always-reachable Plugins rail popover. Moving a
     // node preserves its identity + listeners, so the plugin's own toggle logic
     // keeps working.
+    // ── Plugins popover: labelled groups in a stable order ───────────────────
+    // ~20-30 plugin controls landed in one unlabelled heap whose order
+    // depended on load timing. Each control gets a data-v3-group (matched by
+    // its id / class / label) and the slot orders groups with CSS `order`,
+    // with a header per non-empty group. Controls are NOT moved, so plugins
+    // that look up or insert next to their own nodes keep working.
+    const PLUGIN_GROUPS = [
+        { key: 'tone', label: 'Tone & tuning', match: ['#btn-tuner-player', '#autotune-btn', '.autotune-btn', '#lr-ctl', '#btn-nam', '#nam-preset-picker', '#btn-rig-tones', '[data-ae-chain]'], text: /^chain$/i },
+        { key: 'score', label: 'Scoring', match: ['.nd-detect-btn', '.nd-gear-btn', '.sc-ctl'] },
+        { key: 'practice', label: 'Practice', match: ['#btn-metronome', '#met-volume', '#met-vol-label', '#met-flash-label', '#met-flash-check', '#btn-stepmode', '#btn-fretboard', '#btn-invert', '#btn-transpose-chords', '#loosefolder-sync-btn'], text: /fix sync/i },
+        { key: 'mix', label: 'Mix', match: ['#btn-stem-mixer', '#stems-mixer'] },
+        { key: 'lyrics', label: 'Lyrics & karaoke', match: ['#btn-karaoke', '#btn-karaoke-mic', '#btn-karaoke-mic-pill', '#btn-karaoke-difficulty', '#btn-karaoke-mic-device', '#btn-karaoke-monitor-volume'] },
+        { key: 'look', label: 'Highway look', match: ['.h3d-pc'] },
+        { key: 'more', label: 'More', match: [] },   // anything else (Split, MIDI, REC, …)
+    ];
+    function groupFor(el) {
+        for (const g of PLUGIN_GROUPS) {
+            if (g.match.some((s) => { try { return el.matches(s) || !!el.querySelector(s); } catch (e) { return false; } })) return g.key;
+            if (g.text && el.tagName === 'BUTTON' && g.text.test((el.textContent || '').trim())) return g.key;
+        }
+        return 'more';
+    }
+    function shown(el) {
+        return el.nodeType === 1 && !el.hasAttribute('hidden') &&
+            !(el.classList && el.classList.contains('hidden')) && el.getClientRects().length > 0;
+    }
+    let organizing = false;
+    function organizePluginSlot() {
+        const slot = $('v3-plugin-controls-slot');
+        if (!slot || organizing) return;
+        organizing = true;
+        try {
+            const counts = {};
+            Array.prototype.forEach.call(slot.children, (el) => {
+                if (el.nodeType !== 1 || el.classList.contains('v3-pc-head') || el.id === 'v3-plugin-slot-empty') return;
+                const g = groupFor(el);
+                if (el.getAttribute('data-v3-group') !== g) el.setAttribute('data-v3-group', g);
+                if (shown(el)) counts[g] = (counts[g] || 0) + 1;
+            });
+            PLUGIN_GROUPS.forEach((g) => {
+                let head = slot.querySelector(':scope > .v3-pc-head[data-v3-group="' + g.key + '"]');
+                if (!head) {
+                    head = document.createElement('div');
+                    head.className = 'v3-pc-head';
+                    head.setAttribute('data-v3-group', g.key);
+                    head.textContent = g.label;
+                    slot.appendChild(head);
+                }
+                const want = !counts[g.key];
+                if (head.hidden !== want) head.hidden = want;
+            });
+        } finally { organizing = false; }
+    }
     function updatePluginSlotState() {
         const slot = $('v3-plugin-controls-slot');
         if (!slot) return;
+        organizePluginSlot();
         // Count only controls that are actually shown — plugins inject hidden
         // gear/settings panels (display:none / .hidden) too, which shouldn't
-        // inflate the badge.
+        // inflate the badge. Group headers aren't controls.
         const n = Array.prototype.filter.call(slot.children, (el) =>
             el.nodeType === 1 &&
+            !el.classList.contains('v3-pc-head') &&
             !el.hasAttribute('hidden') &&
             !(el.classList && el.classList.contains('hidden')) &&
-            (el.style ? el.style.display !== 'none' : true)).length;
+            (el.style ? el.style.display !== 'none' : true) &&
+            getComputedStyle(el).display !== 'none').length;
         const empty = $('v3-plugin-slot-empty');
         if (empty) empty.style.display = n ? 'none' : '';
         const badge = $('v3-plugin-count');
@@ -108,10 +164,77 @@
         }
     }
 
+    // ── Floating plugin panels (one panel at a time) ─────────────────────────
+    // Plugins open their own panels (tuner, note-detection settings, stem
+    // mixer, the desktop Chain panel, auto-tune, Section Practice), each with
+    // its own open state. Nothing closed one when another — or a rail popover —
+    // opened, so they piled up on top of each other; Esc closed a popover AND
+    // exited the song; and while a plugin panel was open the transport/rail
+    // auto-hid under it. The player now treats them like the rail popovers:
+    // opening one closes the rest, Esc closes the top one first, and the
+    // chrome stays up while any is open.
+    const FLOATING = [
+        { sel: '#tuner-plugin-ui' },
+        { sel: '.nd-settings-panel' },
+        { sel: '#stem-mixer-panel' },
+        { sel: '#ae-tone-panel-float' },
+        { sel: '.autotune-pop', close: '.autotune-x' },
+        { sel: '.autotune-popover', close: '.autotune-x' },
+        { sel: '#section-practice-bar', toggle: '#section-practice-pill' },
+    ];
+    let shownFloating = [];   // panels visible at the last check, oldest first
+
+    function _visible(el) {
+        if (!el || !el.isConnected || !el.getClientRects().length) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+    }
+    function visibleFloating() {
+        const out = [];
+        FLOATING.forEach((f) => {
+            document.querySelectorAll(f.sel).forEach((el) => { if (_visible(el)) out.push({ el, f }); });
+        });
+        return out;
+    }
+    function closeFloating(entry) {
+        const el = entry.el, f = entry.f;
+        let btn = f.close ? el.querySelector(f.close) : null;
+        if (!btn && f.toggle) btn = $(f.toggle.slice(1));
+        if (!btn) {
+            btn = Array.prototype.find.call(el.querySelectorAll('button'), (b) => {
+                const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+                const txt = (b.textContent || '').trim();
+                return /^close\b/i.test(label) || txt === '×' || txt === '✕' || txt === '✖';
+            }) || null;
+        }
+        if (btn) { try { btn.click(); } catch (e) { /* fall through */ } }
+        if (_visible(el)) el.style.display = 'none';   // last resort
+    }
+    function closeAllFloating(except) {
+        visibleFloating().forEach((v) => { if (!except || v.el !== except) closeFloating(v); });
+        shownFloating = shownFloating.filter((el) => except && el === except);
+    }
+    // Called at the throttled loop cadence: a panel that just appeared closes
+    // the rail popover and every other panel.
+    function syncFloating() {
+        const vis = visibleFloating();
+        const els = vis.map((v) => v.el);
+        const fresh = els.filter((el) => shownFloating.indexOf(el) === -1);
+        if (fresh.length) {
+            const newest = fresh[fresh.length - 1];
+            if (openPop) closePop();
+            vis.forEach((v) => { if (v.el !== newest) closeFloating(v); });
+            shownFloating = [newest];
+        } else {
+            shownFloating = shownFloating.filter((el) => els.indexOf(el) !== -1);
+        }
+        setPopOpenFlag(!!openPop || shownFloating.length > 0);
+    }
+
     // ── Rail popovers ───────────────────────────────────────────────────────
     function setPopOpenFlag(on) {
         const p = player();
-        if (p) p.classList.toggle('pop-open', !!on);
+        if (p && p.classList.contains('pop-open') !== !!on) p.classList.toggle('pop-open', !!on);
     }
     function closePop() {
         if (!openPop) return;
@@ -120,8 +243,16 @@
             openPop.btn.setAttribute('aria-expanded', 'false');
             openPop.btn.classList.remove('is-active');
         }
+        // The Mixer popover's own fader sheet goes with it.
+        if (openPop.pop && openPop.pop.id === 'v3-rail-pop-mixer') {
+            const mp = $('mixer-popover');
+            if (mp && !mp.classList.contains('hidden') && window.feedBack && window.feedBack.audio
+                && typeof window.feedBack.audio.toggleMixer === 'function') {
+                try { window.feedBack.audio.toggleMixer(); } catch (e) { /* non-fatal */ }
+            }
+        }
         openPop = null;
-        setPopOpenFlag(false);
+        setPopOpenFlag(shownFloating.length > 0);
     }
     function openPopFor(btn) {
         const key = btn.getAttribute('data-rail');
@@ -129,6 +260,7 @@
         if (!pop) return;
         if (openPop && openPop.pop === pop) { closePop(); return; }   // toggle
         closePop();
+        closeAllFloating();
         pop.classList.remove('hidden');
         btn.setAttribute('aria-expanded', 'true');
         btn.classList.add('is-active');
@@ -138,6 +270,18 @@
         if (key === 'audio' && window.v3AudioRouting && typeof window.v3AudioRouting.render === 'function') {
             try { window.v3AudioRouting.render($('v3-rail-audio-routing')); } catch (e) { /* non-fatal */ }
         }
+        // The Mixer icon used to open a popover holding one "Mixer ▾" button
+        // that then opened the faders: open the faders straight away.
+        if (key === 'mixer') {
+            setTimeout(() => {
+                const mp = $('mixer-popover');
+                if (openPop && openPop.pop === pop && mp && mp.classList.contains('hidden')
+                    && window.feedBack && window.feedBack.audio && typeof window.feedBack.audio.toggleMixer === 'function') {
+                    try { window.feedBack.audio.toggleMixer(); } catch (e) { /* non-fatal */ }
+                }
+            }, 0);
+        }
+        if (key === 'plugins') organizePluginSlot();
     }
 
     // Reflect the real highway lyrics state onto the Mic rail icon (lyrics
@@ -156,8 +300,11 @@
         const rail = $('v3-player-rail');
         if (!rail || rail.dataset.pcWired) return;
         rail.dataset.pcWired = '1';
+        // No stopPropagation: plugin panels' own outside-click handlers (tuner,
+        // Section Practice, auto-tune) must see a rail click too. Our own
+        // outside-click close ignores clicks on the open popover's button.
         rail.querySelectorAll('[data-rail]').forEach((b) =>
-            b.addEventListener('click', (e) => { e.stopPropagation(); openPopFor(b); }));
+            b.addEventListener('click', () => { openPopFor(b); }));
         // Mic icon: a direct lyrics toggle (clicks the hidden canonical button so
         // window.highway.toggleLyrics() + any label logic runs), mirroring on/off state.
         const lyr = rail.querySelector('[data-rail-action="lyrics"]');
@@ -174,9 +321,36 @@
             document.addEventListener('click', (e) => {
                 if (!openPop) return;
                 if (openPop.pop.contains(e.target) || openPop.btn.contains(e.target)) return;
+                // A click inside a panel the popover opened (mixer sheet etc.)
+                // isn't "outside".
+                const mp = $('mixer-popover');
+                if (mp && mp.contains(e.target)) return;
                 closePop();
             });
-            document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
+            // Esc closes what's open FIRST and stops there; only with nothing
+            // open does it reach the player's exit-song shortcut. Capture
+            // phase, so it runs before app.js's keydown handler.
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                const p = player();
+                if (!p || !p.classList.contains('active')) return;
+                let handled = false;
+                if (openPop) { closePop(); handled = true; }
+                else {
+                    const vis = visibleFloating();
+                    if (vis.length) {
+                        // newest first (the one opened last is on top)
+                        const top = vis.find((v) => v.el === shownFloating[shownFloating.length - 1]) || vis[vis.length - 1];
+                        closeFloating(top);
+                        handled = true;
+                    }
+                }
+                if (handled) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    setTimeout(syncFloating, 0);
+                }
+            }, true);
         }
     }
 
@@ -274,8 +448,8 @@
         const playing = playBtn && playBtn.getAttribute('aria-pressed') === 'true';
         // overControls maintained by mouseenter/mouseleave (see start()) —
         // matches(':hover') here forced a per-frame style recalc.
-        // Keep the transport up while paused, hovering it, or a popover is open.
-        if (openPop || overControls || !playing) { lastMove = now(); return; }
+        // Keep the transport up while paused, hovering it, or a popover / plugin panel is open.
+        if (openPop || shownFloating.length || overControls || !playing) { lastMove = now(); return; }
         if (now() - lastMove > IDLE_MS) {
             p.classList.remove('chrome-active');
             p.classList.add('chrome-idle');
@@ -301,6 +475,7 @@
             // detached node is simply false, so this also self-clears.
             const c = $('player-controls');
             overControls = !!(c && typeof c.matches === 'function' && c.matches(':hover'));
+            syncFloating();
         }
         tickIdle();
         rafId = requestAnimationFrame(loop);
@@ -346,6 +521,7 @@
         }
         overControls = false;
         closePop();
+        shownFloating = [];
     }
     function syncActivation() {
         const p = player();

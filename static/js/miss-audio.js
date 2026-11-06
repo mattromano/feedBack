@@ -7,7 +7,7 @@
 // Listens on the core bus (window.feedBack): drums:miss / drums:overhit /
 // drums:hit from the drums plugin, five_fret:miss / five_fret:overstrum /
 // five_fret:hit, and note:miss / note:hit (guitar and bass through note
-// detection). The stem is muted through the stems capability under a claim of
+// detection — only when "also for real guitar & bass" is on, GUITAR_KEY). The stem is muted through the stems capability under a claim of
 // its own and restored on the next hit, a seek, or a new song. While a
 // RockHeroSmith band session is running (play:judgment events) it stands down:
 // the band has its own miss sound and part audio.
@@ -33,6 +33,11 @@
 
     const MODES = Object.freeze(['off', 'clunk', 'dropout']);
     const STORAGE_KEY = 'feedBack_miss_audio';
+    // Real guitar / bass (note_detect's note:miss) is opt-in on top of the mode:
+    // Miss sound is a Rock Band feel for drums and 5-fret, and a Rocksmith-style
+    // real-instrument play shouldn't have its guitar track cut out on a miss
+    // unless the player asks for it. '1' = also on real guitar & bass.
+    const GUITAR_KEY = 'feedBack_miss_audio_guitar';
     const GAP_MS = 90;
     const VOLUME = 0.16;
     const BAND_QUIET_MS = 5000;     // a play:judgment this recent means a band session owns miss audio
@@ -136,6 +141,8 @@
         let lastBand = -Infinity;
         let mode = 'off';
         try { mode = normalizeMode(storage && storage.getItem(STORAGE_KEY)); } catch (_) { mode = 'off'; }
+        let guitar = false;
+        try { guitar = !!storage && storage.getItem(GUITAR_KEY) === '1'; } catch (_) { guitar = false; }
 
         function arrangement() {
             const s = win && win.feedBack && win.feedBack.currentSong;
@@ -178,6 +185,8 @@
             }
             const inst = MISS_EVENTS[type];
             if (!inst || mode === 'off' || bandOn) return null;
+            // Real guitar / bass only when opted in (see GUITAR_KEY).
+            if (type === 'note:miss' && !guitar) return null;
             // A judgment the player didn't make (an auto note) never clunks.
             if (detail && detail.auto) return null;
             const played = clunk.play();
@@ -193,6 +202,13 @@
                 try { if (storage) storage.setItem(STORAGE_KEY, mode); } catch (_) { /* per session then */ }
                 if (mode !== 'dropout') restoreAll();
                 return mode;
+            },
+            guitar: () => guitar,
+            setGuitar(on) {
+                guitar = !!on;
+                try { if (storage) storage.setItem(GUITAR_KEY, guitar ? '1' : '0'); } catch (_) { /* per session then */ }
+                if (!guitar) restoreAll();
+                return guitar;
             },
             muted: () => [...muted],
             handle,
@@ -216,8 +232,14 @@
             sel.value = ctl.mode();
             sel.addEventListener('change', () => { sel.value = ctl.setMode(sel.value); });
         }
+        const box = win && win.document && typeof win.document.getElementById === 'function'
+            ? win.document.getElementById('setting-miss-audio-guitar') : null;
+        if (box) {
+            box.checked = ctl.guitar();
+            box.addEventListener('change', () => { box.checked = ctl.setGuitar(box.checked); });
+        }
         return ctl;
     }
 
-    return { MODES, STORAGE_KEY, CLAIM_PREFIX, stemFor, normalizeMode, create, install };
+    return { MODES, STORAGE_KEY, GUITAR_KEY, CLAIM_PREFIX, stemFor, normalizeMode, create, install };
 });

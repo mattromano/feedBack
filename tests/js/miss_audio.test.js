@@ -31,9 +31,10 @@ function fakeCaps() {
     };
 }
 
-function harness(stored, arrangement) {
+function harness(stored, arrangement, guitar) {
     let t = 0;
     const store = new Map(stored ? [[M.STORAGE_KEY, stored]] : []);
+    if (guitar) store.set(M.GUITAR_KEY, '1');
     const audio = fakeAudio();
     const caps = fakeCaps();
     const win = { feedBack: { currentSong: { arrangement: arrangement || 'Lead' } } };
@@ -53,7 +54,7 @@ test('off by default: misses make no sound and mute nothing', () => {
 });
 
 test('clunk: a miss or overhit plays the clunk, rate-limited, and never mutes a stem', () => {
-    const h = harness('clunk');
+    const h = harness('clunk', 'Lead', true);
     assert.equal(h.ctl.handle('drums:miss', {}), 'clunk');
     h.tick(30);
     assert.equal(h.ctl.handle('drums:overhit', {}), null, 'too soon after the last one');
@@ -78,7 +79,7 @@ test('dropout: the instrument stem drops on a miss and comes back on the next hi
 });
 
 test('dropout: guitar misses drop the guitar stem, or bass on a bass arrangement; a seek restores', async () => {
-    const g = harness('dropout', 'Lead');
+    const g = harness('dropout', 'Lead', true);
     g.ctl.handle('note:miss', {});
     assert.deepEqual(g.ctl.muted(), ['guitar']);
     g.ctl.handle('song:seek', {});
@@ -87,6 +88,23 @@ test('dropout: guitar misses drop the guitar stem, or bass on a bass arrangement
     const b = harness('dropout', 'Bass');
     b.ctl.handle('five_fret:overstrum', {});
     assert.deepEqual(b.ctl.muted(), ['bass']);
+});
+
+test('real guitar / bass is opt-in: dropout leaves note:miss alone until setGuitar(true)', async () => {
+    const h = harness('dropout', 'Lead');
+    assert.equal(h.ctl.guitar(), false);
+    assert.equal(h.ctl.handle('note:miss', {}), null);
+    assert.deepEqual(h.ctl.muted(), [], 'a Rocksmith-style miss never cuts the guitar track');
+    h.ctl.handle('drums:miss', {});
+    assert.deepEqual(h.ctl.muted(), ['drums'], 'drums still follow the mode');
+    assert.equal(h.ctl.setGuitar(true), true);
+    assert.equal(h.store.get(M.GUITAR_KEY), '1');
+    h.tick(200);
+    h.ctl.handle('note:miss', {});
+    assert.deepEqual(h.ctl.muted().sort(), ['drums', 'guitar']);
+    h.ctl.setGuitar(false);
+    await settle();
+    assert.deepEqual(h.ctl.muted(), [], 'turning it off restores');
 });
 
 test('a band session (play:judgment) owns miss audio: this stands down for a while', () => {

@@ -45,9 +45,9 @@ test('settings UI exposes tone source select with all options', () => {
     assert.match(html, /won(?:&rsquo;|’|')t warn that no internal amp tone is loaded/);
 });
 
-test('player audio rail exposes tone source select', () => {
+test('the tone source has ONE home (Settings → Audio), not a duplicate in the player rail', () => {
     const html = fs.readFileSync(INDEX_HTML, 'utf8');
-    assert.match(html, /id="player-live-guitar-tone-source"/);
+    assert.doesNotMatch(html, /id="player-live-guitar-tone-source"/);
 });
 
 test('live-guitar-tone-source script is loaded in v3 shell', () => {

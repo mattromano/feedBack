@@ -715,6 +715,104 @@ html[data-scoreboard="off"] #v3-live-performance-hud { display: none !important;
     cursor: pointer;
 }
 .v3-pop-val { color: #94a3b8; font-size: .75rem; min-width: 3rem; text-align: right; }
+
+/* — Popover cleanup (menu debug pass) — */
+/* .v3-pop-row's display:flex came after Tailwind's .hidden and beat it, so
+   "hidden" rows (Drum part on a guitar song) still showed, empty. */
+.v3-pop-row.hidden { display: none; }
+/* Mixer: the rail icon opens the fader sheet directly (player-chrome.js), so
+   the popover's own "Mixer ▾" button is just an anchor — no box around it. */
+#v3-rail-pop-mixer {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    min-width: 0;
+}
+#v3-rail-pop-mixer #btn-mixer { display: none; }
+/* Tall popovers never run off screen: they scroll inside the viewport. The
+   Mixer popover is left alone — its fader sheet is positioned outside it. */
+#v3-rail-pop-plugins,
+#v3-rail-pop-advanced,
+#v3-rail-pop-viz {
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+#v3-rail-pop-plugins { min-width: 300px; scrollbar-width: thin; }
+/* Number inputs in popovers looked like an unstyled white box. */
+.v3-rail-pop input[type="number"] {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    border-radius: .4rem;
+    padding: .2rem .35rem;
+}
+/* A label that is a whole row (the A/V sync hint) wraps instead of running
+   past the panel edge. */
+.v3-rail-pop .v3-pop-row > .v3-pop-label:only-child {
+    white-space: normal;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.35;
+}
+
+/* Plugins popover: grouped, stable order (player-chrome.js organizePluginSlot) */
+#v3-plugin-controls-slot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem;
+}
+#v3-plugin-controls-slot > * { order: 690; max-width: 100%; }
+#v3-plugin-controls-slot > [data-v3-group="tone"]     { order: 110; }
+#v3-plugin-controls-slot > [data-v3-group="score"]    { order: 210; }
+#v3-plugin-controls-slot > [data-v3-group="practice"] { order: 310; }
+#v3-plugin-controls-slot > [data-v3-group="mix"]      { order: 410; }
+#v3-plugin-controls-slot > [data-v3-group="lyrics"]   { order: 510; }
+#v3-plugin-controls-slot > [data-v3-group="look"]     { order: 610; }
+#v3-plugin-controls-slot > [data-v3-group="more"]     { order: 710; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="tone"]     { order: 100; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="score"]    { order: 200; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="practice"] { order: 300; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="mix"]      { order: 400; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="lyrics"]   { order: 500; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="look"]     { order: 600; }
+#v3-plugin-controls-slot > .v3-pc-head[data-v3-group="more"]     { order: 700; }
+#v3-plugin-controls-slot > .v3-pc-head {
+    flex-basis: 100%;
+    margin-top: .35rem;
+    padding-top: .45rem;
+    border-top: 1px solid rgba(51, 65, 85, .55);
+    color: #94a3b8;
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+#v3-plugin-controls-slot > .v3-pc-head[hidden] { display: none; }
+#v3-plugin-controls-slot > .v3-pc-head:first-child,
+#v3-plugin-slot-empty + .v3-pc-head { margin-top: 0; }
+/* One look for every plugin button: same height, radius and type size. */
+#v3-plugin-controls-slot > button,
+#v3-plugin-controls-slot > select {
+    min-height: 30px;
+    border-radius: .5rem;
+    font-size: .78rem;
+    line-height: 1.1;
+}
+/* Wide controls get their own line instead of overflowing the panel. */
+#v3-plugin-controls-slot > select,
+#v3-plugin-controls-slot > #lr-ctl,
+#v3-plugin-controls-slot > .h3d-pc,
+#v3-plugin-controls-slot > #stems-mixer,
+#v3-plugin-controls-slot > .sc-ctl {
+    flex-basis: 100%;
+}
+#v3-plugin-controls-slot > #lr-ctl { flex-wrap: wrap; row-gap: .3rem; }
+#v3-plugin-controls-slot select { max-width: 100%; }
+/* Two stem UIs with separate storage: when the Stem Mixer plugin is there,
+   its panel is the one place for stem levels; hide the inline chip row. */
+#v3-plugin-controls-slot:has(#btn-stem-mixer) > #stems-mixer { display: none; }
 .v3-pop-close {
     margin-top: .25rem;
     background: #1e293b;
