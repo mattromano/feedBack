@@ -112,14 +112,21 @@
     // (e.g. tagged with no album). Exact title after folding case/punctuation.
     const fold = (s) => String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
         .toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
-    async function findChart(artist, title, have) {
+    // Loaded once per album open (the artist's whole shelf, no drawer filters
+    // and no text search — a search for "The End." misses a chart titled
+    // "The End", and a filter can hide a track that IS on the album).
+    async function artistCharts(artist) {
         try {
-            const p = new URLSearchParams({ artist, q: title, size: '20' });
+            const p = new URLSearchParams({ artist, size: '500' });
             const r = await fetch('/api/library?' + p.toString());
             const d = r.ok ? await r.json() : null;
-            const want = fold(title);
-            return ((d && d.songs) || []).find((s) => s && s.filename && !have.has(s.filename) && fold(s.title) === want) || null;
-        } catch (_) { return null; }
+            return ((d && d.songs) || []).filter((s) => s && s.filename);
+        } catch (_) { return []; }
+    }
+
+    function findChart(charts, title, have) {
+        const want = fold(title);
+        return want ? (charts.find((s) => !have.has(s.filename) && fold(s.title) === want) || null) : null;
     }
 
     // The order to show: the user's own (▲/▼) if set, else the real track
@@ -154,8 +161,9 @@
             const have = new Set(songs.map((s) => s.filename));
             const extra = [];
             const missing = [];
+            const charts = (d.missing || []).length ? await artistCharts(a.artist) : [];
             for (const m of (d.missing || [])) {
-                const found = await findChart(a.artist, m.title, have);
+                const found = findChart(charts, m.title, have);
                 if (found) { have.add(found.filename); extra.push(found); pos.set(found.filename, slot(m)); }
                 else missing.push(m.title);
             }
