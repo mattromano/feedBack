@@ -295,7 +295,39 @@
         const flats  = ['C','Db','D','Eb', 'E','F','Gb','G','Ab','A','Bb', 'B'];
         return { note: (useFlats ? flats : sharps)[((rounded % 12) + 12) % 12], cents };
     }
+    // The badge gets a frame per detector hop (~40/s). Rewriting its note, Hz
+    // and 11 bar classes every frame — even when nothing changed — kept the
+    // DOM churning while a live guitar was connected, and Chromium kept
+    // closing open <select> popups (the library's Artist/Sort dropdowns
+    // snapped shut within a second). So: hold updates while a <select> has
+    // focus (a native popup can only be open then), cap to ~10/s, and only
+    // touch nodes whose content actually changes.
+    const _MIN_FRAME_MS = 100;
+    let _lastApplyAt = 0;
+    let _pendingFrame = null, _pendingTimer = null;
+    function _selectHasFocus() {
+        const a = document.activeElement;
+        return !!(a && a.tagName === 'SELECT');
+    }
+    function _setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
+    function _setClass(el, cls) { if (el && el.className !== cls) el.className = cls; }
     function _applyFrame(frame) {
+        if (_selectHasFocus()) return;
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        if (now - _lastApplyAt < _MIN_FRAME_MS) {
+            // Keep the newest frame and render it when the window opens, so the
+            // badge still settles on the final reading.
+            _pendingFrame = frame;
+            if (!_pendingTimer) {
+                _pendingTimer = setTimeout(() => {
+                    _pendingTimer = null;
+                    const f = _pendingFrame; _pendingFrame = null;
+                    _applyFrame(f);
+                }, _MIN_FRAME_MS - (now - _lastApplyAt));
+            }
+            return;
+        }
+        _lastApplyAt = now;
         const host = document.getElementById('v3-badge-tuner');
         if (!host) return;
         const noteEl = host.querySelector('[data-tuner-note]');
@@ -306,20 +338,20 @@
             const fallbackNote = typeof settings.tuning === 'string'
                 ? (TUNING_NOTE[settings.tuning] || 'E')
                 : lowStringNote(settings.tuning);
-            if (noteEl) noteEl.textContent = fallbackNote;
-            if (hzEl) hzEl.textContent = Math.round(settings.reference_pitch || 440) + 'hz';
-            segs.forEach((s, i) => { s.className = 'w-5 h-[3px] rounded-full ' + _SEG_BASE[i]; });
+            _setText(noteEl, fallbackNote);
+            _setText(hzEl, Math.round(settings.reference_pitch || 440) + 'hz');
+            segs.forEach((s, i) => { _setClass(s, 'w-5 h-[3px] rounded-full ' + _SEG_BASE[i]); });
             return;
         }
         // Always free-tune: derive note + cents from raw freq, ignoring tuning target.
         const { freq } = frame;
         const { note, cents } = _freeTuneCents(freq, _preferFlats(settings.tuning), settings.reference_pitch);
-        if (noteEl) noteEl.textContent = note;
-        if (hzEl) hzEl.textContent = Math.round(freq) + 'hz';
+        _setText(noteEl, note);
+        _setText(hzEl, Math.round(freq) + 'hz');
         // cents ±25 maps to indices 0–10; centre (0¢) = index 5, sharp (+) = top (0), flat (–) = bottom (10).
         const activeIdx = Math.max(0, Math.min(10, 5 - Math.round(cents / 5)));
         segs.forEach((s, i) => {
-            s.className = 'w-5 h-[3px] rounded-full ' + (i === activeIdx ? _segActiveClass(i) : _SEG_BASE[i]);
+            _setClass(s, 'w-5 h-[3px] rounded-full ' + (i === activeIdx ? _segActiveClass(i) : _SEG_BASE[i]));
         });
     }
 
