@@ -984,7 +984,12 @@ audio.addEventListener('pause', () => {
     // The JUCE engine-reroute watcher pauses the element on purpose mid-migration
     // (and the src='' it does fires a trailing async pause too); don't flag those
     // as unexpected — the watcher holds window._juceRerouteInProgress across it.
-    if (S.isPlaying && !window._juceRerouteInProgress) {
+    // App-initiated pauses that leave S.isPlaying set for a moment (count-in rewind, leaving the
+    // player) mark S.expectPause first; native-transport (JUCE) mode doesn't play through this
+    // element at all. Neither is "unexpected" — logging them sent debugging down the wrong path
+    // (issue #17).
+    if (S.expectPause) { S.expectPause = false; return; }
+    if (S.isPlaying && !window._juceRerouteInProgress && !window._juceMode) {
         console.log('Audio paused unexpectedly at', audio.currentTime.toFixed(1));
     }
 });

@@ -293,6 +293,7 @@ export async function startCountIn(opts = {}) {
     if (window._juceMode) {
         await jucePlayer.pause().catch((err) => console.error('[app] jucePlayer.pause error in count-in:', err));
     } else {
+        S.expectPause = true;   // our own pause — not "unexpected" (issue #17)
         audio.pause();
     }
     if (gen !== _countInGen) return; // teardown during pause
@@ -436,7 +437,7 @@ export async function startCountIn(opts = {}) {
                         if (window._juceRerouteInProgress) return;
                         // Same rationale as togglePlay: don't claim playback
                         // started if the Promise rejected.
-                        console.error('[app] audio.play() rejected after count-in:', err);
+                        console.error('[app] audio.play() rejected after count-in:', err && err.name, err && err.message ? err.message : err);
                         S.isPlaying = false;
                         setPlayButtonState(false);
                     });
@@ -467,6 +468,7 @@ export async function startSongCountIn() {
     if (window._juceMode) {
         await jucePlayer.pause().catch((err) => console.error('[app] jucePlayer.pause error in song count-in:', err));
     } else {
+        S.expectPause = true;   // our own pause — not "unexpected" (issue #17)
         audio.pause();
     }
     if (gen !== _countInGen) return; // teardown during pause

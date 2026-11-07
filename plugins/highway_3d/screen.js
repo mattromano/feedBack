@@ -18,6 +18,14 @@
     // same origin to avoid the first-launch CDN round-trip and to pin the
     // version against breakages from upstream Three.js drift.
     const THREE_URL = '/static/vendor/three/three.module.min.js';
+    // Dynamic import() from this plugin script has no usable base URL, so a root-relative
+    // specifier ('/static/...') fails to resolve ("Failed to resolve module specifier"). That
+    // silently pushed three.js onto the CDN fallback and broke bloom outright (issue #17).
+    // Always import the bundled copies by absolute URL.
+    const _absUrl = (p) => {
+        try { return new URL(p, (typeof location !== 'undefined' && location.origin) || undefined).href; }
+        catch (_) { return p; }
+    };
     const THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
 
     /* ── Butterchurn audio-reactive background ──────────────────────────
@@ -1703,7 +1711,7 @@
     let threeLoadPromise = null;
     function loadThree() {
         if (!threeLoadPromise) {
-            threeLoadPromise = import(THREE_URL)
+            threeLoadPromise = import(_absUrl(THREE_URL))
                 .then(mod => { T = mod; return mod; })
                 .catch(() => import(THREE_CDN)
                     .then(mod => { T = mod; return mod; })
@@ -9307,7 +9315,7 @@
         function _bloomEnsure() {
             if (_composer) return _composer;
             if (_bloomLoad || !ren || !scene || !cam) return null;
-            const A = '/static/vendor/three/addons/';
+            const A = _absUrl('/static/vendor/three/addons/');
             _bloomLoad = Promise.all([
                 import(A + 'postprocessing/EffectComposer.js'),
                 import(A + 'postprocessing/RenderPass.js'),
