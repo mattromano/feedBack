@@ -2461,11 +2461,125 @@
     function railBubbleEl() { return document.getElementById('v3-songs-azbubble'); }
     function railVisible() { return state.view === 'grid' && !!railSortColumn(); }
 
+    // ── A–Z jump bar (top of the library) ───────────────────────────────────
+    // Letter links that scroll the current view to the first entry for that
+    // letter. Card grid: the alphabetical sorts, via the rail's song-count
+    // math (jumpToLetter, works with the windowed grid). Albums + the artist
+    // list: by artist, straight from what's rendered. Other views: hidden.
+    function _azBucketOf(text) {
+        const ch = String(text || '').charAt(0).toUpperCase();
+        return (ch >= 'A' && ch <= 'Z') ? ch : '#';
+    }
+    function _azDomTargets() {
+        if (state.view === 'albums') {
+            return [...document.querySelectorAll('#v3-songs-albums [data-az-artist]')]
+                .map((el) => ({ el, letter: _azBucketOf(el.getAttribute('data-az-artist')) }));
+        }
+        if (state.view === 'tree') {
+            return [...document.querySelectorAll('#v3-songs-tree details[data-artist]')]
+                .map((el) => ({ el, letter: _azBucketOf(el.getAttribute('data-artist')) }));
+        }
+        return null;
+    }
+    function _azScrollTo(el, smooth) {
+        const main = document.getElementById('v3-main');
+        if (!main || !el) return;
+        // Land the entry just below the STUCK toolbar: it sticks at its CSS
+        // `top` (the app top bar's height), not at the scroller's edge, so
+        // clearing only its own height left the target hidden behind it.
+        const toolbar = document.getElementById('v3-songs-toolbar');
+        const stickTop = toolbar ? (parseFloat(getComputedStyle(toolbar).top) || 0) : 0;
+        const pad = stickTop + (toolbar ? toolbar.offsetHeight : 0) + 8;
+        const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop - pad;
+        main.scrollTo({ top: Math.max(0, top), behavior: smooth === false ? 'auto' : 'smooth' });
+    }
+    // Grid jump: seek with the rail's count math (fast, works with the
+    // windowed grid), then correct against the cards that actually rendered —
+    // the per-letter counts can drift from the grid (filters, grouping), which
+    // left jumps a row or two off. Each pass looks at the rendered window: the
+    // first card of the letter with a different letter before it is the real
+    // start; otherwise step toward it and look again.
+    let _azJumpToken = 0;
+    async function _azGridJump(letter) {
+        const token = ++_azJumpToken;
+        const main = document.getElementById('v3-main');
+        if (!main) return;
+        await jumpToLetter(letter, false);
+        const order = state.sort.endsWith('-desc') ? RAIL_BUCKETS.slice().reverse() : RAIL_BUCKETS;
+        const rank = (L) => order.indexOf(L);
+        const want = rank(letter);
+        // Plain timer, not rAF: rAF pauses while the window is occluded.
+        const settle = () => new Promise((r) => setTimeout(r, 150));
+        const landingLine = () => {
+            const toolbar = document.getElementById('v3-songs-toolbar');
+            const stickTop = toolbar ? (parseFloat(getComputedStyle(toolbar).top) || 0) : 0;
+            return main.getBoundingClientRect().top + stickTop + (toolbar ? toolbar.offsetHeight : 0) + 8;
+        };
+        for (let pass = 0; pass < 12; pass++) {
+            await settle();
+            if (token !== _azJumpToken || state.view !== 'grid') return;
+            const cards = [...document.querySelectorAll('#v3-songs-gridsizer [data-letter]')];
+            if (!cards.length) return;
+            const i = cards.findIndex((c) => c.getAttribute('data-letter') === letter);
+            const step = Math.max(200, main.clientHeight * 0.8);
+            if (i > 0 || (i === 0 && main.scrollTop <= 0)) {
+                // The true first card is rendered: nudge until it sits right under
+                // the toolbar (the grid can re-lay out after a scroll, so verify).
+                const off = cards[i].getBoundingClientRect().top - landingLine();
+                if (Math.abs(off) <= 4) return;
+                main.scrollTop += off;
+                continue;
+            }
+            if (i === 0) { main.scrollTop -= step; continue; }   // earlier ones may be above
+            // Letter not rendered: move toward it.
+            const firstRank = rank(cards[0].getAttribute('data-letter'));
+            main.scrollTop += (firstRank < want ? step : -step);
+        }
+    }
+
+    function renderAzBar() {
+        const bar = document.getElementById('v3-songs-azbar');
+        if (!bar) return;
+        let present = null;   // Set of letters with at least one entry
+        const domTargets = _azDomTargets();
+        if (domTargets) {
+            present = new Set(domTargets.map((t) => t.letter));
+        } else if (state.view === 'grid' && railSortColumn() && state.railLetters) {
+            present = new Set(Object.keys(state.railLetters).filter((L) => (state.railLetters[L] || 0) > 0));
+        }
+        if (!present || !present.size) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+        bar.innerHTML = RAIL_BUCKETS.map((L) => {
+            const on = present.has(L);
+            const name = L === '#' ? 'numbers and symbols' : L;
+            return '<button type="button" data-az="' + esc(L) + '"' + (on ? '' : ' disabled')
+                + ' aria-label="Jump to ' + esc(name) + '"'
+                + ' class="min-w-[1.6rem] px-1 py-0.5 rounded font-semibold '
+                + (on ? 'text-fb-primary hover:bg-fb-primary/15 hover:text-fb-primaryHi' : 'text-fb-textDim/40 cursor-default')
+                + '">' + esc(L) + '</button>';
+        }).join('');
+        bar.classList.remove('hidden');
+        if (!bar._bound) {
+            bar._bound = true;
+            bar.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-az]');
+                if (!btn || btn.disabled) return;
+                const letter = btn.getAttribute('data-az');
+                const targets = _azDomTargets();
+                if (targets) {
+                    const hit = targets.find((t) => t.letter === letter);
+                    if (hit) _azScrollTo(hit.el);
+                } else if (state.view === 'grid') {
+                    _azGridJump(letter);
+                }
+            });
+        }
+    }
+
     let _railToken = 0;
     async function refreshRail() {
         const rail = railEl();
         if (!rail) return;
-        if (!railVisible()) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+        if (!railVisible()) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); renderAzBar(); return; }
         const col = railSortColumn();
         // A newer refresh (sort/filter/search/provider change) supersedes this
         // one — a slow stats response must not repaint a rail the grid moved on.
@@ -2495,13 +2609,13 @@
         const songCounts = !!(stats && stats.sort_letters);
         if (!letters) {
             if (col === 'artist') letters = (stats && stats.letters) || {};
-            else { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+            else { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); state.railLetters = null; renderAzBar(); return; }
         }
         state.railLetters = letters;
         state.railLettersAreSongCounts = songCounts;
         // No present letters (empty or fully-filtered grid) → nothing to jump
         // to; hide the rail instead of rendering a column of disabled buttons.
-        if (!Object.keys(letters).length) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+        if (!Object.keys(letters).length) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); state.railLetters = null; renderAzBar(); return; }
         const desc = state.sort.endsWith('-desc');
         const order = desc ? RAIL_BUCKETS.slice().reverse() : RAIL_BUCKETS;
         // Roving tabindex: only the first present letter is in the tab order;
@@ -2519,8 +2633,11 @@
                 + ' aria-label="Jump to ' + esc(name) + (present ? ', ' + n + ' song' + (n === 1 ? '' : 's') : ' (none)') + '">'
                 + esc(L) + '</button>';
         }).join('');
-        rail.classList.remove('hidden');
+        // The top A–Z bar is the one visible letter jump; the side rail keeps
+        // the letter data + jump math but stays out of sight (no duplicate).
+        rail.classList.add('hidden');
         bindRailOnce();
+        renderAzBar();
     }
 
     function _setRailActive(letter) {
@@ -2701,13 +2818,22 @@
         const host = document.getElementById('v3-songs-albums');
         if (!host) return;
         host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
-        const data = await jget('/api/library/albums?' + queryParams().toString());
-        const albums = (data && data.albums) || [];
+        // Page through EVERY album: the endpoint defaults to 120 per page (max
+        // 500), and the view used to render only that first page, so a large
+        // library stopped partway through the Bs with no way to see the rest.
+        const albums = [];
+        for (let page = 0, total = Infinity; albums.length < total; page++) {
+            const data = await jget('/api/library/albums?' + queryParams({ size: 500, page }).toString());
+            const batch = (data && data.albums) || [];
+            total = Number.isFinite(Number(data && data.total)) ? Number(data.total) : albums.length + batch.length;
+            albums.push(...batch);
+            if (!batch.length) break;   // never spin on a short/odd response
+        }
         if (!albums.length) { host.innerHTML = '<p class="text-fb-textDim text-sm py-8 text-center">No albums match.</p>'; return; }
         host.innerHTML =
             '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">' +
             albums.map((a, i) =>
-                '<button data-album="' + i + '" class="group text-left">' +
+                '<button data-album="' + i + '" data-az-artist="' + esc(a.artist || '') + '" class="group text-left">' +
                 '<div class="aspect-square rounded-lg overflow-hidden bg-fb-card mb-2">' +
                 (a.cover ? '<img src="' + esc(artUrl({ filename: a.cover })) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' : '') +
                 '</div>' +
@@ -2718,6 +2844,7 @@
             const a = albums[Number(b.getAttribute('data-album'))];
             if (a) openAlbum(a);
         }));
+        renderAzBar();
     }
     // `opts` (PR-B): the artist page reuses this album detail inside its own
     // host with its own back label/target — { host, backLabel, onBack,
@@ -3313,6 +3440,7 @@
                 '<div><div class="text-xs uppercase tracking-wider text-fb-textDim/70 mt-2 mb-1">' + esc(al.name || 'Unknown') + '</div>' +
                 (al.songs || []).map(treeSongRowHtml).join('') + '</div>').join('') + '</div></details>').join('');
         wireCards(host);
+        renderAzBar();
     }
 
     // ── Filter drawer ─────────────────────────────────────────────────────--
@@ -4153,7 +4281,12 @@
             '<button id="v3-songs-refresh-meta" title="Refresh metadata for the songs shown (re-match titles, artwork &amp; more)" class="' + ctrl + '">🏷 Metadata</button>' +
             '<button id="v3-songs-unmatched" title="Show only songs with no metadata match" class="' + ctrl + ((state.filters.match || []).includes('unmatched') ? ' bg-fb-primary text-white' : '') + '">Unmatched</button>' +
             '<button id="v3-songs-upload" class="' + ctrl + '">Upload</button>' +
-            '</div></div></div>' +
+            '</div></div>' +
+            // A–Z jump bar (renderAzBar): one row of letter links across the top
+            // of the library, for the card grid (alphabetical sorts), Albums and
+            // the artist list. Hidden on views where a letter jump means nothing.
+            '<nav id="v3-songs-azbar" class="hidden mt-3 flex flex-wrap gap-x-1 gap-y-1 text-sm" aria-label="Jump to letter"></nav>' +
+            '</div>' +
             // Practice-aware library home: a repertoire progress meter + a
             // "Keep practicing" shelf of started-but-not-mastered songs. Shown
             // only on the grid view when not searching/filtering/selecting
