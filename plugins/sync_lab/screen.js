@@ -516,11 +516,21 @@
     if (bus && bus.on) bus.on('settings:av-offset', (e) => { const d = e && e.detail; if (d && Number.isFinite(d.ms)) avChanged(Math.round(d.ms)); });
     setInterval(() => avChanged(avMs()), 1000);
 
+    function songClockCompensated() {
+        const d = window.__fbSongOutputDelay;
+        return !!(d && Number.isFinite(d.sec) && performance.now() - d.at < 5000);
+    }
+
     // A/V auto-follow: once per song, a few seconds into playback.
     let followSong = null;
     setInterval(() => {
         const a = audio();
         if (!a || a.paused || !lsGet(LS.follow, true)) return;
+        // The song clock already follows the measured output delay (desktop:
+        // window.__fbSongOutputDelay, subtracted by the stems transport), so
+        // a latency change no longer moves picture vs sound — following it
+        // here as well would correct it twice.
+        if (songClockCompensated()) return;
         let key = null;
         try { const i = window.highway.getSongInfo(); key = i ? i.title + '|' + i.artist : null; } catch (_) { /* ignore */ }
         if (!key || key === followSong || aheadSamples.length < 10) return;

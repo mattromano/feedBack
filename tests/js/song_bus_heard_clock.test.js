@@ -1,0 +1,182 @@
+// Song bus + heard clock in static/js/juce-audio.js (_installRendererBusFeeder).
+//
+// Under an exclusive output (ASIO / WASAPI exclusive) the song itself rides
+// its own engine bus: the stems master is tapped directly, every push carries
+// the context frame of its first sample, and the stems context goes to the
+// null sink so the app loopback never carries it too. The engine then reports
+// the context frame being heard, and the feeder publishes
+// window.__fbSongOutputDelay = { ctx, sec, source } for the stems transport.
+// On the default device the delay comes from the context's own output
+// timestamp (or its reported latencies when that is stale).
+//
+// Same harness as renderer_bus_feeder.test.js: the IIFE runs in a vm sandbox
+// against fakes, and the estimator's interval is driven by hand.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'js', 'juce-audio.js'), 'utf8');
+
+function extractFeederIIFE(src) {
+    const start = src.indexOf('(function _installRendererBusFeeder() {');
+    assert.ok(start !== -1);
+    let i = src.indexOf('{', start) + 1, depth = 1;
+    while (i < src.length && depth > 0) { if (src[i] === '{') depth++; else if (src[i] === '}') depth--; i++; }
+    return src.slice(start, i) + ')();';
+}
+
+function makeCtx() {
+    return {
+        sampleRate: 48000, state: 'running', currentTime: 10, baseLatency: 0.01, outputLatency: 0.04,
+        sinkIdCalls: [], outputTs: null,
+        setSinkId(v) { this.sinkIdCalls.push(v); return Promise.resolve(); },
+        resume() { return Promise.resolve(); },
+        getOutputTimestamp() { return this.outputTs || { contextTime: 0, performanceTime: 0 }; },
+        audioWorklet: { addModule: () => Promise.resolve() },
+        createMediaStreamSource() { return { connect() {}, disconnect() {} }; },
+        close() { return Promise.resolve(); },
+    };
+}
+
+function makeSandbox({ exclusive = true, clock = () => ({ valid: false }) } = {}) {
+    const calls = { setSongBus: [], pushSongAudio: [], setRendererBus: [] };
+    const nodes = [];
+    let now = 1000;
+    const intervals = [];
+    const api = {
+        isAudioRunning: () => Promise.resolve(true),
+        setRendererBus: (en, g) => { calls.setRendererBus.push([en, g]); return Promise.resolve(); },
+        pushRendererAudio() {},
+        setPageMuted: (m) => Promise.resolve(m),
+        setSongBus: (en, g) => { calls.setSongBus.push([en, g]); return Promise.resolve(); },
+        pushSongAudio: (buf, rate, start) => { calls.pushSongAudio.push({ frames: buf.length / 2, rate, start }); },
+        getSongBusClock: () => Promise.resolve(clock()),
+    };
+    class FakeWorkletNode {
+        constructor(ctx, name) { this.name = name; this.port = { onmessage: null }; nodes.push(this); }
+        connect() {} disconnect() {}
+    }
+    const sandbox = {
+        console: { log() {}, warn() {}, error() {} },
+        URL: { createObjectURL: () => 'blob:x' }, Blob: class {},
+        AudioWorkletNode: FakeWorkletNode, AudioContext: function () { return makeCtx(); },
+        WeakSet, WeakMap, Promise, Float32Array, Math, Number, JSON,
+        performance: { now: () => now },
+        setInterval: (fn) => { intervals.push(fn); return intervals.length; },
+        document: { hidden: false, addEventListener() {}, getElementById: () => ({ id: 'audio' }) },
+        navigator: { mediaDevices: {} },          // no loopback: app audio falls back
+        window: null,
+    };
+    sandbox.window = {
+        feedBackDesktop: { audio: api },
+        _juceOutputIsExclusive: () => Promise.resolve(typeof exclusive === 'function' ? exclusive() : exclusive),
+        _juceMode: false, _currentSongAudio: null, feedBack: { stems: {} },
+    };
+    sandbox.globalThis = sandbox;
+    sandbox.host = { jucePlayer: () => null, playSong() {}, _audioSeek: () => Promise.resolve({}),
+        setPlayButtonState() {}, _songEventPayload: () => ({}), showScreen() {} };
+    vm.createContext(sandbox);
+    vm.runInContext(extractFeederIIFE(SRC), sandbox);
+    return {
+        sb: sandbox, calls, nodes,
+        tick: () => sandbox.window._reevaluateRendererBus(),
+        // The estimator is the first interval the feeder registers (100 ms);
+        // the second is its own 500 ms re-evaluate, driven here via tick().
+        sample: async () => { intervals[0](); await new Promise((r) => setImmediate(r)); },
+        advance: (ms) => { now += ms; },
+    };
+}
+
+const graphOf = () => ({ context: makeCtx(), masterNode: { connected: [], connect(n) { this.connected.push(n); }, disconnect() {} } });
+const songNode = (h) => h.nodes.find((n) => n.name === 'feedback-song-tap');
+
+test('exclusive + stems: the song rides the song bus, its context on the null sink', async () => {
+    const h = makeSandbox();
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    assert.deepEqual(h.calls.setSongBus.at(-1), [true, 1.0]);
+    assert.equal(g.context.sinkIdCalls.at(-1)?.type, 'none', 'stems ctx off the page output → not in the loopback');
+    assert.ok(songNode(h) && g.masterNode.connected.includes(songNode(h)), 'master tapped directly');
+    // The old surface 'stems' fallback must not ALSO carry it on the app bus.
+    await h.tick();
+    assert.ok(!h.calls.setRendererBus.some(([en]) => en), 'app bus not engaged for the song');
+});
+
+test('pushes carry the context frame of their first sample; a gap starts a new push', async () => {
+    const h = makeSandbox();
+    h.sb.window.feedBack.stems.audioGraph = graphOf();
+    await h.tick();
+    const port = songNode(h).port;
+    const q = (f) => port.onmessage({ data: { f, d: new Float32Array(256) } });   // 128 frames
+    for (let k = 0; k < 4; k++) q(4800 + k * 128);       // 512 frames from 4800 → one 10 ms push
+    assert.deepEqual(h.calls.pushSongAudio[0], { frames: 512, rate: 48000, start: 4800 });
+    q(5312); q(5440 + 128);                               // second quantum skips a frame block
+    assert.deepEqual(h.calls.pushSongAudio[1], { frames: 128, rate: 48000, start: 5312 }, 'flushed at the gap');
+    for (let k = 1; k < 4; k++) q(5568 + k * 128);
+    assert.equal(h.calls.pushSongAudio[2].start, 5568, 'new batch starts at the jumped frame');
+});
+
+test('shared output: no song bus, sink stays default', async () => {
+    const h = makeSandbox({ exclusive: false });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    assert.equal(h.calls.setSongBus.length, 0);
+    assert.equal(g.context.sinkIdCalls.length, 0);
+});
+
+test('heard delay from the engine: context clock minus the heard frame, median-filtered', async () => {
+    const heardMs = [];
+    let ctxRef = null;
+    const h = makeSandbox({ clock: () => ({ valid: true, heardSourceFrame: (ctxRef.currentTime - heardMs.shift() / 1000) * 48000 }) });
+    const g = graphOf();
+    ctxRef = g.context;
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (const d of [58, 57, 59, 58, 300 /* outlier */, 58]) { heardMs.push(d); await h.sample(); h.advance(100); g.context.currentTime += 0.1; }
+    const pub = h.sb.window.__fbSongOutputDelay;
+    assert.equal(pub.source, 'song-bus');
+    assert.equal(pub.ctx, g.context);
+    assert.ok(Math.abs(pub.sec - 0.058) < 1e-9, 'median ignores the outlier: ' + pub.sec);
+});
+
+test('engine clock invalid (bus priming / underflow): no new sample, nothing invented', async () => {
+    const h = makeSandbox({ clock: () => ({ valid: false }) });
+    h.sb.window.feedBack.stems.audioGraph = graphOf();
+    await h.tick();
+    for (let i = 0; i < 5; i++) await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null);
+});
+
+test('back to shared mode: the song-bus figure is dropped, the default-device one takes over', async () => {
+    let excl = true;
+    let ctxRef = null;
+    const h = makeSandbox({ exclusive: () => excl, clock: () => ({ valid: true, heardSourceFrame: (ctxRef.currentTime - 0.058) * 48000 }) });
+    const g = graphOf();
+    ctxRef = g.context;
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay.source, 'song-bus');
+    excl = false;
+    await h.tick();
+    assert.deepEqual(h.calls.setSongBus.at(-1), [false, 0]);
+    assert.equal(g.context.sinkIdCalls.at(-1), '', 'default sink restored');
+    assert.equal(h.sb.window.__fbSongOutputDelay, null, 'stale song-bus figure cleared at once');
+    // A frozen output timestamp (seen after a null-sink round trip) is not
+    // trusted: the context's reported latencies (10 + 40 ms) are used.
+    g.context.outputTs = { contextTime: 1, performanceTime: 1 };
+    for (let i = 0; i < 4; i++) await h.sample();
+    const pub = h.sb.window.__fbSongOutputDelay;
+    assert.equal(pub.source, 'output-timestamp');
+    assert.ok(Math.abs(pub.sec - 0.05) < 1e-9, String(pub.sec));
+    // A live timestamp is used directly.
+    g.context.currentTime = 20;
+    g.context.outputTs = { contextTime: 19.955, performanceTime: h.sb.performance.now() };
+    for (let i = 0; i < 15; i++) await h.sample();
+    assert.ok(Math.abs(h.sb.window.__fbSongOutputDelay.sec - 0.045) < 1e-9);
+});
