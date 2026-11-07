@@ -12,6 +12,7 @@ import math
 import os
 import sqlite3
 import tempfile
+import time
 import threading
 from pathlib import Path
 
@@ -749,6 +750,30 @@ def _walk_export_paths(allowed: list[str], config_dir: Path) -> dict:
     return out
 
 
+# Windows refuses os.replace while another handle has the target open without
+# FILE_SHARE_DELETE (an antivirus scan, an indexer, an overlapping reader): the
+# replace raises PermissionError (WinError 5 access denied / 32 sharing
+# violation) even though the lock lasts milliseconds. A single attempt lost the
+# user's settings change with a 500 (issue #13). Retry briefly with backoff;
+# anything still locked after ~1 s, or any other error, raises as before.
+_REPLACE_ATTEMPTS = 8
+_REPLACE_FIRST_DELAY_S = 0.02
+
+
+def _replace_with_retry(src: Path, dst: Path, *, attempts: int = _REPLACE_ATTEMPTS,
+                        first_delay: float = _REPLACE_FIRST_DELAY_S, sleep=time.sleep):
+    delay = first_delay
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts:
+                raise
+            sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+
 def _atomic_write_file(target: Path, payload: bytes):
     """Write `payload` to `target` via a uniquely-named sibling temp file
     + os.replace. `os.replace` is atomic on both POSIX and Win32 —
@@ -785,7 +810,7 @@ def _atomic_write_file(target: Path, payload: bytes):
     try:
         with f:
             f.write(payload)
-        os.replace(tmp, target)
+        _replace_with_retry(tmp, target)
     except Exception:
         try:
             tmp.unlink()

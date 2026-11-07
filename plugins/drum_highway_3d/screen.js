@@ -19,6 +19,11 @@
      * ====================================================================== */
 
     const THREE_URL = '/static/vendor/three/three.module.min.js';
+    // Absolute URLs: a root-relative dynamic import() has no usable base here (issue #17).
+    const _absUrl = (p) => {
+        try { return new URL(p, (typeof location !== 'undefined' && location.origin) || undefined).href; }
+        catch (_) { return p; }
+    };
     const THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
 
     const PALETTES = {
@@ -48,7 +53,7 @@
     let threeLoadPromise = null;
     function loadThree() {
         if (!threeLoadPromise) {
-            threeLoadPromise = import(THREE_URL)
+            threeLoadPromise = import(_absUrl(THREE_URL))
                 .then(mod => { T = mod; return mod; })
                 .catch(() => import(THREE_CDN)
                     .then(mod => { T = mod; return mod; })
@@ -1743,7 +1748,7 @@
         function _bloomEnsure() {
             if (_composer) return _composer;
             if (_bloomLoad || !ren || !scene || !cam) return null;
-            const A = '/static/vendor/three/addons/';
+            const A = _absUrl('/static/vendor/three/addons/');
             const myGen = _bloomGen;   // superseded by any _bloomDispose()
             _bloomLoad = Promise.all([
                 import(A + 'postprocessing/EffectComposer.js'),

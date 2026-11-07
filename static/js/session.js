@@ -230,6 +230,7 @@ export async function showScreen(id) {
             window._juceAudioUrl = null;
         }
         if (hadPlayableSong) window.feedBack.emit('song:stop', { time: stopTime || 0, screen: id });
+        if (S.isPlaying) S.expectPause = true;   // leaving the player — not "unexpected" (#17)
         audio.pause();
         audio.src = '';
         window._currentSongAudio = null;

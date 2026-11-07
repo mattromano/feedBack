@@ -371,7 +371,8 @@ export async function togglePlay() {
             // leave the button showing Play while the song keeps playing — the
             // "two clicks to pause on the first song after a fresh load" bug.
             if (window._juceRerouteInProgress) return;
-            console.error('[app] audio.play() rejected:', err);
+            // name + message: a bare DOMException logs as "[object DOMException]" (issue #17).
+            console.error('[app] audio.play() rejected:', err && err.name, err && err.message ? err.message : err);
             S.isPlaying = false;
             setPlayButtonState(false);
         }
