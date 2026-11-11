@@ -654,7 +654,15 @@
         for (const s of _menuSections) {
             const slot = menu.querySelector('[data-inst-section="' + s.id + '"]');
             if (!slot) continue;
-            try { s.render(slot, { refresh: () => { renderInstrument(); keepOpen(); } }); }
+            // refresh() redraws the menu and keeps it open only if it still is (an
+            // async section may call it after the player closed the menu).
+            const refresh = () => {
+                const m = liveInstMenu();
+                const wasOpen = !!(m && !m.classList.contains('hidden'));
+                renderInstrument();
+                if (wasOpen) keepOpen();
+            };
+            try { s.render(slot, { refresh }); }
             catch (err) { console.warn('[v3-badges] menu section "' + s.id + '" failed to render:', err); }
         }
     }
