@@ -104,6 +104,29 @@ test('a retuned string writes the working tuning and shows Back to default', asy
     assert.match(html, /<option selected>Drop D<\/option>/, 'the quick-set list reflects a matching named tuning');
 });
 
+test('a manual pick points the tuner at the matching named tuning', async () => {
+    const { b, window } = await load();
+    const posts = [];
+    const realFetch = window.fetch;
+    window.fetch = (url, init) => {
+        if (init && init.method === 'POST') posts.push({ url, body: JSON.parse(init.body) });
+        return realFetch(url, init);
+    };
+    assert.equal(b.tunerTuningName(), 'Standard', 'at home the tuner targets the saved default');
+    b.setWorkingOffsets([-2, 0, 0, 0, 0, 0]);
+    assert.equal(b.tunerTuningName(), 'Drop D');
+    await flush();
+    const last = posts.filter((p) => p.url === '/api/plugins/tuner/config').pop();
+    assert.ok(last, 'tuner config was posted');
+    assert.equal(last.body.lastTuning, 'Drop D');
+    assert.equal(last.body.lastInstrument, 'guitar-6');
+    // A custom tuning has no tuner name: leave the tuner's target alone.
+    b.setWorkingOffsets([-3, 0, 0, 0, 1, 0]);
+    assert.equal(b.tunerTuningName(), null);
+    await flush();
+    assert.equal('lastTuning' in posts[posts.length - 1].body, false);
+});
+
 test('per-string pickers name the notes from Standard, low string first', async () => {
     const { b, wt } = await load();
     wt.set({ offsets: [-2, 0, 0, 0, 0, 0] }, { instrument: 'guitar-6' });

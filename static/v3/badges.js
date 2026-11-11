@@ -298,9 +298,8 @@
             // offset-array tuning has no name, so sync only the instrument and
             // skip lastTuning rather than POST an array the plugin can't parse.
             const body = { lastInstrument };
-            if (typeof settings.tuning === 'string') {
-                body.lastTuning = settings.tuning;
-            }
+            const name = tunerTuningName();
+            if (name) body.lastTuning = name;
             await fetch('/api/plugins/tuner/config', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -633,6 +632,7 @@
         if (resetBtn) resetBtn.addEventListener('click', () => {
             const wtCap = window.feedBack && window.feedBack.workingTuning;
             if (wtCap && typeof wtCap.resetToDefault === 'function') wtCap.resetToDefault();
+            pushToTuner();   // back to the default tuning's target
             renderInstrument(); keepOpen();
         });
         // Current tuning: quick-set a named tuning, or retune a single string.
@@ -668,6 +668,19 @@
     }
 
     function instrumentKey() { return settings.instrument + '-' + settings.string_count; }
+    // The named tuning (for this instrument) with exactly these offsets, or undefined.
+    function matchingNamedTuning(key, offsets) {
+        return _tuningsForKey(key).find((n) => sameOffsets(namedTuningOffsets(key, n), offsets));
+    }
+    // Which named tuning the tuner should target: the current (working) tuning when
+    // you've retuned to a named one, else the saved default. A custom current tuning
+    // has no name the tuner understands → null (leave the tuner's target alone).
+    function tunerTuningName() {
+        const home = typeof settings.tuning === 'string' ? settings.tuning : null;
+        const wt = workingTuningInfo();
+        if (!wt || wt.isHome) return home;
+        return matchingNamedTuning(instrumentKey(), currentOffsets()) || null;
+    }
     // Offsets the pickers show: the working tuning, else home, else Standard.
     function currentOffsets() {
         const sc = settings.string_count;
@@ -689,6 +702,7 @@
             referencePitch: settings.reference_pitch,
             source: 'manual',
         }, { instrument: instrumentKey(), provenance: 'assumed' });
+        pushToTuner();   // point the tuner at the new tuning when it has a name
         return true;
     }
     function currentTuningSection(wt) {
@@ -696,7 +710,7 @@
         const offsets = currentOffsets();
         const std = _namedTuningMidis(key, 'Standard');
         const named = _tuningsForKey(key);
-        const matching = named.find((n) => sameOffsets(namedTuningOffsets(key, n), offsets));
+        const matching = matchingNamedTuning(key, offsets);
         const selectCls = 'bg-gray-800/50 border border-gray-700 rounded-md text-xs text-fb-text outline-none focus:border-fb-primary';
         let html = '<div class="space-y-2 pb-3 border-b border-fb-border/40">' +
             '<div class="flex items-center justify-between gap-2">' +
@@ -764,7 +778,7 @@
         reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); },
         registerMenuSection: registerMenuSection,
         // Not an API — lets tests/js/badges_current_tuning.test.js drive the tuning logic.
-        _internals: { namedTuningOffsets, workingTuningInfo, currentOffsets, setWorkingOffsets, currentTuningSection, stringOffsetChoices },
+        _internals: { namedTuningOffsets, workingTuningInfo, currentOffsets, setWorkingOffsets, currentTuningSection, stringOffsetChoices, tunerTuningName },
     };
     // Sections queued by code that ran before this script (see registerMenuSection).
     if (Array.isArray(window._v3BadgesPendingSections)) {
