@@ -714,7 +714,7 @@
         const selectCls = 'bg-gray-800/50 border border-gray-700 rounded-md text-xs text-fb-text outline-none focus:border-fb-primary';
         let html = '<div class="space-y-2 pb-3 border-b border-fb-border/40">' +
             '<div class="flex items-center justify-between gap-2">' +
-            '<div class="min-w-0"><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim">Current tuning</div>' +
+            '<div class="min-w-0"><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim" title="What your strings are tuned to right now. Tells the app and the tuner; it doesn\'t change the sound.">Guitar tuned to</div>' +
             '<div class="text-xs font-semibold truncate flex items-center gap-1 ' + (wt.isHome ? 'text-fb-text' : 'text-amber-400') + '">' +
             esc(wt.label) + ' ' + provenanceGlyph(wt.provenance) + '</div></div>' +
             (wt.isHome ? '' : '<button type="button" data-inst-reset title="Reset this instrument to its home tuning" class="shrink-0 text-[0.6875rem] text-fb-textDim hover:text-fb-text border border-fb-border/40 hover:border-fb-border/70 rounded-md px-2 py-1 transition-colors">Back to default</button>') +
@@ -741,12 +741,16 @@
     // its top tones here). renderInstrument() rebuilds the menu's innerHTML on every
     // change, so a section is a render function re-run each time, not one-off DOM.
     // render(slotEl, { refresh }) — call refresh() to redraw the menu (kept open).
+    // opts.order (default 100) sorts sections, lowest first, whatever order they
+    // registered in (plugins load in no fixed order).
     const _menuSections = [];
-    function registerMenuSection(id, render) {
+    function registerMenuSection(id, render, opts) {
         if (typeof id !== 'string' || !id || typeof render !== 'function') return false;
+        const order = opts && Number.isFinite(Number(opts.order)) ? Number(opts.order) : 100;
         const i = _menuSections.findIndex((s) => s.id === id);
-        if (i >= 0) _menuSections[i] = { id, render };
-        else _menuSections.push({ id, render });
+        if (i >= 0) _menuSections[i] = { id, render, order };
+        else _menuSections.push({ id, render, order });
+        _menuSections.sort((a, b) => a.order - b.order);
         if (document.getElementById('v3-badge-instrument')) renderInstrument();
         return true;
     }
@@ -782,7 +786,7 @@
     };
     // Sections queued by code that ran before this script (see registerMenuSection).
     if (Array.isArray(window._v3BadgesPendingSections)) {
-        window._v3BadgesPendingSections.forEach((s) => s && registerMenuSection(s.id, s.render));
+        window._v3BadgesPendingSections.forEach((s) => s && registerMenuSection(s.id, s.render, s));
         window._v3BadgesPendingSections = [];
     }
 

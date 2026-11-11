@@ -158,3 +158,9 @@ test('registerMenuSection adds a slot and replaces by id', async () => {
     assert.equal(window.v3Badges.registerMenuSection('', () => {}), false);
     assert.equal(window.v3Badges.registerMenuSection('y', null), false);
 });
+
+test('menu sections render in order, not registration order', () => {
+    const src = fs.readFileSync(BADGES_JS, 'utf8');
+    assert.match(src, /_menuSections\.sort\(\(a, b\) => a\.order - b\.order\)/);
+    assert.match(src, /registerMenuSection\(s\.id, s\.render, s\)/, 'queued sections keep their order');
+});
