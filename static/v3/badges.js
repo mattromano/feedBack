@@ -38,7 +38,59 @@
     // Monotonic token so a slow coverage fetch can't restore a stale cue after a newer
     // song started loading / we left the player. Bumped on every refresh and clear.
     let _coverageCueToken = 0;
+    // Exact integer open-string midis per tuning (GET /api/tunings `tuningMidis`),
+    // same shape as _tuningsByKey. Used to turn a named tuning into offsets.
+    let _tuningMidisByKey = {};
     function _tuningsForKey(key) { return Object.keys(_tuningsByKey[key] || {}); }
+
+    // Open-string midis of a named tuning for an instrument key ('guitar-6'), low
+    // string first. Prefers the server's exact midis; falls back to rounding the
+    // frequencies. null when the tuning isn't known for that key.
+    function _namedTuningMidis(key, name) {
+        const m = _tuningMidisByKey[key] && _tuningMidisByKey[key][name];
+        if (Array.isArray(m) && m.length && m.every(Number.isFinite)) return m.slice();
+        const f = _tuningsByKey[key] && _tuningsByKey[key][name];
+        if (Array.isArray(f) && f.length && f.every((hz) => Number.isFinite(hz) && hz > 0)) {
+            return f.map((hz) => Math.round(69 + 12 * Math.log2(hz / 440)));
+        }
+        return null;
+    }
+    // Per-string semitone offsets from Standard for a named tuning (the
+    // workingTuning vocabulary). null if the tuning or its Standard row is missing.
+    function namedTuningOffsets(key, name) {
+        const t = _namedTuningMidis(key, name);
+        const s = _namedTuningMidis(key, 'Standard');
+        if (!t || !s || t.length !== s.length) return null;
+        return t.map((v, i) => v - s[i]);
+    }
+    // The saved home tuning (settings.tuning) as offsets for the selected instrument.
+    function homeTuningOffsets() {
+        if (Array.isArray(settings.tuning)) return settings.tuning.slice(0, settings.string_count);
+        if (typeof settings.tuning === 'string') {
+            return namedTuningOffsets(settings.instrument + '-' + settings.string_count, settings.tuning);
+        }
+        return null;
+    }
+    function sameOffsets(a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (Number(a[i]) !== Number(b[i])) return false;
+        return true;
+    }
+    // Per-string note choices for the "Current tuning" pickers: semitones down to
+    // -7 (drop A on a 6-string's low E) and up to +4 from each string's standard.
+    const STRING_OFFSET_MIN = -7;
+    const STRING_OFFSET_MAX = 4;
+    function stringOffsetChoices(current) {
+        const out = [];
+        for (let o = STRING_OFFSET_MIN; o <= STRING_OFFSET_MAX; o++) out.push(o);
+        // A song or the tuner can set a tuning outside the range — keep it selectable.
+        if (Number.isFinite(current) && !out.includes(current)) {
+            out.push(current);
+            out.sort((x, y) => x - y);
+        }
+        return out;
+    }
+    function midiNoteName(midi) { return NOTE_NAMES[((midi % 12) + 12) % 12]; }
     function _tuningsForInstrument(instrument, string_count) {
         return _tuningsForKey(instrument + '-' + string_count);
     }
@@ -85,12 +137,21 @@
                 Array.isArray(settings.tuning) ? settings.tuning : null) || tuningLabel())
             : tuningLabel();
         var label = (offsets && typeof nameFor === 'function') ? nameFor(null, offsets) : homeLabel;
+        // Compare by offsets when the home tuning resolves to offsets: names alone
+        // disagree for the same pitches (settings say 'Standard', offsets name
+        // 'E Standard'), which showed a bogus "Now in E Standard" while at home.
+        var homeOffsets = homeTuningOffsets();
+        var isHome = !offsets || (homeOffsets
+            ? sameOffsets(offsets.slice(0, homeOffsets.length), homeOffsets)
+            : label === homeLabel);
         return {
             label: label,
             short: label.replace(/ Standard\b/, ' Std').replace(/Custom Tuning/, 'Custom'),
-            // Home = no explicit working offsets, OR the working tuning names the same as
-            // the profile's home tuning (both via `nameFor`, so the compare is consistent).
-            isHome: !offsets || label === homeLabel,
+            // Home = no explicit working offsets, OR the working offsets equal the
+            // profile's home tuning (falls back to a name compare when home can't be
+            // resolved to offsets yet, e.g. before /api/tunings loads).
+            isHome: isHome,
+            offsets: offsets,
             provenance: st.provenance === 'verified' ? 'verified' : 'assumed',
         };
     }
@@ -120,6 +181,7 @@
             if (!r.ok) return;
             const data = await r.json();
             _tuningsByKey = data.tunings || {};
+            _tuningMidisByKey = data.tuningMidis || {};
             // Build TUNING_NOTE from the lowest string of each tuning. Prefer the
             // exact integer midis the server now sends (tuningMidis, #829) — the
             // frequency path reconstructs the note via log2 against a hardcoded
@@ -479,15 +541,10 @@
             '<svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
             '</button>' +
             '<div data-inst-menu class="hidden absolute right-0 mt-2 w-60 bg-fb-card border border-fb-border/50 rounded-xl shadow-xl p-3 z-50 space-y-3">' +
-            // "Now in" banner + one-tap back-to-default — shown only once you've
-            // retuned off your home tuning (workingTuning present and not home).
-            ((wt && !wt.isHome)
-                ? '<div class="flex items-center justify-between gap-2 pb-1 border-b border-fb-border/40">' +
-                  '<div class="min-w-0"><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim">Now in</div>' +
-                  '<div class="text-xs font-semibold text-amber-400 truncate flex items-center gap-1">' + esc(wt.label) + ' ' + provenanceGlyph(wt.provenance) + '</div></div>' +
-                  '<button type="button" data-inst-reset title="Reset this instrument to its home tuning" class="shrink-0 text-[0.6875rem] text-fb-textDim hover:text-fb-text border border-fb-border/40 hover:border-fb-border/70 rounded-md px-2 py-1 transition-colors">Back to default</button>' +
-                  '</div>'
-                : '') +
+            // What the instrument is tuned to RIGHT NOW (workingTuning), with a
+            // quick-set list and one note picker per string, so you can retune
+            // between songs. "Back to default" shows once you're off your home tuning.
+            (wt ? currentTuningSection(wt) : '') +
             instRow('Instrument', ['guitar', 'bass'].map((v) =>
                 pill('inst', v, v[0].toUpperCase() + v.slice(1), settings.instrument === v)).join('')) +
             instRow('Strings', STRING_COUNTS[settings.instrument].map((v) =>
@@ -498,7 +555,7 @@
             // i.e. set before you ever tune up or calibrate.
             instRow('Handedness', pill('hand', 'right', 'Right', !_leftyPref()) +
                 pill('hand', 'left', 'Left', _leftyPref())) +
-            '<div><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1">Tuning</div>' +
+            '<div><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1">' + (wt ? 'Default tuning' : 'Tuning') + '</div>' +
             '<select data-inst-tuning class="w-full bg-gray-800/50 border border-gray-700 rounded-md px-2 py-1.5 text-xs text-fb-text outline-none focus:border-fb-primary">' +
             // An offset-array tuning has no named option — surface it as a
             // disabled, selected 'Custom' entry so the dropdown reflects reality
@@ -510,6 +567,9 @@
             PATHWAY_OPTIONS.map((p) => '<option value="' + esc(p.id) + '"' + (p.id === settings.pathway ? ' selected' : '') + '>' + esc(p.label) + '</option>').join('') + '</select></div>' +
             '<div><div class="flex justify-between text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1"><span>Reference pitch</span><span data-ref-val>' + settings.reference_pitch + ' Hz</span></div>' +
             '<input data-inst-ref type="range" min="430" max="450" step="1" value="' + settings.reference_pitch + '" class="w-full slider-input"></div>' +
+            // Extra sections other code adds (registerMenuSection), e.g. the desktop
+            // app's top tones. Filled after the markup is in the DOM.
+            _menuSections.map((s) => '<div data-inst-section="' + esc(s.id) + '"></div>').join('') +
             '</div></div>';
 
         const toggle = host.querySelector('[data-inst-toggle]');
@@ -575,6 +635,98 @@
             if (wtCap && typeof wtCap.resetToDefault === 'function') wtCap.resetToDefault();
             renderInstrument(); keepOpen();
         });
+        // Current tuning: quick-set a named tuning, or retune a single string.
+        const curPreset = menu.querySelector('[data-inst-cur-preset]');
+        if (curPreset) curPreset.addEventListener('change', (e) => {
+            const offsets = namedTuningOffsets(instrumentKey(), e.target.value);
+            if (offsets) setWorkingOffsets(offsets);
+            renderInstrument(); keepOpen();
+        });
+        menu.querySelectorAll('[data-inst-string]').forEach((sel) => sel.addEventListener('change', (e) => {
+            const i = Number(sel.getAttribute('data-inst-string'));
+            const offsets = currentOffsets();
+            offsets[i] = Number(e.target.value);
+            setWorkingOffsets(offsets);
+            renderInstrument(); keepOpen();
+        }));
+        // Let registered sections draw into their slots. One failing section must
+        // not take the instrument menu down with it.
+        for (const s of _menuSections) {
+            const slot = menu.querySelector('[data-inst-section="' + s.id + '"]');
+            if (!slot) continue;
+            try { s.render(slot, { refresh: () => { renderInstrument(); keepOpen(); } }); }
+            catch (err) { console.warn('[v3-badges] menu section "' + s.id + '" failed to render:', err); }
+        }
+    }
+
+    function instrumentKey() { return settings.instrument + '-' + settings.string_count; }
+    // Offsets the pickers show: the working tuning, else home, else Standard.
+    function currentOffsets() {
+        const sc = settings.string_count;
+        const wt = workingTuningInfo();
+        const src = (wt && wt.offsets) || homeTuningOffsets() || [];
+        const out = [];
+        for (let i = 0; i < sc; i++) out.push(Number.isFinite(Number(src[i])) ? Number(src[i]) : 0);
+        return out;
+    }
+    // The manual retune write: sets the selected instrument's working tuning.
+    // 'assumed' — we only know what the player picked, not what the strings are at.
+    function setWorkingOffsets(offsets) {
+        const wtCap = window.feedBack && window.feedBack.workingTuning;
+        if (!wtCap || typeof wtCap.set !== 'function') return false;
+        wtCap.set({
+            offsets: offsets.slice(0, settings.string_count),
+            stringCount: settings.string_count,
+            instrument: settings.instrument,
+            referencePitch: settings.reference_pitch,
+            source: 'manual',
+        }, { instrument: instrumentKey(), provenance: 'assumed' });
+        return true;
+    }
+    function currentTuningSection(wt) {
+        const key = instrumentKey();
+        const offsets = currentOffsets();
+        const std = _namedTuningMidis(key, 'Standard');
+        const named = _tuningsForKey(key);
+        const matching = named.find((n) => sameOffsets(namedTuningOffsets(key, n), offsets));
+        const selectCls = 'bg-gray-800/50 border border-gray-700 rounded-md text-xs text-fb-text outline-none focus:border-fb-primary';
+        let html = '<div class="space-y-2 pb-3 border-b border-fb-border/40">' +
+            '<div class="flex items-center justify-between gap-2">' +
+            '<div class="min-w-0"><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim">Current tuning</div>' +
+            '<div class="text-xs font-semibold truncate flex items-center gap-1 ' + (wt.isHome ? 'text-fb-text' : 'text-amber-400') + '">' +
+            esc(wt.label) + ' ' + provenanceGlyph(wt.provenance) + '</div></div>' +
+            (wt.isHome ? '' : '<button type="button" data-inst-reset title="Reset this instrument to its home tuning" class="shrink-0 text-[0.6875rem] text-fb-textDim hover:text-fb-text border border-fb-border/40 hover:border-fb-border/70 rounded-md px-2 py-1 transition-colors">Back to default</button>') +
+            '</div>';
+        if (named.length) {
+            html += '<select data-inst-cur-preset title="Set the current tuning" class="w-full px-2 py-1.5 ' + selectCls + '">' +
+                '<option value="" disabled' + (matching ? '' : ' selected') + '>' + (matching ? 'Quick set…' : 'Custom — quick set…') + '</option>' +
+                named.map((n) => '<option' + (n === matching ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+                '</select>';
+        }
+        // One picker per string, low string on the left. Needs Standard's midis
+        // to name the notes; without them (tunings not loaded) skip the row.
+        if (std && std.length === offsets.length) {
+            html += '<div title="Tune each string (low to high)" style="display:grid;grid-template-columns:repeat(' + offsets.length + ',minmax(0,1fr));gap:3px">' +
+                offsets.map((off, i) => '<select data-inst-string="' + i + '" aria-label="String ' + (offsets.length - i) + '" class="' + selectCls + '" style="appearance:none;-webkit-appearance:none;text-align:center;text-align-last:center;padding:4px 0;min-width:0">' +
+                    stringOffsetChoices(off).map((o) => '<option value="' + o + '"' + (o === off ? ' selected' : '') + '>' + midiNoteName(std[i] + o) + '</option>').join('') +
+                    '</select>').join('') +
+                '</div>';
+        }
+        return html + '</div>';
+    }
+
+    // Extra instrument-menu sections registered by other code (the desktop app adds
+    // its top tones here). renderInstrument() rebuilds the menu's innerHTML on every
+    // change, so a section is a render function re-run each time, not one-off DOM.
+    // render(slotEl, { refresh }) — call refresh() to redraw the menu (kept open).
+    const _menuSections = [];
+    function registerMenuSection(id, render) {
+        if (typeof id !== 'string' || !id || typeof render !== 'function') return false;
+        const i = _menuSections.findIndex((s) => s.id === id);
+        if (i >= 0) _menuSections[i] = { id, render };
+        else _menuSections.push({ id, render });
+        if (document.getElementById('v3-badge-instrument')) renderInstrument();
+        return true;
     }
     function instRow(label, inner) {
         return '<div><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1">' + label + '</div><div class="flex flex-wrap gap-1">' + inner + '</div></div>';
@@ -600,7 +752,17 @@
             (active ? 'bg-fb-primary text-white' : 'bg-gray-800/50 text-fb-textDim hover:text-fb-text') + '">' + esc(label) + '</button>';
     }
 
-    window.v3Badges = { reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); } };
+    window.v3Badges = {
+        reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); },
+        registerMenuSection: registerMenuSection,
+        // Not an API — lets tests/js/badges_current_tuning.test.js drive the tuning logic.
+        _internals: { namedTuningOffsets, workingTuningInfo, currentOffsets, setWorkingOffsets, currentTuningSection, stringOffsetChoices },
+    };
+    // Sections queued by code that ran before this script (see registerMenuSection).
+    if (Array.isArray(window._v3BadgesPendingSections)) {
+        window._v3BadgesPendingSections.forEach((s) => s && registerMenuSection(s.id, s.render));
+        window._v3BadgesPendingSections = [];
+    }
 
     async function boot() {
         await Promise.all([loadTunings(), loadSettings()]);
