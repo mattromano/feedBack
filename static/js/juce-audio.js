@@ -494,6 +494,18 @@ import { S } from './player-state.js';
 // inert. Shared-mode desktop: the bus stays disabled (no double audio) and
 // captured contexts keep/regain their default sink.
 (function _installRendererBusFeeder() {
+    // The one rule for "is the song clock compensated, and by how much":
+    // seconds the speakers trail `ctx`'s clock, or 0 when there is no fresh
+    // (< 2 s) measurement of THAT context. The stems transport subtracts it;
+    // anything deciding whether the clock is already compensated (sync_lab's
+    // auto-follow) must use the same rule, or one corrects while the other
+    // doesn't. Defined before the bridge check so a browser host answers 0.
+    window.__fbHeardDelaySec = function (ctx) {
+        const d = window.__fbSongOutputDelay;
+        if (!ctx || !d || d.ctx !== ctx || !Number.isFinite(d.sec)) return 0;
+        if (!(performance.now() - d.at < 2000)) return 0;
+        return d.sec > 0 && d.sec < 1 ? d.sec : 0;
+    };
     const api = window.feedBackDesktop?.audio;
     if (!api || typeof api.setRendererBus !== 'function'
              || typeof api.pushRendererAudio !== 'function') {

@@ -281,3 +281,30 @@ test('a suspend never keeps a figure whose path is gone', async () => {
     await h.sample();
     assert.equal(h.sb.window.__fbSongOutputDelay, null);
 });
+
+test('__fbHeardDelaySec: the stems transport\'s rule (same context, < 2 s old, 0 < sec < 1)', async () => {
+    const h = makeSandbox({ exclusive: false });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    const f = h.sb.window.__fbHeardDelaySec;
+    assert.ok(Math.abs(f(g.context) - 0.05) < 1e-9, 'live figure for this context');
+    assert.equal(f(makeCtx()), 0, 'another context: 0');
+    assert.equal(f(null), 0);
+    h.advance(1999);
+    assert.ok(f(g.context) > 0, 'still fresh just under 2 s');
+    h.advance(2);
+    assert.equal(f(g.context), 0, 'older than 2 s: 0');
+    h.sb.window.__fbSongOutputDelay = { ctx: g.context, sec: 1.5, at: h.sb.performance.now() };
+    assert.equal(f(g.context), 0, 'out-of-range figure: 0');
+});
+
+test('__fbHeardDelaySec exists on a browser host (no desktop bridge) and answers 0', () => {
+    const sandbox = { window: { feedBack: {} }, performance: { now: () => 0 }, console: { log() {} } };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(extractFeederIIFE(SRC), sandbox);
+    assert.equal(typeof sandbox.window.__fbHeardDelaySec, 'function');
+    assert.equal(sandbox.window.__fbHeardDelaySec({}), 0);
+});

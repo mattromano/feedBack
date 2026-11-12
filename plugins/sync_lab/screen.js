@@ -161,6 +161,20 @@
         return want === currentAv ? null : want;
     }
 
+    // Is the song clock already following the measured output delay? Asks
+    // core's window.__fbHeardDelaySec(ctx) for the live stems context: the
+    // exact rule the stems transport uses to subtract it (same context, a
+    // figure under 2 s old), so follow stands down only while the transport
+    // really compensates. Older cores without the helper → not compensated.
+    function songClockCompensated(w) {
+        const fn = w && w.__fbHeardDelaySec;
+        if (typeof fn !== 'function') return false;
+        const host = w.feedBack || w.slopsmith;
+        const ctx = host && host.stems && host.stems.audioGraph ? host.stems.audioGraph.context : null;
+        if (!ctx) return false;
+        try { return fn(ctx) > 0; } catch (_) { return false; }
+    }
+
     // The coach banner's step at song time t.
     const STEPS = {
         'get-ready': { title: 'GET READY', hint: 'Press Play. First part: eyes closed, play on every click.' },
@@ -221,7 +235,7 @@
     }
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { median, iqr, sectionOf, analyse, followAv, MIN_N, TARGETS, targetFor, clampTarget,
+        module.exports = { median, iqr, sectionOf, analyse, followAv, songClockCompensated, MIN_N, TARGETS, targetFor, clampTarget,
             confidence, coachState, warnings, matchesExpect };
         return;
     }
@@ -516,21 +530,16 @@
     if (bus && bus.on) bus.on('settings:av-offset', (e) => { const d = e && e.detail; if (d && Number.isFinite(d.ms)) avChanged(Math.round(d.ms)); });
     setInterval(() => avChanged(avMs()), 1000);
 
-    function songClockCompensated() {
-        const d = window.__fbSongOutputDelay;
-        return !!(d && Number.isFinite(d.sec) && performance.now() - d.at < 5000);
-    }
-
     // A/V auto-follow: once per song, a few seconds into playback.
     let followSong = null;
     setInterval(() => {
         const a = audio();
         if (!a || a.paused || !lsGet(LS.follow, true)) return;
         // The song clock already follows the measured output delay (desktop:
-        // window.__fbSongOutputDelay, subtracted by the stems transport), so
+        // window.__fbHeardDelaySec, subtracted by the stems transport), so
         // a latency change no longer moves picture vs sound — following it
         // here as well would correct it twice.
-        if (songClockCompensated()) return;
+        if (songClockCompensated(window)) return;
         let key = null;
         try { const i = window.highway.getSongInfo(); key = i ? i.title + '|' + i.artist : null; } catch (_) { /* ignore */ }
         if (!key || key === followSong || aheadSamples.length < 10) return;
