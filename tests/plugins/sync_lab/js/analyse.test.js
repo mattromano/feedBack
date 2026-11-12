@@ -128,3 +128,19 @@ test('matchesExpect: the kit and drum controllers are told apart', () => {
     assert.ok(!sl.matchesExpect({ kind: 'drums', controllerKey: 'rb#2' }, { kind: 'drumpad', controllerKey: 'rb#1' }));
     assert.ok(!sl.matchesExpect({ kind: 'guitar' }, { kind: 'five_fret' }));
 });
+
+test('songClockCompensated: core\'s heard-delay rule for the live stems context, else false', () => {
+    const ctx = {};
+    const calls = [];
+    const w = (ret, extra = {}) => Object.assign({
+        __fbHeardDelaySec: (c) => { calls.push(c); return ret; },
+        feedBack: { stems: { audioGraph: { context: ctx } } },
+    }, extra);
+    assert.equal(sl.songClockCompensated(w(0.058)), true);
+    assert.equal(calls.at(-1), ctx, 'asks about the live stems context');
+    assert.equal(sl.songClockCompensated(w(0)), false, 'stale / other context / none: the transport is not compensating');
+    assert.equal(sl.songClockCompensated(w(0.058, { feedBack: { stems: {} } })), false, 'no stems graph');
+    assert.equal(sl.songClockCompensated({ feedBack: { stems: { audioGraph: { context: ctx } } } }), false, 'older core without the helper');
+    assert.equal(sl.songClockCompensated(w(0.058, { feedBack: undefined, slopsmith: { stems: { audioGraph: { context: ctx } } } })), true, 'legacy namespace');
+    assert.equal(sl.songClockCompensated({ __fbHeardDelaySec: () => { throw new Error('x'); }, feedBack: { stems: { audioGraph: { context: ctx } } } }), false);
+});

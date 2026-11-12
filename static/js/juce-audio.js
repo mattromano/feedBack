@@ -494,6 +494,18 @@ import { S } from './player-state.js';
 // inert. Shared-mode desktop: the bus stays disabled (no double audio) and
 // captured contexts keep/regain their default sink.
 (function _installRendererBusFeeder() {
+    // The one rule for "is the song clock compensated, and by how much":
+    // seconds the speakers trail `ctx`'s clock, or 0 when there is no fresh
+    // (< 2 s) measurement of THAT context. The stems transport subtracts it;
+    // anything deciding whether the clock is already compensated (sync_lab's
+    // auto-follow) must use the same rule, or one corrects while the other
+    // doesn't. Defined before the bridge check so a browser host answers 0.
+    window.__fbHeardDelaySec = function (ctx) {
+        const d = window.__fbSongOutputDelay;
+        if (!ctx || !d || d.ctx !== ctx || !Number.isFinite(d.sec)) return 0;
+        if (!(performance.now() - d.at < 2000)) return 0;
+        return d.sec > 0 && d.sec < 1 ? d.sec : 0;
+    };
     const api = window.feedBackDesktop?.audio;
     if (!api || typeof api.setRendererBus !== 'function'
              || typeof api.pushRendererAudio !== 'function') {
@@ -691,6 +703,222 @@ import { S } from './player-state.js';
         _lbPageMuted = false;
     }
 
+    // ── Song bus + heard clock ───────────────────────────────────────────────
+    // The loopback above carries the song with a delay nobody can measure: it
+    // was 100 ms, then 143 ms a few seconds later, in one session (measured
+    // 2026-11-07, ASIO4ALL @256), so no fixed A/V offset could hold and the
+    // highway (drawn from the stems AudioContext) ran ~130-175 ms ahead of the
+    // sound. The song itself therefore rides its own engine bus: the stems
+    // master is tapped directly, every chunk carrying its AudioContext frame,
+    // and the stems context goes to the null sink so the loopback never
+    // carries it twice. The engine reports which context frame is reaching
+    // the speakers (output latency included), and the gap between the
+    // context's clock and that frame is published as
+    //   window.__fbSongOutputDelay = { ctx, sec, source, at }
+    // which the stems transport subtracts from its playhead: the highway, note
+    // detection and every #audio.currentTime reader then follow the song as
+    // HEARD. On the default device (shared mode) the same delay comes from
+    // the context's own output timestamp. Everything else the app plays still
+    // rides the loopback (UI sounds, previews, plugin audio).
+    const _songBusOk = typeof api.setSongBus === 'function'
+        && typeof api.pushSongAudio === 'function' && typeof api.getSongBusClock === 'function';
+    const SONG_TAP_WORKLET = `
+        class FeedbackSongTap extends AudioWorkletProcessor {
+            process(inputs) {
+                const inp = inputs[0];
+                if (inp && inp[0]) {
+                    const L = inp[0], R = inp[1] || inp[0];
+                    const out = new Float32Array(L.length * 2);
+                    for (let i = 0; i < L.length; i++) { out[i*2] = L[i]; out[i*2+1] = R[i]; }
+                    this.port.postMessage({ f: currentFrame, d: out }, [out.buffer]);
+                }
+                return true;
+            }
+        }
+        registerProcessor('feedback-song-tap', FeedbackSongTap);
+    `;
+    const _songTapUrl = URL.createObjectURL(new Blob([SONG_TAP_WORKLET], { type: 'application/javascript' }));
+    const _songTapLoaded = new WeakSet();
+    let _songGraph = null, _songNode = null, _songBusy = false;
+
+    async function _engageSongBus(graph) {
+        const ctx = graph.context;
+        if (!_songTapLoaded.has(ctx)) {
+            await ctx.audioWorklet.addModule(_songTapUrl);
+            _songTapLoaded.add(ctx);
+        }
+        // Nothing below is recorded in _songGraph/_songNode until the engage
+        // has fully succeeded, so a failure must undo its own steps: otherwise
+        // the stems context stays on the null sink (the song silent, even
+        // after a switch back to a shared device) and an orphan tap stays on
+        // the master, one more per retry.
+        let node = null;
+        try {
+            await _setSink(ctx, true);
+            node = _makeSongTapNode(ctx);
+            graph.masterNode.connect(node);
+            await api.setSongBus(true, 1.0);
+        } catch (e) {
+            if (node) {
+                node.port.onmessage = null;
+                try { graph.masterNode.disconnect(node); } catch (_) { /* never connected */ }
+                try { node.disconnect(); } catch (_) { /* never connected onward */ }
+            }
+            try { await api.setSongBus(false, 0); } catch (_) { /* engine gone */ }
+            await _setSink(ctx, false).catch(() => {});
+            throw e;
+        }
+        _songGraph = graph; _songNode = node;
+        _resetDelay();
+        console.log('[renderer-bus] song bus engaged: stems graph → engine (frame-stamped)');
+    }
+
+    function _makeSongTapNode(ctx) {
+        const node = new AudioWorkletNode(ctx, 'feedback-song-tap', { numberOfInputs: 1, channelCount: 2 });
+        const BATCH = Math.round(ctx.sampleRate / 100);   // ~10 ms per IPC push
+        let batch = [], batchFrames = 0, batchStart = -1, nextFrame = -1;
+        const flush = () => {
+            if (batchFrames > 0) {
+                const merged = new Float32Array(batchFrames * 2);
+                let o = 0;
+                for (const c of batch) { merged.set(c, o); o += c.length; }
+                api.pushSongAudio(merged, ctx.sampleRate, batchStart);
+            }
+            batch = []; batchFrames = 0; batchStart = -1;
+        };
+        node.port.onmessage = (e) => {
+            if (_songNode !== node) return;
+            const { f, d } = e.data;
+            // A gap in the context frames (a dropped message) starts a new
+            // batch, so every push's start frame is exact.
+            if (batchFrames > 0 && f !== nextFrame) flush();
+            if (batchStart < 0) batchStart = f;
+            batch.push(d);
+            batchFrames += d.length / 2;
+            nextFrame = f + d.length / 2;
+            if (batchFrames >= BATCH) flush();
+        };
+        return node;
+    }
+
+    async function _disengageSongBus() {
+        const graph = _songGraph, node = _songNode;
+        _songGraph = null; _songNode = null;
+        _resetDelay();
+        try { await api.setSongBus(false, 0); } catch (_) { /* engine gone */ }
+        if (node) {
+            node.port.onmessage = null;
+            try { graph.masterNode.disconnect(node); } catch (_) { /* already gone */ }
+            try { node.disconnect(); } catch (_) { /* never connected onward */ }
+        }
+        if (graph) await _setSink(graph.context, false).catch(() => {});
+        console.log('[renderer-bus] song bus disengaged');
+    }
+
+    async function _reevaluateSongBus(running, exclusive, stems) {
+        if (!_songBusOk || _songBusy) return;
+        _songBusy = true;
+        try {
+            const want = running && exclusive && stems ? stems : null;
+            if (want === _songGraph) return;
+            if (_songGraph) await _disengageSongBus();
+            if (want) await _engageSongBus(want);
+        } catch (e) {
+            console.warn('[renderer-bus] song bus failed (will retry):', (e && e.name ? e.name + ': ' + e.message : String(e)));
+            await _disengageSongBus().catch(() => {});
+        } finally {
+            _songBusy = false;
+        }
+    }
+
+    // Heard-delay estimator: ~10 samples/s, median of the last 15. Each
+    // sample is (context clock − context time being heard), measured with the
+    // same coarse ctx.currentTime the stems transport reads, so the median is
+    // exactly what its playhead must drop.
+    const _delaySamples = [];
+    let _delayInFlight = false;
+    // A new source (bus engaged / dropped, other context) starts over: a
+    // stale figure from the other path must never be applied.
+    let _delaySource = null, _delayCtx = null;
+    // true = the page plays on the default device (engine off, or a shared
+    // engine output); false = an exclusive output (ASIO / WASAPI exclusive);
+    // null = not known yet / the engine could not be asked. Set by _reevaluate.
+    let _outputShared = null;
+    function _resetDelay() { _delaySamples.length = 0; window.__fbSongOutputDelay = null; _delaySource = null; _delayCtx = null; }
+    function _publishDelay(ctx, source) {
+        if (_delaySamples.length < 3) return;
+        const sorted = _delaySamples.slice().sort((a, b) => a - b);
+        const sec = sorted[sorted.length >> 1];
+        window.__fbSongOutputDelay = { ctx, sec, source, at: performance.now() };
+    }
+    async function _sampleSongDelay() {
+        if (_delayInFlight || document.hidden) return;
+        const stems = (window.feedBack || window.slopsmith)?.stems?.audioGraph || null;
+        if (!stems || !stems.context || stems.context.state === 'closed') {
+            if (window.__fbSongOutputDelay) _resetDelay();
+            return;
+        }
+        const ctx = stems.context;
+        if (ctx.state !== 'running') {
+            // Suspended (pause / seek): the output path hasn't changed, so the
+            // last figure for THIS context stays published and fresh, and the
+            // playhead doesn't jump by the whole delay when play resumes.
+            // Path changes (bus engaged / dropped, another context) still
+            // reset it through _resetDelay.
+            const pub = window.__fbSongOutputDelay;
+            const pathHolds = _delaySource === 'song-bus' ? _songGraph === stems
+                : (!_songGraph && _outputShared === true);
+            if (pub && pub.ctx === ctx && _delayCtx === ctx && pathHolds) pub.at = performance.now();
+            else if (pub) _resetDelay();
+            return;
+        }
+        if (_songGraph && _songGraph === stems) {
+            _delayInFlight = true;
+            try {
+                const t0 = performance.now(), c0 = ctx.currentTime;
+                const c = await api.getSongBusClock();
+                const t1 = performance.now(), c1 = ctx.currentTime;
+                // A slow round trip can't be placed in time: skip it.
+                if (!c || !c.valid || t1 - t0 > 15) return;
+                const heard = c.heardSourceFrame / ctx.sampleRate;
+                const d = (c0 + c1) / 2 - heard;
+                if (!(d > -0.05 && d < 2)) return;
+                if (_delaySource !== 'song-bus' || _delayCtx !== ctx) { _resetDelay(); _delaySource = 'song-bus'; _delayCtx = ctx; }
+                _delaySamples.push(d);
+            } catch (_) { return; } finally { _delayInFlight = false; }
+            if (_delaySamples.length > 15) _delaySamples.shift();
+            _publishDelay(ctx, 'song-bus');
+        } else if (!_songGraph && _outputShared === true && !_songBusy) {
+            // Default device (known shared output, song bus not mid-switch):
+            // Chromium's own estimate of the output delay —
+            // the output timestamp when it is live, else the context's
+            // reported latencies. (After a null-sink round trip the timestamp
+            // can stay frozen at the switch: measured contextTime 13 s while
+            // currentTime read 127 s, so a stale one is never trusted.)
+            const ts = typeof ctx.getOutputTimestamp === 'function' ? ctx.getOutputTimestamp() : null;
+            const p = performance.now();
+            let d = NaN;
+            if (ts && ts.performanceTime > 0 && p - ts.performanceTime < 500 && Number.isFinite(ts.contextTime))
+                d = ctx.currentTime - (ts.contextTime + (p - ts.performanceTime) / 1000);
+            if (!(d >= 0 && d < 1)) d = (ctx.baseLatency || 0) + (ctx.outputLatency || 0);
+            if (!(d >= 0 && d < 1)) return;
+            if (_delaySource !== 'output-timestamp' || _delayCtx !== ctx) { _resetDelay(); _delaySource = 'output-timestamp'; _delayCtx = ctx; }
+            _delaySamples.push(d);
+            if (_delaySamples.length > 15) _delaySamples.shift();
+            _publishDelay(ctx, 'output-timestamp');
+        } else if (!_songGraph && _delaySource === 'output-timestamp') {
+            // Exclusive output (or not known yet) with the song bus not
+            // carrying this song — engaging, failed and retrying, or engine
+            // down: the context's own timestamp describes the null sink or the
+            // unused default device, not what is heard. Publish nothing.
+            _resetDelay();
+        }
+    }
+    setInterval(() => { void _sampleSongDelay(); }, 100);
+    window._songBusState = () => ({ ok: _songBusOk, engaged: !!_songGraph, delay: window.__fbSongOutputDelay
+        ? { sec: window.__fbSongOutputDelay.sec, source: window.__fbSongOutputDelay.source } : null,
+        samples: _delaySamples.slice() });
+
     // ── Engagement state machine ─────────────────────────────────────────────
     // 'off' | 'loopback' | 'element' | 'stems' (element/stems = fallback when
     // loopback capture is unavailable: old desktop main, denied capture)
@@ -756,16 +984,21 @@ import { S } from './player-state.js';
         if (_busy) return;
         _busy = true;
         try {
-            let running = false, exclusive = false;
+            let running = false, exclusive = false, runningKnown = true;
             try {
                 running = await api.isAudioRunning();
-            } catch (_) { /* engine unreachable → treat as not running */ }
+            } catch (_) { runningKnown = false; /* engine unreachable → treat as not running */ }
             if (running) {
                 // Reuse the Phase 1 predicate installed by the routing watcher
                 // (getCurrentDevice + exclusive-type check with change-logged
                 // diagnostics). Fail closed if it is somehow absent.
-                exclusive = !!(await window._juceOutputIsExclusive?.());
+                try {
+                    exclusive = !!(await window._juceOutputIsExclusive?.());
+                } catch (e) { _outputShared = null; throw e; }
             }
+            // Only a known shared output lets the estimator trust the stems
+            // context's own output timestamp (see _sampleSongDelay).
+            _outputShared = runningKnown ? !(running && exclusive) : null;
 
             // The stems plugin publishes its live graph while a multi-stem
             // song is loaded (and removes it on teardown).
@@ -785,7 +1018,7 @@ import { S } from './player-state.js';
                 // loopback capture is unavailable (old desktop main without
                 // the display-media handler, capture denied).
                 if (!_loopbackUnavailable) want = 'loopback';
-                else if (stems) want = 'stems';
+                else if (stems && !_songBusOk) want = 'stems';
                 else if (elementSong) want = 'element';
             }
             // Song audio riding the native transport must not ALSO ride the
@@ -812,6 +1045,10 @@ import { S } from './player-state.js';
                 }
             }
 
+
+            // The song bus first, and on its own: a failing app-audio mode
+            // (loopback capture denied, say) must never keep the song off it.
+            await _reevaluateSongBus(running, exclusive, stems);
 
             const stemsGraphChanged = _mode === 'stems' && stems !== _stemsGraph;
             if (want !== _mode || stemsGraphChanged) {
