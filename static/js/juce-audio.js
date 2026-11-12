@@ -828,6 +828,10 @@ import { S } from './player-state.js';
     // A new source (bus engaged / dropped, other context) starts over: a
     // stale figure from the other path must never be applied.
     let _delaySource = null, _delayCtx = null;
+    // true = the page plays on the default device (engine off, or a shared
+    // engine output); false = an exclusive output (ASIO / WASAPI exclusive);
+    // null = not known yet / the engine could not be asked. Set by _reevaluate.
+    let _outputShared = null;
     function _resetDelay() { _delaySamples.length = 0; window.__fbSongOutputDelay = null; _delaySource = null; _delayCtx = null; }
     function _publishDelay(ctx, source) {
         if (_delaySamples.length < 3) return;
@@ -838,11 +842,24 @@ import { S } from './player-state.js';
     async function _sampleSongDelay() {
         if (_delayInFlight || document.hidden) return;
         const stems = (window.feedBack || window.slopsmith)?.stems?.audioGraph || null;
-        if (!stems || !stems.context || stems.context.state !== 'running') {
+        if (!stems || !stems.context || stems.context.state === 'closed') {
             if (window.__fbSongOutputDelay) _resetDelay();
             return;
         }
         const ctx = stems.context;
+        if (ctx.state !== 'running') {
+            // Suspended (pause / seek): the output path hasn't changed, so the
+            // last figure for THIS context stays published and fresh, and the
+            // playhead doesn't jump by the whole delay when play resumes.
+            // Path changes (bus engaged / dropped, another context) still
+            // reset it through _resetDelay.
+            const pub = window.__fbSongOutputDelay;
+            const pathHolds = _delaySource === 'song-bus' ? _songGraph === stems
+                : (!_songGraph && _outputShared === true);
+            if (pub && pub.ctx === ctx && _delayCtx === ctx && pathHolds) pub.at = performance.now();
+            else if (pub) _resetDelay();
+            return;
+        }
         if (_songGraph && _songGraph === stems) {
             _delayInFlight = true;
             try {
@@ -859,8 +876,9 @@ import { S } from './player-state.js';
             } catch (_) { return; } finally { _delayInFlight = false; }
             if (_delaySamples.length > 15) _delaySamples.shift();
             _publishDelay(ctx, 'song-bus');
-        } else if (!_songGraph) {
-            // Default device: Chromium's own estimate of the output delay —
+        } else if (!_songGraph && _outputShared === true && !_songBusy) {
+            // Default device (known shared output, song bus not mid-switch):
+            // Chromium's own estimate of the output delay —
             // the output timestamp when it is live, else the context's
             // reported latencies. (After a null-sink round trip the timestamp
             // can stay frozen at the switch: measured contextTime 13 s while
@@ -876,6 +894,12 @@ import { S } from './player-state.js';
             _delaySamples.push(d);
             if (_delaySamples.length > 15) _delaySamples.shift();
             _publishDelay(ctx, 'output-timestamp');
+        } else if (!_songGraph && _delaySource === 'output-timestamp') {
+            // Exclusive output (or not known yet) with the song bus not
+            // carrying this song — engaging, failed and retrying, or engine
+            // down: the context's own timestamp describes the null sink or the
+            // unused default device, not what is heard. Publish nothing.
+            _resetDelay();
         }
     }
     setInterval(() => { void _sampleSongDelay(); }, 100);
@@ -948,16 +972,21 @@ import { S } from './player-state.js';
         if (_busy) return;
         _busy = true;
         try {
-            let running = false, exclusive = false;
+            let running = false, exclusive = false, runningKnown = true;
             try {
                 running = await api.isAudioRunning();
-            } catch (_) { /* engine unreachable → treat as not running */ }
+            } catch (_) { runningKnown = false; /* engine unreachable → treat as not running */ }
             if (running) {
                 // Reuse the Phase 1 predicate installed by the routing watcher
                 // (getCurrentDevice + exclusive-type check with change-logged
                 // diagnostics). Fail closed if it is somehow absent.
-                exclusive = !!(await window._juceOutputIsExclusive?.());
+                try {
+                    exclusive = !!(await window._juceOutputIsExclusive?.());
+                } catch (e) { _outputShared = null; throw e; }
             }
+            // Only a known shared output lets the estimator trust the stems
+            // context's own output timestamp (see _sampleSongDelay).
+            _outputShared = runningKnown ? !(running && exclusive) : null;
 
             // The stems plugin publishes its live graph while a multi-stem
             // song is loaded (and removes it on teardown).

@@ -206,3 +206,78 @@ test('a failed engage restores the sink and drops its tap (no silent song, no or
     assert.equal(g.masterNode.connected.length, 1);
     assert.equal(g.context.sinkIdCalls.at(-1)?.type, 'none');
 });
+
+test('exclusive output without the song bus: the context\'s own timestamp is never published', async () => {
+    // Song bus failing (engine busy) under ASIO: the stems ctx's timestamp
+    // describes the null sink / unused default device, not what is heard.
+    const h = makeSandbox({ songBus: (en) => (en ? Promise.reject(new Error('engine busy')) : Promise.resolve()) });
+    const g = graphOf();
+    g.context.outputTs = { contextTime: 9.95, performanceTime: 1000 };
+    h.sb.window.feedBack.stems.audioGraph = g;
+    // Before the first re-evaluate the output kind is unknown: nothing either.
+    for (let i = 0; i < 4; i++) await h.sample();
+    assert.ok(!h.sb.window.__fbSongOutputDelay, 'unknown output: nothing published');
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null, 'exclusive, bus down: nothing published');
+});
+
+test('exclusive → shared → exclusive: the default-device figure is dropped the moment ASIO is back', async () => {
+    let excl = false;
+    const h = makeSandbox({ exclusive: () => excl, songBus: (en) => (en ? Promise.reject(new Error('engine busy')) : Promise.resolve()) });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay.source, 'output-timestamp', 'shared: published');
+    excl = true;
+    await h.tick();                       // bus engage fails → retrying
+    await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null, 'stale default-device figure cleared under ASIO');
+});
+
+test('a suspend keeps the last figure for the same context (no jump on resume)', async () => {
+    const h = makeSandbox({ exclusive: false });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    const before = h.sb.window.__fbSongOutputDelay;
+    assert.ok(Math.abs(before.sec - 0.05) < 1e-9);
+    g.context.state = 'suspended';
+    for (let i = 0; i < 30; i++) { h.advance(100); await h.sample(); }   // a 3 s pause
+    const held = h.sb.window.__fbSongOutputDelay;
+    assert.ok(held && held.ctx === g.context && Math.abs(held.sec - 0.05) < 1e-9, 'figure kept while suspended');
+    assert.ok(h.sb.performance.now() - held.at < 2000, 'kept fresh for the stems transport\'s 2 s rule');
+    g.context.state = 'running';
+    g.context.baseLatency = 0.02;                      // 70 ms now
+    await h.sample();
+    assert.ok(Math.abs(h.sb.window.__fbSongOutputDelay.sec - 0.05) < 1e-9, 'first sample after resume: median still the held figure');
+    // A closed context drops it.
+    g.context.state = 'closed';
+    await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null);
+});
+
+test('a suspend never keeps a figure whose path is gone', async () => {
+    let excl = false;
+    const h = makeSandbox({ exclusive: () => excl, songBus: (en) => (en ? Promise.reject(new Error('engine busy')) : Promise.resolve()) });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    for (let i = 0; i < 4; i++) await h.sample();
+    assert.ok(h.sb.window.__fbSongOutputDelay);
+    g.context.state = 'suspended';
+    excl = true;
+    await h.tick();
+    await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null, 'default-device figure not kept alive under ASIO');
+    // Another context's suspended graph never inherits it either.
+    excl = false; await h.tick();
+    g.context.state = 'running';
+    for (let i = 0; i < 4; i++) await h.sample();
+    const g2 = graphOf(); g2.context.state = 'suspended';
+    h.sb.window.feedBack.stems.audioGraph = g2;
+    await h.sample();
+    assert.equal(h.sb.window.__fbSongOutputDelay, null);
+});
