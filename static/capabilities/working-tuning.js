@@ -2,8 +2,9 @@
 // instrument tuning (session state), distinct from the soft opt-in default and from
 // any one song's tuning. This is the single source of truth the whole app reads:
 // the highway, the library/song-picker, Virtuoso, and the minigames all consult it,
-// and the tuner is the sole WRITER (it updates this when the player retunes, clears
-// the gate, or switches instruments).
+// and it has two writers: the tuner (it updates this when the player retunes, clears
+// the gate, or switches instruments) and the v3 instrument selector (the player sets
+// the current tuning by hand from its "Current tuning" pickers, or resets it).
 //
 // PER-INSTRUMENT: a player has separate physical instruments, each in its OWN tuning
 // ("I'm not tuning two instruments when I pick a song"). So state is a MAP keyed by
@@ -362,10 +363,12 @@
                 safety: 'safe',
             },
         });
+        // The v3 instrument selector also writes: its "Current tuning" pickers set the
+        // selected instrument's working tuning by hand, and "Back to default" resets it.
         capabilities.registerParticipant('core.settings.instruments', {
             'working-tuning': {
-                roles: ['requester'],
-                operations: ['get-working-tuning'],
+                roles: ['contributor', 'requester'],
+                operations: ['get-working-tuning', 'set-working-tuning'],
                 events: ['working-tuning-changed'],
                 mode: 'active',
                 compatibility: 'none',
