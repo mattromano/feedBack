@@ -735,7 +735,33 @@ import { S } from './player-state.js';
             await ctx.audioWorklet.addModule(_songTapUrl);
             _songTapLoaded.add(ctx);
         }
-        await _setSink(ctx, true);
+        // Nothing below is recorded in _songGraph/_songNode until the engage
+        // has fully succeeded, so a failure must undo its own steps: otherwise
+        // the stems context stays on the null sink (the song silent, even
+        // after a switch back to a shared device) and an orphan tap stays on
+        // the master, one more per retry.
+        let node = null;
+        try {
+            await _setSink(ctx, true);
+            node = _makeSongTapNode(ctx);
+            graph.masterNode.connect(node);
+            await api.setSongBus(true, 1.0);
+        } catch (e) {
+            if (node) {
+                node.port.onmessage = null;
+                try { graph.masterNode.disconnect(node); } catch (_) { /* never connected */ }
+                try { node.disconnect(); } catch (_) { /* never connected onward */ }
+            }
+            try { await api.setSongBus(false, 0); } catch (_) { /* engine gone */ }
+            await _setSink(ctx, false).catch(() => {});
+            throw e;
+        }
+        _songGraph = graph; _songNode = node;
+        _resetDelay();
+        console.log('[renderer-bus] song bus engaged: stems graph → engine (frame-stamped)');
+    }
+
+    function _makeSongTapNode(ctx) {
         const node = new AudioWorkletNode(ctx, 'feedback-song-tap', { numberOfInputs: 1, channelCount: 2 });
         const BATCH = Math.round(ctx.sampleRate / 100);   // ~10 ms per IPC push
         let batch = [], batchFrames = 0, batchStart = -1, nextFrame = -1;
@@ -760,11 +786,7 @@ import { S } from './player-state.js';
             nextFrame = f + d.length / 2;
             if (batchFrames >= BATCH) flush();
         };
-        graph.masterNode.connect(node);
-        await api.setSongBus(true, 1.0);
-        _songGraph = graph; _songNode = node;
-        _resetDelay();
-        console.log('[renderer-bus] song bus engaged: stems graph → engine (frame-stamped)');
+        return node;
     }
 
     async function _disengageSongBus() {

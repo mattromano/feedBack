@@ -41,7 +41,7 @@ function makeCtx() {
     };
 }
 
-function makeSandbox({ exclusive = true, clock = () => ({ valid: false }) } = {}) {
+function makeSandbox({ exclusive = true, clock = () => ({ valid: false }), songBus = () => Promise.resolve() } = {}) {
     const calls = { setSongBus: [], pushSongAudio: [], setRendererBus: [] };
     const nodes = [];
     let now = 1000;
@@ -51,7 +51,7 @@ function makeSandbox({ exclusive = true, clock = () => ({ valid: false }) } = {}
         setRendererBus: (en, g) => { calls.setRendererBus.push([en, g]); return Promise.resolve(); },
         pushRendererAudio() {},
         setPageMuted: (m) => Promise.resolve(m),
-        setSongBus: (en, g) => { calls.setSongBus.push([en, g]); return Promise.resolve(); },
+        setSongBus: (en, g) => { calls.setSongBus.push([en, g]); return songBus(en, g); },
         pushSongAudio: (buf, rate, start) => { calls.pushSongAudio.push({ frames: buf.length / 2, rate, start }); },
         getSongBusClock: () => Promise.resolve(clock()),
     };
@@ -90,7 +90,8 @@ function makeSandbox({ exclusive = true, clock = () => ({ valid: false }) } = {}
     };
 }
 
-const graphOf = () => ({ context: makeCtx(), masterNode: { connected: [], connect(n) { this.connected.push(n); }, disconnect() {} } });
+const graphOf = () => ({ context: makeCtx(), masterNode: { connected: [], connect(n) { this.connected.push(n); },
+    disconnect(n) { this.connected = this.connected.filter((x) => x !== n); } } });
 const songNode = (h) => h.nodes.find((n) => n.name === 'feedback-song-tap');
 
 test('exclusive + stems: the song rides the song bus, its context on the null sink', async () => {
@@ -179,4 +180,29 @@ test('back to shared mode: the song-bus figure is dropped, the default-device on
     g.context.outputTs = { contextTime: 19.955, performanceTime: h.sb.performance.now() };
     for (let i = 0; i < 15; i++) await h.sample();
     assert.ok(Math.abs(h.sb.window.__fbSongOutputDelay.sec - 0.045) < 1e-9);
+});
+
+test('a failed engage restores the sink and drops its tap (no silent song, no orphan taps)', async () => {
+    let fail = true, excl = true;
+    const h = makeSandbox({ exclusive: () => excl, songBus: (en) => (en && fail ? Promise.reject(new Error('engine busy')) : Promise.resolve()) });
+    const g = graphOf();
+    h.sb.window.feedBack.stems.audioGraph = g;
+    await h.tick();
+    assert.equal(g.context.sinkIdCalls.at(-1), '', 'stems ctx back on the default sink after the failure');
+    assert.equal(g.masterNode.connected.length, 0, 'tap disconnected from the master');
+    assert.equal(h.sb.window._songBusState().engaged, false);
+    // Retries don't pile up taps.
+    await h.tick(); await h.tick();
+    assert.equal(g.masterNode.connected.length, 0);
+    assert.equal(g.context.sinkIdCalls.at(-1), '');
+    // A switch back to shared mode leaves the song audible on the default sink.
+    excl = false;
+    await h.tick();
+    assert.equal(g.context.sinkIdCalls.at(-1), '');
+    // And once the engine accepts, it engages normally with exactly one tap.
+    excl = true; fail = false;
+    await h.tick();
+    assert.equal(h.sb.window._songBusState().engaged, true);
+    assert.equal(g.masterNode.connected.length, 1);
+    assert.equal(g.context.sinkIdCalls.at(-1)?.type, 'none');
 });
